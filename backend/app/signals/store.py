@@ -49,6 +49,11 @@ class ThrottleConfig:
     flip_guard_s: int = 1800
     max_consecutive_losses: int = 2
     daily_loss_limit: float = 0.0        # rupees, positive; 0 = disabled
+    # Guards that act on positions still OPEN. The realised-only breakers above
+    # cannot fire while you are holding losers, which is exactly when the engine
+    # must stop talking — see RiskState.open_pnl.
+    max_open_positions: int = 2          # 0 = disabled
+    max_open_drawdown: float = 0.0       # rupees, positive; 0 = disabled
 
 
 @dataclass
@@ -57,6 +62,10 @@ class RiskState:
     into the trade journal itself)."""
     consecutive_losses: int = 0
     realized_today: float = 0.0
+    # Mark-to-market on positions still open, and how many there are.
+    # `open_pnl` is signed: negative means you are currently down.
+    open_pnl: float = 0.0
+    open_positions: int = 0
 
 
 @dataclass
@@ -107,8 +116,26 @@ class SignalStore:
         if risk.consecutive_losses >= cfg.max_consecutive_losses:
             return (f"Circuit breaker — {risk.consecutive_losses} losing trades in a row. "
                     "Signals paused for today.")
-        if cfg.daily_loss_limit > 0 and risk.realized_today <= -abs(cfg.daily_loss_limit):
-            return (f"Daily loss limit hit (₹{abs(risk.realized_today):,.0f}). "
+
+        # OPEN-position guards. These exist because the realised breakers below
+        # are blind exactly when it matters: holding losers means nothing is
+        # realised, so the engine happily issues signal after signal into a
+        # position already deep in drawdown. On 20-Jul-2026 that produced six
+        # PE signals in 66 minutes while three PE positions sat ~₹32,000 down.
+        if cfg.max_open_positions > 0 and risk.open_positions >= cfg.max_open_positions:
+            return (f"{risk.open_positions} position(s) already open — close or reduce "
+                    "before taking another. Stacking correlated bets is what turns a "
+                    "bad call into a bad day.")
+        if cfg.max_open_drawdown > 0 and risk.open_pnl <= -abs(cfg.max_open_drawdown):
+            return (f"Open positions are down ₹{abs(risk.open_pnl):,.0f} — at or beyond the "
+                    "open-drawdown limit. Signals paused until that is resolved.")
+
+        # The daily loss limit counts UNREALISED damage too: a loss you are
+        # still holding is not a smaller loss than one you have booked.
+        exposure = risk.realized_today + min(0.0, risk.open_pnl)
+        if cfg.daily_loss_limit > 0 and exposure <= -abs(cfg.daily_loss_limit):
+            held = f" (₹{abs(risk.open_pnl):,.0f} of it still open)" if risk.open_pnl < 0 else ""
+            return (f"Daily loss limit hit (₹{abs(exposure):,.0f}){held}. "
                     "Signals paused for today.")
 
         s = self._slot(key, now)

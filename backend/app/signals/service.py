@@ -70,14 +70,22 @@ class SignalService:
             flip_guard_s=cfg.signal_flip_guard_s,
             max_consecutive_losses=cfg.signal_max_consecutive_losses,
             daily_loss_limit=cfg.signal_daily_loss_limit,
+            max_open_positions=cfg.signal_max_open_positions,
+            max_open_drawdown=cfg.signal_max_open_drawdown,
         )
 
     def _risk_state(self, now: int) -> RiskState:
-        """Today's realised outcome, read from the journal. Feeds the circuit
-        breakers — the engine must go quiet after a bad run, not keep talking."""
+        """Today's outcome, read from the journal — realised AND still open.
+
+        Feeds the circuit breakers: the engine must go quiet after a bad run,
+        not keep talking. Open positions are included because a loss you are
+        still holding is not a smaller loss than one you have booked, and the
+        realised-only view is blind precisely while you sit in a drawdown.
+        """
         today = (now + 19800) // 86400
+        trades = trade_store.all()
         closed = [
-            t for t in trade_store.all()
+            t for t in trades
             if t.status.value == "exited" and t.exited_at
             and (t.exited_at + 19800) // 86400 == today
         ]
@@ -89,7 +97,26 @@ class SignalService:
                 streak += 1
             else:
                 break
-        return RiskState(consecutive_losses=streak, realized_today=realized)
+
+        # Positional rows carry overnight — that is real money still at risk.
+        # INTRADAY rows must not: Zerodha auto-squares MIS around 15:20 IST, and
+        # nothing here ever closes a trade by itself, so a row the user forgot to
+        # mark exited would otherwise count forever. With max_open_positions
+        # defaulting to 2, two such ghosts would silence the engine permanently.
+        open_trades = [
+            t for t in trades
+            if t.status.value in ("entered", "partial")
+            and not (t.mode.value == "intraday"
+                     and (t.entered_at + 19800) // 86400 < today)
+        ]
+        open_pnl = sum(t.pnl or 0.0 for t in open_trades)
+
+        return RiskState(
+            consecutive_losses=streak,
+            realized_today=realized,
+            open_pnl=open_pnl,
+            open_positions=len(open_trades),
+        )
 
     def _apply_sizing(self, resp: SignalResponse, symbol: str) -> None:
         """Suggest lots from a risk budget. Never guesses: with no configured

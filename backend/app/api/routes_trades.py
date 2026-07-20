@@ -59,9 +59,16 @@ def enter(body: EnterRequest) -> Trade:
     if not entry or entry <= 0:
         raise HTTPException(status_code=400, detail="Could not determine entry premium; pass entry_premium")
 
+    # The OPTION contract's own lot size, which the card now carries, not the
+    # future's: after an NSE lot revision the two disagree, and the journal
+    # quantity must equal what was actually bought — the protective stop is
+    # sized from it.
     meta = market_state.underlyings.get(body.symbol.upper())
-    lot_size = meta.lot_size if meta and meta.lot_size else 1
-    return trade_store.create_from_signal(card, body.lots, float(entry), lot_size)
+    lot_size = card.lot_size or (meta.lot_size if meta and meta.lot_size else 1)
+    product = (body.product or "").upper() or ("MIS" if card.mode is TradingMode.INTRADAY else "NRML")
+    if product not in ("MIS", "NRML"):
+        raise HTTPException(status_code=400, detail="product must be MIS or NRML")
+    return trade_store.create_from_signal(card, body.lots, float(entry), lot_size, product)
 
 
 @router.post("/{tid}/exit", response_model=Trade)

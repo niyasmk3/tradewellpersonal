@@ -7,6 +7,8 @@ export interface BasketPayload {
   summary: string;
   tradingsymbol: string;
   quantity: number;
+  /** Present when the hand-off needs an explicit caution before submitting. */
+  warning?: string | null;
 }
 
 /**
@@ -56,6 +58,25 @@ export async function fetchKiteBasket(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(typeof body?.detail === "string" ? body.detail : `Kite basket failed (${res.status})`);
+  }
+  return res.json();
+}
+
+/**
+ * The protective stop for a position you already hold.
+ *
+ * Deliberately a separate call from `fetchKiteBasket`, and keyed on a TRADE
+ * rather than a signal: the order it returns is a SELL, and a SELL with no long
+ * behind it opens a naked short. The backend refuses closed positions for the
+ * same reason — this is not a variant of the entry basket, it is a different
+ * and more dangerous instrument.
+ */
+export async function fetchKiteProtect(tradeId: string): Promise<BasketPayload> {
+  const qs = new URLSearchParams({ trade_id: tradeId });
+  const res = await fetch(`${API_BASE}/kite/protect?${qs}`, { cache: "no-store" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(typeof body?.detail === "string" ? body.detail : `Could not build the stop order (${res.status})`);
   }
   return res.json();
 }

@@ -26,6 +26,7 @@ from app.signals.models import TradingMode
 from app.signals.modes import build_profiles
 from app.signals.store import signal_store
 from app.state import market_state
+from app.trades.store import trade_store
 
 log = logging.getLogger("tradewell.kite")
 
@@ -40,6 +41,24 @@ _TICK = 0.05
 # Kite's basket endpoint enforces max 8 chars on `tag` (the v3 docs say 20 —
 # the API is the authority; "tradewell" was rejected with an InputException).
 _TAG = "twell"
+# Zerodha's RMS auto-squares MIS F&O positions around this time. After it, an
+# intraday journal row that the user never marked exited describes a position
+# that no longer exists — see `protect`.
+_MIS_SQUAREOFF_MIN = 15 * 60 + 20        # ~15:20 IST
+_IST_OFFSET = 19800
+
+
+def _snap(x: float, up: bool) -> float:
+    """Snap a price to the ₹0.05 tick, rounding `up` or down.
+
+    Rounds the QUOTIENT before flooring: `x / 0.05` lands just below the true
+    integer for ~35% of exact tick multiples (71.60 / 0.05 == 1431.9999999999998),
+    so a naive floor drops an already-aligned price a full tick — loosening a
+    stop below the level the plan set.
+    """
+    q = round(x / _TICK, 6)
+    n = math.ceil(q) if up else math.floor(q)
+    return round(n * _TICK, 2)
 
 
 class BasketPayload(BaseModel):
@@ -49,6 +68,7 @@ class BasketPayload(BaseModel):
     summary: str        # human-readable confirmation line for the UI
     tradingsymbol: str
     quantity: int
+    warning: Optional[str] = None   # shown before the hand-off, when it applies
 
 
 class ResolvedContract(BaseModel):
@@ -159,8 +179,7 @@ def basket(
     # Snap UP to the ₹0.05 NSE tick — an unaligned price is rejected outright,
     # and rounding up (not nearest) keeps the buy limit from landing below the
     # card's entry zone.
-    price = math.ceil(float(card.entry_high) / _TICK) * _TICK
-    price = round(price, 2)
+    price = _snap(float(card.entry_high), up=True)
     order = {
         "variety": "regular",
         "tradingsymbol": tsym,
@@ -181,4 +200,151 @@ def basket(
     return BasketPayload(
         url=_BASKET_URL, api_key=cfg.kite_api_key, data=json.dumps([order]),
         summary=summary, tradingsymbol=tsym, quantity=quantity,
+    )
+
+
+@router.get("/protect", response_model=BasketPayload)
+def protect(trade_id: str = Query(...)) -> BasketPayload:
+    """A resting stop-loss order for a position you ALREADY HOLD.
+
+    WHY THIS IS A SEPARATE ENDPOINT AND NOT A SECOND LEG OF /basket:
+    a SELL order sitting in the same basket as the BUY is submitted at the same
+    moment. If the BUY does not fill (a gap through the limit, a partial) and
+    price then trades through the trigger, the SELL executes on its own and you
+    are SHORT a naked index option — undefined risk and lakhs of margin, from a
+    button whose whole purpose was to reduce risk. So the protective order is
+    only ever built from an open position in the journal, where the underlying
+    long is known to exist.
+
+    Uses order_type SL, not SL-M: NSE withdrew SL-M for index options in Sept
+    2021 and Zerodha blocks it, so a stop must carry a limit price. That limit
+    is placed a configurable margin BELOW the trigger so it behaves like a
+    market exit instead of resting unfilled while the premium keeps falling.
+    """
+    cfg = get_settings()
+    if not cfg.kite_api_key:
+        raise HTTPException(status_code=409, detail="KITE_API_KEY not configured")
+
+    trade = trade_store.get(trade_id)
+    if trade is None:
+        raise HTTPException(status_code=404, detail="No such trade")
+    if trade.status.value not in ("entered", "partial"):
+        raise HTTPException(
+            status_code=409,
+            detail="That position is already closed — a SELL order now would open a SHORT",
+        )
+    if trade.quantity <= 0:
+        raise HTTPException(status_code=409, detail="Position has no remaining quantity")
+
+    # An "entered" row only means the user told us they entered — nothing in
+    # Tradewell can observe an exit made in Kite, and no code path closes a
+    # trade automatically. For MIS that gap is not merely possible, it is
+    # CERTAIN: Zerodha's RMS squares off intraday F&O around 15:20 IST, so any
+    # intraday row from an earlier session (or from after the cutoff today)
+    # describes a position the broker has already closed. Selling against it
+    # would open a naked short, so refuse rather than lean on the warning.
+    if trade.mode is TradingMode.INTRADAY:
+        now_ist = int(time.time()) + _IST_OFFSET
+        same_day = (trade.entered_at + _IST_OFFSET) // 86400 == now_ist // 86400
+        before_cutoff = (now_ist % 86400) // 60 < _MIS_SQUAREOFF_MIN
+        if not (same_day and before_cutoff):
+            raise HTTPException(
+                status_code=409,
+                detail=("Intraday positions are auto-squared by Zerodha at ~15:20 IST, so "
+                        "this journal entry is stale — you no longer hold it. Mark it exited; "
+                        "a SELL now would open a SHORT."),
+            )
+
+    is_ce = trade.direction.value == "CE"
+    profile = build_profiles(cfg).get(trade.mode.value)
+    expiry_key = profile.expiry_key if profile else "nearest"
+    contract = _resolve_contract(trade.symbol, expiry_key, trade.token, trade.strike, is_ce)
+    if contract is None:
+        raise HTTPException(status_code=409, detail="Could not resolve the Kite contract — place the SL manually")
+    if trade.expiry and contract.expiry and trade.expiry != contract.expiry:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Contract expiry changed ({trade.expiry} → {contract.expiry}) — place the SL manually",
+        )
+
+    # The live stop, which may already have been trailed up after Target 1.
+    stop = float(trade.trailing_sl or trade.stop_loss)
+    if stop <= 0:
+        raise HTTPException(status_code=409, detail="No stop level on this position")
+
+    # A sell stop must sit BELOW the current premium; above it, Kite rejects the
+    # order outright. Being here means the stop is already breached — the answer
+    # is to exit now, not to rest an order that can never be placed.
+    ltp = trade.current_premium
+    if ltp is not None and ltp > 0 and stop >= ltp:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Premium ₹{ltp:.2f} is already at/below the stop ₹{stop:.2f} — "
+                    "this is an exit-now situation, not a resting stop"),
+        )
+
+    # Snap the trigger DOWN to the tick: rounding up would tighten the stop past
+    # the level the plan set. The limit then sits a margin below the trigger.
+    trigger = _snap(stop, up=False)
+    limit = max(_TICK, _snap(trigger * (1.0 - cfg.kite_sl_limit_buffer_pct), up=False))
+    if limit >= trigger:
+        # Only reachable at a premium so small the buffer cannot be expressed in
+        # ticks (a ₹0.05 stop). A "stop" there protects nothing and the order
+        # would rest at its own trigger — say so instead of emitting it.
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Stop ₹{trigger:.2f} is too small for a limit below it — "
+                    "the premium is near zero; exit manually instead"),
+        )
+
+    product = getattr(trade, "product", None) or (
+        "MIS" if trade.mode is TradingMode.INTRADAY else "NRML"
+    )
+    order = {
+        "variety": "regular",
+        "tradingsymbol": contract.tradingsymbol,
+        "exchange": "NFO",
+        "transaction_type": "SELL",         # closes the long — never opens a short
+        "order_type": "SL",                 # SL-M is blocked for index options
+        "trigger_price": trigger,
+        "price": limit,
+        "quantity": trade.quantity,
+        # MUST match the product the LONG was opened with — MIS and NRML are
+        # separate books, so a mismatch opens a new short leg instead of
+        # closing. Recorded at entry; mode is only a fallback for legacy rows.
+        "product": product,
+        "readonly": False,
+        "tag": _TAG,
+    }
+    summary = (
+        f"SELL {trade.quantity} {contract.tradingsymbol} · SL trigger ₹{trigger} "
+        f"limit ₹{limit} · {order['product']} · review & confirm in Kite"
+    )
+    # Tradewell cannot read the Kite order book, so a repeat hand-off is the one
+    # short-selling path left open: two SELL stops against one long means the
+    # second one shorts. Journal it and escalate the warning on any repeat.
+    prior = trade_store.note_stop_handoff(trade.id, trigger)
+    warning = (
+        "This is a SELL order. Submit it only while you actually hold this "
+        f"position ({trade.quantity} qty) — if you have already exited, it opens a SHORT."
+    )
+    if not getattr(trade, "product", None):
+        # Pre-dates the recorded product, so it is a guess from the mode.
+        warning += (
+            f"\n\nThis stop is built as {product}. It closes your position only if you "
+            f"bought this contract as {product} in Kite — the other product would open "
+            "a separate short leg."
+        )
+    if prior:
+        warning = (
+            f"⚠ You have ALREADY sent a stop for this position {prior} time(s). "
+            "If that order is still live in Kite, adding another means TWO sell "
+            "orders against one long — the second would open a SHORT. Cancel the "
+            "existing one first, or close this dialog.\n\n" + warning
+        )
+    log.info("Kite protect basket prepared: %s (prior hand-offs: %d)", summary, prior)
+    return BasketPayload(
+        url=_BASKET_URL, api_key=cfg.kite_api_key, data=json.dumps([order]),
+        summary=summary, tradingsymbol=contract.tradingsymbol,
+        quantity=trade.quantity, warning=warning,
     )

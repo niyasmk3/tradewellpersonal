@@ -151,6 +151,151 @@ def test_throttle_never_blocks_an_already_active_card():
     print("  ACTIVE -> live card survives circuit breaker")
 
 
+# --- open-position guards (added after 20-Jul-2026) ---------------------------
+# That day the engine issued six PE signals in 66 minutes while three PE
+# positions sat ~Rs 32,000 down. Nothing was REALISED until 13:13, so every
+# realised-only breaker stayed silent through the whole drawdown.
+
+OPEN_CFG = ThrottleConfig(max_per_day=99, min_gap_s=0, cooldown_s=0, flip_guard_s=0,
+                          max_consecutive_losses=99, daily_loss_limit=0,
+                          max_open_positions=2, max_open_drawdown=0)
+
+
+def test_open_positions_cap_blocks_stacking():
+    s = _store()
+    r = s.reconcile(_resp(_card(at=BASE), BASE), BASE, OPEN_CFG,
+                    RiskState(open_positions=2, open_pnl=-32000))
+    assert r.signal is None, "3rd concurrent position must be blocked"
+    assert "already open" in (r.no_trade_reason or ""), r.no_trade_reason
+    print(f"  OPEN-N -> blocked: {r.no_trade_reason[:52]}...")
+
+
+def test_open_positions_under_cap_still_issues():
+    s = _store()
+    r = s.reconcile(_resp(_card(at=BASE), BASE), BASE, OPEN_CFG,
+                    RiskState(open_positions=1, open_pnl=-9000))
+    assert r.signal is not None, "under the cap the engine must still speak"
+    print("  OPEN-N -> 2nd position still allowed")
+
+
+def test_open_drawdown_halts_signals():
+    cfg = ThrottleConfig(max_per_day=99, min_gap_s=0, cooldown_s=0, flip_guard_s=0,
+                         max_consecutive_losses=99, max_open_positions=0,
+                         max_open_drawdown=15000)
+    s = _store()
+    r = s.reconcile(_resp(_card(at=BASE), BASE), BASE, cfg,
+                    RiskState(open_positions=1, open_pnl=-15000))
+    assert r.signal is None and "down" in (r.no_trade_reason or "")
+    print(f"  OPEN-DD-> blocked at -Rs15,000 unrealised")
+
+
+def test_open_profit_never_blocks():
+    """A guard that fires on WINNING positions would be nonsense."""
+    cfg = ThrottleConfig(max_per_day=99, min_gap_s=0, cooldown_s=0, flip_guard_s=0,
+                         max_consecutive_losses=99, max_open_positions=0,
+                         max_open_drawdown=15000, daily_loss_limit=20000)
+    s = _store()
+    r = s.reconcile(_resp(_card(at=BASE), BASE), BASE, cfg,
+                    RiskState(open_positions=1, open_pnl=+40000, realized_today=0))
+    assert r.signal is not None, "open PROFIT must never trip a loss guard"
+    print("  OPEN-DD-> open profit does not block")
+
+
+def test_daily_limit_counts_unrealised():
+    """The 20-Jul hole: -Rs32,000 held open, nothing realised, engine kept talking."""
+    cfg = ThrottleConfig(max_per_day=99, min_gap_s=0, cooldown_s=0, flip_guard_s=0,
+                         max_consecutive_losses=99, max_open_positions=0,
+                         daily_loss_limit=20000)
+    s = _store()
+    # Realised alone is 0 -> the old code issued happily.
+    r = s.reconcile(_resp(_card(at=BASE), BASE), BASE, cfg,
+                    RiskState(realized_today=0.0, open_pnl=-32000, open_positions=3))
+    assert r.signal is None, "unrealised loss must count toward the daily limit"
+    assert "still open" in (r.no_trade_reason or ""), r.no_trade_reason
+    print(f"  DAILY  -> counts unrealised: {r.no_trade_reason[:56]}...")
+
+
+def test_realised_and_unrealised_combine():
+    cfg = ThrottleConfig(max_per_day=99, min_gap_s=0, cooldown_s=0, flip_guard_s=0,
+                         max_consecutive_losses=99, max_open_positions=0,
+                         daily_loss_limit=20000)
+    s = _store()
+    # Neither alone breaches 20k; together they do.
+    r = s.reconcile(_resp(_card(at=BASE), BASE), BASE, cfg,
+                    RiskState(realized_today=-12000, open_pnl=-9000, open_positions=1))
+    assert r.signal is None, "-12k booked plus -9k open exceeds the 20k limit"
+    print("  DAILY  -> -12k realised + -9k open trips the 20k limit")
+
+
+def test_replay_20_jul_sequence():
+    """Replay the real 20-Jul-2026 sequence against the new guard.
+
+    Signals fired at 11:45, 11:54, 12:02, 12:15, 12:27 and 12:51; the trader
+    entered on each. The only exit before 13:13 was the first trade, closed at
+    11:57. Modelled exactly that way, max_open_positions=2 blocks the last
+    three - the trades that lost Rs 19,988, Rs 24,505 and Rs 6,298.
+    """
+    SIGNALS = [0, 9, 17, 30, 42, 66]          # minutes after 11:45
+    EXITS = {12: 1}                            # 11:57 -> one position closed
+    open_positions = 0
+    issued, blocked = [], []
+    s = _store()
+    for i, m in enumerate(SIGNALS):
+        t = BASE + m * 60
+        for at, n in EXITS.items():            # apply exits that happened by now
+            if at <= m and at > (SIGNALS[i - 1] if i else -1):
+                open_positions -= n
+        if i:
+            s.reconcile(_resp(None, t), t, OPEN_CFG, RiskState(open_positions=open_positions))
+        r = s.reconcile(_resp(_card(at=t, cid=f"s{i}"), t), t, OPEN_CFG,
+                        RiskState(open_positions=open_positions, open_pnl=-3000 * i))
+        if r.signal is not None:
+            issued.append(m)
+            open_positions += 1                # trader enters and holds
+        else:
+            blocked.append(m)
+    assert issued == [0, 9, 17], f"first three should still be issued, got {issued}"
+    assert blocked == [30, 42, 66], f"the three worst should be blocked, got {blocked}"
+    print(f"  REPLAY -> issued +{issued}min, blocked +{blocked}min "
+          f"= the Rs19,988 / Rs24,505 / Rs6,298 trades never signalled")
+
+
+def test_stale_intraday_row_does_not_mute_the_engine():
+    """A day-old intraday row must not count as an open position.
+
+    Nothing in Tradewell closes a trade by itself and Zerodha auto-squares MIS
+    at ~15:20 IST, so a row the user forgot to mark exited would otherwise
+    count forever — and with max_open_positions=2, two ghosts would silence the
+    engine permanently. Exercises the real filter in SignalService._risk_state.
+    """
+    from app.signals.service import SignalService
+    import app.signals.service as svc
+
+    now = BASE
+    today = (now + 19800) // 86400
+    yesterday = now - 86400
+
+    def row(mode, entered_at, status="entered"):
+        return type("T", (), {
+            "status": type("S", (), {"value": status})(),
+            "mode": type("M", (), {"value": mode})(),
+            "entered_at": entered_at, "pnl": -5000.0, "realized_pnl": 0.0,
+            "exited_at": None,
+        })()
+
+    rows = [row("intraday", yesterday), row("intraday", yesterday), row("positional", yesterday)]
+    orig = svc.trade_store.all
+    svc.trade_store.all = lambda: rows            # type: ignore
+    try:
+        rs = SignalService._risk_state(object(), now)
+    finally:
+        svc.trade_store.all = orig                # type: ignore
+
+    assert rs.open_positions == 1, f"only the positional row should count, got {rs.open_positions}"
+    assert rs.open_pnl == -5000.0, rs.open_pnl
+    print("  STALE  -> 2 day-old intraday rows ignored, positional row still counts")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

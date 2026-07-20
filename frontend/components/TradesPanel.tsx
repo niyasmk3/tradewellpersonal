@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Trade, TradeAction, api } from "@/lib/api";
+import { fetchKiteProtect, submitKiteBasket } from "@/lib/kiteBasket";
 import { fmt, istTime, istToday, parseNum, pctFrom, signed } from "@/lib/format";
 
 const REC_LABEL: Record<TradeAction, string> = {
@@ -44,6 +45,30 @@ function TradeCard({ t, onChange }: { t: Trade; onChange: () => void }) {
   const ce = t.direction === "CE";
   const pnl = t.pnl ?? 0;
   const pnlTone = pnl >= 0 ? "text-bull" : "text-bear";
+
+  /**
+   * Hand the protective stop to Kite. Confirms first and quotes the exact
+   * quantity, because this is a SELL: submitted without the matching long it
+   * would open a short position rather than close one.
+   */
+  const protectInKite = async () => {
+    setBusy(true);
+    try {
+      const payload = await fetchKiteProtect(t.id);
+      if (
+        window.confirm(
+          `${payload.summary}\n\n${payload.warning ?? ""}\n\n` +
+            "Tradewell places nothing — you review and confirm in Kite.",
+        )
+      ) {
+        submitKiteBasket(payload);
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "could not build the stop order");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const act = async (fn: (px?: number) => Promise<unknown>) => {
     let px: number | undefined;
@@ -104,6 +129,20 @@ function TradeCard({ t, onChange }: { t: Trade; onChange: () => void }) {
       <div className={`mt-1.5 rounded px-2 py-1 text-[11px] ${recTone(t.recommendation)}`}>
         {REC_LABEL[t.recommendation]}
         {t.recommendation_note ? ` — ${t.recommendation_note}` : ""}
+      </div>
+
+      {/* The stop only caps a loss if it exists as a real order in the market.
+          Tradewell places none, so this hands the SL to Kite pre-filled — one
+          click, at the moment the position is actually held. */}
+      <div className="mt-1.5 flex items-center gap-2">
+        <button
+          onClick={protectInKite}
+          disabled={busy}
+          title="Open a stop-loss SELL order for this position in Kite, pre-filled at your current stop. You review and confirm there."
+          className="flex-1 rounded border border-bear/60 bg-bear/10 px-2 py-1 text-[11px] font-medium text-bear hover:bg-bear/20 disabled:opacity-40"
+        >
+          🛡 Place stop in Kite ↗ <span className="font-mono">₹{fmt(t.trailing_sl)}</span>
+        </button>
       </div>
 
       <div className="mt-1.5 flex items-center gap-2">

@@ -55,6 +55,10 @@ class Trade(BaseModel):
     lots: int
     lot_size: int
     quantity: int                        # lots * lot_size
+    # Kite product the position was opened with. A protective SELL MUST carry
+    # the same one: MIS and NRML are separate books, so a mismatched exit order
+    # opens a NEW short leg instead of closing the long. None on legacy rows.
+    product: Optional[str] = None        # "MIS" | "NRML"
 
     status: TradeStatus = TradeStatus.ENTERED
     stop_loss: float
@@ -88,6 +92,9 @@ class EnterRequest(BaseModel):
     mode: TradingMode = TradingMode.INTRADAY
     lots: int = 1
     entry_premium: Optional[float] = None   # actual fill; defaults to live premium
+    # Defaults from the mode, but the user can override: an intraday signal is
+    # often filled NRML, and the stop order has to match the fill, not the plan.
+    product: Optional[str] = None           # "MIS" | "NRML"
     # The card the user clicked. If the active signal has changed by the time
     # the form is confirmed, the backend rejects instead of booking a contract
     # the user never intended to log.

@@ -84,7 +84,8 @@ class TradeStore:
 
     # ---- create ----
     def create_from_signal(
-        self, card: SignalCard, lots: int, entry_premium: float, lot_size: int
+        self, card: SignalCard, lots: int, entry_premium: float, lot_size: int,
+        product: str | None = None,
     ) -> Trade:
         now = _now()
         with self._lock:
@@ -96,6 +97,7 @@ class TradeStore:
                 direction=card.direction, contract=card.contract, strike=card.strike,
                 expiry=card.expiry, token=card.token, entry_premium=entry_premium,
                 lots=lots, lot_size=lot_size, quantity=lots * lot_size,
+                product=product,
                 status=TradeStatus.ENTERED, stop_loss=card.premium_sl,
                 target1=card.target1, target2=card.target2, trailing_sl=card.premium_sl,
                 invalidation_level=card.invalidation_level, invalidation_dir=card.invalidation_dir,
@@ -207,6 +209,27 @@ class TradeStore:
             t.events.append(TradeEvent(ts=_now(), kind="updated", note="Manual update"))
 
         return self._apply(tid, fn)
+
+    def note_stop_handoff(self, tid: str, trigger: float) -> int:
+        """Record that a protective stop was handed to Kite; return prior count.
+
+        Tradewell cannot see the user's Kite order book, so this journal entry
+        is the only memory that a stop was already sent. It matters because a
+        SECOND stop for the same position means two SELL orders against one
+        long: the first closes it, the second opens a short.
+        """
+        prior = 0
+        with self._lock:
+            t = self._trades.get(tid)
+            if t is None:
+                return 0
+            prior = sum(1 for e in t.events if e.kind == "stop_handoff")
+            t.events.append(TradeEvent(
+                ts=_now(), kind="stop_handoff",
+                note=f"Stop-loss order handed to Kite at trigger ₹{trigger:.2f}",
+            ))
+            self._save()
+        return prior
 
     def ignore(self, tid: str) -> Trade | None:
         def fn(t: Trade) -> None:
