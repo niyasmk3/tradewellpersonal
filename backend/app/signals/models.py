@@ -158,6 +158,14 @@ class SignalCard(BaseModel):
     suggested_lots: Optional[int] = None
     sizing_note: Optional[str] = None
 
+    # Contract multiplier, so the UI can turn premium levels into rupees BEFORE
+    # the trade is placed. 0/None means the instrument dump hasn't loaded a lot
+    # size — the UI must then show no rupee figures rather than guess one.
+    lot_size: Optional[int] = None
+    # Risk budget context, for relating a position's loss to the account.
+    trading_capital: Optional[float] = None
+    daily_loss_limit: Optional[float] = None
+
 
 class MarketStatus(BaseModel):
     symbol: str

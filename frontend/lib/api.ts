@@ -198,6 +198,13 @@ export interface SignalCard {
   score: ScoreBreakdown;
   ref_spot: number | null;
   ref_entry_premium: number | null;
+  /** Lots implied by TRADING_CAPITAL × RISK_PER_TRADE_PCT; null when unconfigured. */
+  suggested_lots: number | null;
+  sizing_note: string | null;
+  /** Contract multiplier — required to turn premium levels into rupees. */
+  lot_size: number | null;
+  trading_capital: number | null;
+  daily_loss_limit: number | null;
 }
 
 export interface SignalResponse {

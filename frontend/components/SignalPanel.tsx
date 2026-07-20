@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ScoreBreakdown, SignalResponse, TradingMode, api } from "@/lib/api";
 import { fetchKiteBasket, submitKiteBasket } from "@/lib/kiteBasket";
 import { fmt, istToday, parseNum, pctFrom } from "@/lib/format";
+import { RiskVisualizer } from "./RiskVisualizer";
 
 function useCountdown(validUntil: number | undefined) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -254,7 +255,9 @@ export function SignalPanel({
       <div className="mt-2 grid shrink-0 grid-cols-3 gap-1.5 px-3">
         <Stat label="Entry zone" value={`₹${fmt(signal.entry_low)}–₹${fmt(signal.entry_high)}`} />
         <Stat
-          label="Stop-loss"
+          // "planned" is load-bearing: no stop order is placed, so this is a
+          // level you must act on, not a floor the market guarantees.
+          label="Stop-loss (planned)"
           value={`₹${fmt(signal.premium_sl)}`}
           tone="text-bear"
           pct={pctFrom(signal.premium_sl, entryRef)}
@@ -272,7 +275,19 @@ export function SignalPanel({
           tone="text-bull"
           pct={pctFrom(signal.target2, entryRef)}
         />
-        <Stat label="Strike" value={String(signal.strike)} />
+        {/* Strike is already in the contract line above ("NIFTY 24800 CE") —
+            the tile is spent here on rupee outcomes instead. */}
+      </div>
+
+      {/* Rupees at stake, pinned. A risk warning that can scroll away is not a
+          warning, so this sits in the shrink-0 shell with the action row. */}
+      <div className="mt-2 shrink-0 px-3">
+        <RiskVisualizer
+          signal={signal}
+          lots={Math.max(1, Math.floor(parseNum(lots) ?? 1))}
+          onLots={(n) => setLots(String(n))}
+          entryOverride={parseNum(entryPx)}
+        />
       </div>
 
       {/* ---- everything below scrolls ---- */}

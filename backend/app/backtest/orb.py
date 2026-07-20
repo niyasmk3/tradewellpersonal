@@ -159,7 +159,11 @@ def run_orb(df: pd.DataFrame, p: OrbParams, symbol: str = "NIFTY",
             taken += 1
             if not p.allow_reversal or taken >= 2:
                 break
-            k = j_pos + 1                  # look for an opposite break after this one
+            # Resume AT the exit bar, not after it. Its close is a legitimate
+            # breakout signal and the fill would still be the following bar's
+            # open, so no look-ahead is introduced — skipping it silently
+            # delayed every reversal by one bar.
+            k = j_pos
 
     return _summarize(df, trades, symbol, p)
 

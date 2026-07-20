@@ -28,6 +28,34 @@ from app.trades.store import trade_store
 log = logging.getLogger("tradewell.signals")
 
 
+def _option_lot_size(token: int | None) -> int:
+    """Lot size of the exact option contract behind `token`, or 0.
+
+    Matched by INSTRUMENT TOKEN only — never by strike. A token identifies one
+    contract unambiguously, whereas a strike match across universes once handed
+    a positional card the weekly contract at the same strike. Imported lazily
+    and failure-tolerant: this is a display refinement on the live signal path
+    and must never be able to stop a card being issued.
+    """
+    if not token:
+        return 0
+    try:
+        from app.services import feed
+
+        builder = getattr(feed, "chain_builder", None)
+        if builder is None:
+            return 0
+        for universe in builder.universes.values():
+            for sp in universe.strikes.values():
+                if sp.ce_token == token:
+                    return int(sp.ce_lot_size or 0)
+                if sp.pe_token == token:
+                    return int(sp.pe_lot_size or 0)
+    except Exception:  # pragma: no cover - never break signal generation
+        log.debug("option lot-size lookup failed", exc_info=True)
+    return 0
+
+
 class SignalService:
     def __init__(self, cfg: Settings, state: MarketState, store: SignalStore) -> None:
         self.cfg = cfg
@@ -71,9 +99,22 @@ class SignalService:
             return
         capital = self.cfg.trading_capital
         meta = self.state.underlyings.get(symbol.upper())
-        lot = meta.lot_size if meta and meta.lot_size else 0
+        # Prefer THIS option contract's own lot size over the future's: NSE
+        # applies lot revisions to newly listed series while live contracts
+        # keep the old size, so the two disagree for weeks. The Kite basket
+        # already resolves it this way, and the rupee figures the UI shows must
+        # match the quantity Kite actually receives.
+        lot = _option_lot_size(card.token) or (meta.lot_size if meta and meta.lot_size else 0)
         entry = card.ref_entry_premium or card.entry_high
         per_unit_risk = max(0.0, entry - card.premium_sl)
+
+        # Contract/account facts are attached BEFORE the suggestion returns
+        # early: the UI needs the lot size to show rupee outcomes even when no
+        # capital is configured, and "no suggestion" must not mean "no numbers".
+        card.lot_size = lot or None
+        card.trading_capital = capital or None
+        card.daily_loss_limit = self.cfg.signal_daily_loss_limit or None
+
         if capital <= 0:
             card.sizing_note = "Set TRADING_CAPITAL in .env for a size suggestion"
             return
