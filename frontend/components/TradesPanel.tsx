@@ -1,0 +1,222 @@
+"use client";
+
+import { useState } from "react";
+import { Trade, TradeAction, api } from "@/lib/api";
+import { fmt, istToday, parseNum, pctFrom, signed } from "@/lib/format";
+
+const REC_LABEL: Record<TradeAction, string> = {
+  hold: "Hold",
+  book_partial: "Book partial · trail rest",
+  move_sl_entry: "Move SL to entry",
+  trail_sl: "Trailing stop",
+  exit: "Exit",
+  target1_reached: "Target 1 reached",
+  target2_reached: "Target 2 reached · book remaining",
+  stop_loss_hit: "Stop-loss hit · exit",
+  invalidated: "Invalidated · exit",
+  time_exit: "Time exit · close position",
+};
+
+function recTone(a: TradeAction): string {
+  if (["stop_loss_hit", "invalidated", "exit", "time_exit"].includes(a)) return "bg-bear/15 text-bear";
+  if (["target1_reached", "target2_reached", "book_partial"].includes(a)) return "bg-bull/15 text-bull";
+  if (a === "trail_sl") return "bg-accent/15 text-accent";
+  return "bg-panel2 text-muted";
+}
+
+const isOpen = (t: Trade) => t.status === "entered" || t.status === "partial";
+const closedTodayEpoch = (ep: number | null) =>
+  ep != null && new Date((ep + 19800) * 1000).toISOString().slice(0, 10) === istToday();
+
+/** Realized P&L: booked today, and lifetime across the whole journal. */
+export function realizedSummary(trades: Trade[]) {
+  const total = trades.reduce((s, t) => s + (t.realized_pnl || 0), 0);
+  const today = trades.reduce(
+    (s, t) => s + (closedTodayEpoch(t.exited_at) ? t.realized_pnl || 0 : 0),
+    0,
+  );
+  return { today, total };
+}
+
+function TradeCard({ t, onChange }: { t: Trade; onChange: () => void }) {
+  const [exitPx, setExitPx] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const ce = t.direction === "CE";
+  const pnl = t.pnl ?? 0;
+  const pnlTone = pnl >= 0 ? "text-bull" : "text-bear";
+
+  const act = async (fn: (px?: number) => Promise<unknown>) => {
+    let px: number | undefined;
+    if (exitPx.trim()) {
+      const p = parseNum(exitPx);
+      if (p === null || p < 0) {
+        alert("Enter a valid exit price");
+        return;
+      }
+      px = p;
+    }
+    setBusy(true);
+    try {
+      await fn(px);
+      // Clear the typed price after every successful action — otherwise a price
+      // typed for "Book ½" silently becomes the Exit fill hours later.
+      setExitPx("");
+      onChange();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "action failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-md border border-edge bg-panel2 p-2">
+      <div className="flex items-center gap-2">
+        <span className={`tag ${ce ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>{t.direction}</span>
+        <span className="font-mono text-xs">{t.contract}</span>
+        {t.status === "partial" && <span className="tag bg-yellow-500/15 text-yellow-400">partial</span>}
+        <div className="ml-auto text-right">
+          <div className={`font-mono text-sm ${pnlTone}`}>₹{signed(pnl, 0)}</div>
+          <div className={`text-[10px] ${pnlTone}`}>{signed(t.pnl_pct, 1)}%</div>
+        </div>
+      </div>
+
+      <div className="mt-1.5 grid grid-cols-3 gap-x-2 gap-y-0.5 font-mono text-[11px]">
+        <span className="text-muted">In <span className="text-white">₹{fmt(t.entry_premium)}</span></span>
+        <span className="text-muted">LTP <span className="text-white">₹{fmt(t.current_premium)}</span></span>
+        <span className="text-muted">Qty <span className="text-white">{t.quantity}</span></span>
+        <span className="text-muted">SL <span className="text-bear">₹{fmt(t.trailing_sl)}</span></span>
+        <span className="text-muted">T1 <span className="text-bull">₹{fmt(t.target1)}</span></span>
+        <span className="text-muted">T2 <span className="text-bull">₹{fmt(t.target2)}</span></span>
+      </div>
+
+      {/* Percentages relative to YOUR fill — what Kite's GTT boxes ask for. */}
+      <div className="mt-1 flex gap-3 font-mono text-[10px] text-muted" title="Percent move from your entry — paste into Kite's GTT stop-loss / target fields">
+        <span>GTT:</span>
+        <span className="text-bear">SL {pctFrom(t.trailing_sl, t.entry_premium)}</span>
+        <span className="text-bull">T1 {pctFrom(t.target1, t.entry_premium)}</span>
+        <span className="text-bull">T2 {pctFrom(t.target2, t.entry_premium)}</span>
+      </div>
+
+      <div className={`mt-1.5 rounded px-2 py-1 text-[11px] ${recTone(t.recommendation)}`}>
+        {REC_LABEL[t.recommendation]}
+        {t.recommendation_note ? ` — ${t.recommendation_note}` : ""}
+      </div>
+
+      <div className="mt-1.5 flex items-center gap-2">
+        <input
+          value={exitPx}
+          onChange={(e) => setExitPx(e.target.value)}
+          inputMode="decimal"
+          placeholder={t.current_premium != null ? `₹${fmt(t.current_premium)}` : "exit ₹"}
+          className="w-20 rounded border border-edge bg-panel px-2 py-0.5 font-mono text-xs outline-none focus:border-accent"
+        />
+        <button
+          onClick={() => act((px) => api.partialTrade(t.id, px))}
+          disabled={busy || t.lots < 2}
+          title={t.lots < 2 ? "Need at least 2 lots to book partial" : undefined}
+          className="rounded bg-panel px-2 py-0.5 text-xs text-white hover:bg-edge disabled:opacity-40"
+        >
+          Book ½
+        </button>
+        <button
+          onClick={() => act((px) => api.exitTrade(t.id, px))}
+          disabled={busy}
+          className="rounded bg-bear/80 px-2.5 py-0.5 text-xs font-medium text-white hover:bg-bear disabled:opacity-40"
+        >
+          Exit
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** OPEN positions only — rail 1, shown whenever money is at risk. */
+export function TradesPanel({
+  trades,
+  error,
+  onChange,
+  className = "",
+}: {
+  trades: Trade[];
+  error?: string | null;
+  onChange: () => void;
+  className?: string;
+}) {
+  const active = trades.filter(isOpen);
+  const live = active.reduce((s, t) => s + (t.pnl ?? 0), 0);
+
+  return (
+    <div className={`card flex min-h-0 flex-col overflow-hidden ${className}`}>
+      <div className="flex shrink-0 items-center justify-between border-b border-edge px-3 py-1.5">
+        <h3 className="text-sm font-medium">
+          Open Positions <span className="text-muted">({active.length})</span>
+        </h3>
+        {active.length > 0 && (
+          <span className={`font-mono text-sm ${live >= 0 ? "text-bull" : "text-bear"}`}>
+            ₹{signed(live, 0)}
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <div className="shrink-0 bg-bear/10 px-3 py-1 text-[11px] text-bear">
+          Trades feed unreachable — showing last known state
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto scroll-thin p-2">
+        {active.map((t) => (
+          <TradeCard key={t.id} t={t} onChange={onChange} />
+        ))}
+        {active.length === 0 && (
+          <div className="py-2 text-center text-xs text-muted">No open positions.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Closed-trade journal — a review surface, so it lives in the context rail. */
+export function TradeJournal({ trades }: { trades: Trade[] }) {
+  const closed = trades.filter((t) => t.status === "exited" || t.status === "ignored");
+  const { today, total } = realizedSummary(trades);
+
+  if (trades.length === 0) {
+    return <div className="p-3 text-xs text-muted">No trades logged yet.</div>;
+  }
+
+  return (
+    <div className="p-2">
+      <div className="mb-2 flex items-center justify-between px-1 text-[11px]">
+        <span className="text-muted">Realized</span>
+        <span className="font-mono">
+          <span className={today >= 0 ? "text-bull" : "text-bear"}>today ₹{signed(today, 0)}</span>
+          <span className="text-muted"> · total </span>
+          <span className={total >= 0 ? "text-bull" : "text-bear"}>₹{signed(total, 0)}</span>
+        </span>
+      </div>
+      <div className="space-y-1">
+        {closed.map((t) => (
+          <div
+            key={t.id}
+            className="flex items-center gap-2 rounded border border-edge/60 bg-panel2 px-2 py-1 text-[11px]"
+          >
+            <span className={`tag ${t.direction === "CE" ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
+              {t.direction}
+            </span>
+            <span className="truncate font-mono text-muted">{t.contract}</span>
+            {t.status === "ignored" ? (
+              <span className="ml-auto text-muted">ignored</span>
+            ) : (
+              <span className={`ml-auto font-mono ${t.realized_pnl >= 0 ? "text-bull" : "text-bear"}`}>
+                ₹{signed(t.realized_pnl, 0)}
+              </span>
+            )}
+          </div>
+        ))}
+        {closed.length === 0 && <div className="text-xs text-muted">Nothing closed yet today.</div>}
+      </div>
+    </div>
+  );
+}

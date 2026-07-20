@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.local
+*.local
+.kite_session.json
+
+# Runtime state — per-machine, regenerated on start. .trades.json and
+# .signals.json hold real trading activity; .instruments_cache.json is a ~13MB
+# daily dump. None of it belongs in version control.
+.trades.json
+.trades.json.corrupt
+.signals.json
+.news_seen.json
+.instruments_cache.json
+
+# Node / Next
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

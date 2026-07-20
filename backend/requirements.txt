@@ -1,0 +1,26 @@
+# --- Tradewell backend (Phase 1) ---
+# Lower-bound pins keep this installable on Python 3.9 (macOS system Python)
+# through 3.13. Pin exact versions later once you settle on an interpreter.
+
+# Web framework + ASGI server (standard extra pulls in websockets, uvloop, httptools)
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29
+
+# Kite Connect (market data + WebSocket ticker)
+kiteconnect>=5.0.0
+
+# Data / indicators
+pandas>=2.0,<3
+numpy>=1.26,<3
+
+# Config & models
+pydantic>=2.6,<3
+pydantic-settings>=2.2
+python-dotenv>=1.0
+
+# Optional live-state store (Phase 2 will lean on this; safe to skip locally)
+redis>=5.0
+
+# Phase 4: news intelligence (Claude sentiment + RSS ingestion)
+anthropic>=0.69.0
+feedparser>=6.0.0

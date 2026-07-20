@@ -1,0 +1,30 @@
+# Datastores for Phase 2 (candle persistence + live signal state).
+# NOT required for Phase 1 — the backend runs fully in-memory. Start these only
+# when you begin persisting candles / signals.
+#
+#   docker compose up -d
+#
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: tradewell-timescale
+    environment:
+      POSTGRES_USER: tradewell
+      POSTGRES_PASSWORD: tradewell
+      POSTGRES_DB: tradewell
+    ports:
+      - "5432:5432"
+    volumes:
+      - tsdb_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: tradewell-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  tsdb_data:
+  redis_data:

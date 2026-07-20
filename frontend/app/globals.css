@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #0a0e13;
+  color: #e6edf3;
+  /* The desktop layout is a fixed application shell (h-screen, no page scroll);
+     panels scroll internally. Needs a definite height to cascade from. */
+  height: 100%;
+}
+
+/* Thin scrollbars for the option-chain table */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #263241;
+  border-radius: 4px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-edge bg-panel;
+  }
+  .tag {
+    @apply inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium;
+  }
+}
