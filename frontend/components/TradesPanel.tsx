@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Trade, TradeAction, api } from "@/lib/api";
-import { fmt, istToday, parseNum, pctFrom, signed } from "@/lib/format";
+import { fmt, istTime, istToday, parseNum, pctFrom, signed } from "@/lib/format";
 
 const REC_LABEL: Record<TradeAction, string> = {
   hold: "Hold",
@@ -74,6 +74,9 @@ function TradeCard({ t, onChange }: { t: Trade; onChange: () => void }) {
       <div className="flex items-center gap-2">
         <span className={`tag ${ce ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>{t.direction}</span>
         <span className="font-mono text-xs">{t.contract}</span>
+        <span className="font-mono text-[10px] text-muted" title={`Entered ${istTime(t.entered_at)} IST`}>
+          {istTime(t.entered_at)}
+        </span>
         {t.status === "partial" && <span className="tag bg-yellow-500/15 text-yellow-400">partial</span>}
         <div className="ml-auto text-right">
           <div className={`font-mono text-sm ${pnlTone}`}>₹{signed(pnl, 0)}</div>
@@ -198,20 +201,34 @@ export function TradeJournal({ trades }: { trades: Trade[] }) {
       </div>
       <div className="space-y-1">
         {closed.map((t) => (
-          <div
-            key={t.id}
-            className="flex items-center gap-2 rounded border border-edge/60 bg-panel2 px-2 py-1 text-[11px]"
-          >
-            <span className={`tag ${t.direction === "CE" ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
-              {t.direction}
-            </span>
-            <span className="truncate font-mono text-muted">{t.contract}</span>
-            {t.status === "ignored" ? (
-              <span className="ml-auto text-muted">ignored</span>
-            ) : (
-              <span className={`ml-auto font-mono ${t.realized_pnl >= 0 ? "text-bull" : "text-bear"}`}>
-                ₹{signed(t.realized_pnl, 0)}
+          <div key={t.id} className="rounded border border-edge/60 bg-panel2 px-2 py-1.5 text-[11px]">
+            <div className="flex items-center gap-2">
+              <span className={`tag ${t.direction === "CE" ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
+                {t.direction}
               </span>
+              <span className="truncate font-mono text-muted">{t.contract}</span>
+              {t.status === "ignored" ? (
+                <span className="ml-auto text-muted">ignored</span>
+              ) : (
+                <span className={`ml-auto font-mono ${t.realized_pnl >= 0 ? "text-bull" : "text-bear"}`}>
+                  ₹{signed(t.realized_pnl, 0)}
+                </span>
+              )}
+            </div>
+            {t.status !== "ignored" && (
+              // The audit trail: what you paid, what you got, when, and how long
+              // you held it — so a trade can actually be reviewed after the fact.
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[10px] text-muted">
+                <span>{istTime(t.entered_at)}</span>
+                <span className="text-white/80">₹{fmt(t.entry_premium)}</span>
+                <span>→</span>
+                <span>{istTime(t.exited_at)}</span>
+                <span className="text-white/80">₹{fmt(t.exit_premium)}</span>
+                <span>· {t.quantity} qty</span>
+                {t.exited_at && (
+                  <span>· held {Math.max(0, Math.round((t.exited_at - t.entered_at) / 60))}m</span>
+                )}
+              </div>
             )}
           </div>
         ))}

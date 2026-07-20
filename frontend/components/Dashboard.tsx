@@ -63,6 +63,22 @@ export function Dashboard() {
   // Locally dismiss ("Ignore") the current signal until a new one is issued.
   const [dismissed, setDismissed] = useState<string | null>(null);
 
+  // Exit straight from the chart overlay. Records the exit in the journal at
+  // the live premium — Tradewell still places no orders, you exit in Kite.
+  const [exitingId, setExitingId] = useState<string | null>(null);
+  const exitPosition = async (t: { id: string; contract: string }) => {
+    if (!window.confirm(`Record ${t.contract} as exited at the live premium?`)) return;
+    setExitingId(t.id);
+    try {
+      await api.exitTrade(t.id);
+      refreshTrades();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "could not record the exit");
+    } finally {
+      setExitingId(null);
+    }
+  };
+
   // Only show toggles the backend actually serves; fall back to the default pair.
   const available = useMemo(() => {
     const enabled = enabledModes.data?.modes ?? ["intraday", "positional"];
@@ -206,7 +222,14 @@ export function Dashboard() {
         {/* RAIL 2 — MARKET. Chart absorbs all leftover height (~700px vs the
             old fixed 420px), indicators as one strip directly beneath it. */}
         <section className="flex min-h-0 min-w-0 flex-col gap-2">
-          <PriceChart candles={candles.data ?? []} title={chartTitle} fill />
+          <PriceChart
+            candles={candles.data ?? []}
+            title={chartTitle}
+            fill
+            positions={openTrades}
+            busyId={exitingId}
+            onExit={exitPosition}
+          />
           <IndicatorPanel ind={indicators.data} underlying={underlying} className="shrink-0" />
         </section>
 
