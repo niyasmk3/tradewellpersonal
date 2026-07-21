@@ -237,11 +237,65 @@ export function TradesPanel({
 }
 
 /** Closed-trade journal — a review surface, so it lives in the context rail. */
+/**
+ * Why a closed trade ended, for the journal.
+ *
+ * `auto_close_reason` covers rows Tradewell closed itself, but a manually
+ * recorded exit had nothing at all — the single most useful fact when reviewing
+ * a losing day was missing. So fall back to the last meaningful advisory the
+ * monitor emitted before the close, which is what the trader was looking at
+ * when they acted.
+ */
+const EXIT_LABEL: Record<string, string> = {
+  stop: "stop-loss hit",
+  target1: "target 1 reached",
+  target2: "target 2 reached",
+  invalidation: "underlying invalidation",
+  time_exit: "time exit",
+  "broker flat": "closed at broker",
+};
+
+function exitReason(t: Trade): { text: string; tone: string; detail: string } | null {
+  if (t.status === "ignored") return null;
+  const note = (kind: string) =>
+    [...t.events].reverse().find((e) => e.kind === kind)?.note ?? "";
+  if (t.auto_close_reason) {
+    return {
+      text: EXIT_LABEL[t.auto_close_reason] ?? t.auto_close_reason,
+      tone: ["target1", "target2"].includes(t.auto_close_reason)
+        ? "bg-bull/15 text-bull"
+        : "bg-bear/15 text-bear",
+      detail: note("auto_closed") || `Auto-closed on ${t.auto_close_reason}`,
+    };
+  }
+  // Manual exit: the last advisory event before it is the honest explanation.
+  const advisory = [...t.events]
+    .reverse()
+    .find((e) => e.kind in EXIT_LABEL || ["stop_loss_hit", "invalidated", "target1", "target2_reached", "time_exit"].includes(e.kind));
+  if (advisory) {
+    const map: Record<string, [string, string]> = {
+      stop_loss_hit: ["stop-loss hit", "bg-bear/15 text-bear"],
+      invalidated: ["underlying invalidation", "bg-bear/15 text-bear"],
+      time_exit: ["time exit", "bg-panel2 text-muted"],
+      target1: ["target 1 reached", "bg-bull/15 text-bull"],
+      target2_reached: ["target 2 reached", "bg-bull/15 text-bull"],
+    };
+    const hit = map[advisory.kind];
+    if (hit) return { text: hit[0], tone: hit[1], detail: advisory.note };
+  }
+  return {
+    text: "closed manually",
+    tone: "bg-panel2 text-muted",
+    detail: "You recorded this exit; the monitor had raised no exit advisory.",
+  };
+}
+
 function JournalRow({ t, dayKey, onChange }: { t: Trade; dayKey: number; onChange?: () => void }) {
   const pct = returnPct(t.realized_pnl, t.entry_premium, t.initial_quantity, t.quantity);
   // A position opened on an earlier day is filed under the day it was BOOKED,
   // so its entry timestamp needs its own date or the row reads as same-day.
   const enteredElsewhere = istDayKey(t.entered_at) !== dayKey;
+  const reason = exitReason(t);
 
   return (
     <div className="rounded border border-edge/60 bg-panel2 px-2 py-1.5 text-[11px]">
@@ -250,6 +304,12 @@ function JournalRow({ t, dayKey, onChange }: { t: Trade; dayKey: number; onChang
           {t.direction}
         </span>
         <span className="truncate font-mono text-muted">{t.contract}</span>
+        {/* WHY it ended — the first thing you want when reviewing a bad day. */}
+        {reason && (
+          <span className={`tag shrink-0 text-[9px] ${reason.tone}`} title={reason.detail}>
+            {reason.text}
+          </span>
+        )}
         {t.status === "ignored" ? (
           <span className="ml-auto text-muted">ignored</span>
         ) : (
