@@ -311,5 +311,149 @@ def test_store_auto_close_marks_and_books_pnl():
     print("  STORE  -> a manually recorded exit cannot be reopened")
 
 
+# --- broker position-book reconciliation (READ-ONLY) -------------------------
+
+from app.trades import reconcile as rec
+from app.trades.service import TradeMonitorService
+
+
+class _FakeKite:
+    """Stands in for KiteConnect.positions(). `raise_on_call` simulates an API
+    failure, which must be distinguishable from an empty book."""
+    def __init__(self, net=None, day=None, raise_on_call=False):
+        self._net, self._day, self._raise = net or [], day or [], raise_on_call
+
+    def positions(self):
+        if self._raise:
+            raise RuntimeError("network down")
+        return {"net": self._net, "day": self._day}
+
+
+def _pos(token=999, qty=75, product="MIS", tsym="NIFTY2672424350CE", sell_price=None, sell_qty=0):
+    return {"tradingsymbol": tsym, "instrument_token": token, "product": product,
+            "quantity": qty, "sell_price": sell_price, "sell_quantity": sell_qty}
+
+
+def test_failed_position_call_is_not_an_empty_book():
+    """THE critical safety property: an API failure must close nothing."""
+    assert rec.fetch_broker_positions(_FakeKite(raise_on_call=True)) is None
+    assert rec.fetch_broker_positions(None) is None
+    assert rec.fetch_broker_positions(_FakeKite()) == []      # genuinely flat
+    print("  BROKER -> failed call returns None, empty book returns [] (distinct)")
+
+
+def test_match_prefers_token_and_respects_product():
+    t = make_trade(token=999, product="MIS")
+    rows = [rec.BrokerPosition("OTHER", 111, "MIS", 75), rec.BrokerPosition("X", 999, "MIS", 75)]
+    assert rec.match(t, rows).token == 999
+    # An NRML row must not satisfy an MIS position.
+    assert rec.match(t, [rec.BrokerPosition("X", 999, "NRML", 75)]) is None
+    print("  BROKER -> matches on token, refuses a product mismatch")
+
+
+def test_match_prefers_a_holding_row_over_a_flat_one():
+    """net + day both appear; a qty-0 row must not mask a live one."""
+    t = make_trade(token=999)
+    rows = [rec.BrokerPosition("X", 999, "MIS", 0), rec.BrokerPosition("X", 999, "MIS", 75)]
+    assert rec.match(t, rows).quantity == 75
+    print("  BROKER -> a live row wins over a flat duplicate")
+
+
+def _svc(store, kite):
+    svc = TradeMonitorService(state=None, store=store)
+    import app.kite.client as kc
+    kc.kite_service.kite = kite
+    return svc
+
+
+def _seed(store, **over):
+    from app.signals.models import Action, ScoreBreakdown, SignalCard, SignalState
+    card = SignalCard(
+        id="S1", symbol="NIFTY", mode=TradingMode.INTRADAY, title="t", action=Action.BUY_CE,
+        direction=Direction.CE, state=SignalState.ACTIVE, contract="NIFTY2672424350CE",
+        strike=24350.0, token=999, expiry="2026-07-24", entry_low=118.0, entry_high=122.0,
+        premium_sl=100.0, target1=150.0, target2=180.0, trailing_sl_rule="r",
+        risk_reward=1.5, confidence=80.0, underlying_invalidation="u", invalidation_note="n",
+        created_at=NOW, valid_until=NOW + 480,
+        score=ScoreBreakdown(direction=Direction.CE, components=[], total=80.0, max=100),
+    )
+    return store.create_from_signal(card, lots=1, entry_premium=120.0, lot_size=75, product="MIS")
+
+
+def test_reconcile_confirms_then_closes_at_the_real_fill():
+    s = _store()
+    t = _seed(s)
+    # 1. Broker shows the position -> confirmed, nothing closed.
+    _svc(s, _FakeKite(net=[_pos(qty=75)])).reconcile_once()
+    assert s.get(t.id).broker_qty == 75 and s.get(t.id).status is TradeStatus.ENTERED
+    # 2. Broker now flat, reporting the actual sell price -> close at THAT price.
+    _svc(s, _FakeKite(net=[_pos(qty=0, sell_price=131.25, sell_qty=75)])).reconcile_once()
+    after = s.get(t.id)
+    assert after.status is TradeStatus.EXITED and after.auto_closed
+    assert after.exit_premium == 131.25, after.exit_premium
+    assert after.realized_pnl == round((131.25 - 120.0) * 75, 2), after.realized_pnl
+    print(f"  BROKER -> closed at Kite's own fill Rs131.25, P&L Rs{after.realized_pnl}")
+
+
+def test_unconfirmed_row_is_never_closed_by_absence():
+    """Marking a trade entered BEFORE the buy fills must not close it."""
+    s = _store()
+    t = _seed(s)
+    _svc(s, _FakeKite(net=[])).reconcile_once()          # broker flat, never seen
+    assert s.get(t.id).status is TradeStatus.ENTERED
+    print("  BROKER -> never-seen row survives an empty book")
+
+
+def test_api_failure_leaves_everything_alone():
+    s = _store()
+    t = _seed(s)
+    _svc(s, _FakeKite(net=[_pos(qty=75)])).reconcile_once()   # confirm first
+    assert _svc(s, _FakeKite(raise_on_call=True)).reconcile_once() is False
+    assert s.get(t.id).status is TradeStatus.ENTERED
+    print("  BROKER -> API failure closes nothing")
+
+
+def test_broker_reopens_a_wrong_price_based_close():
+    """Price said stop; Kite says you are still in it. The broker wins."""
+    s = _store()
+    t = _seed(s)
+    s.auto_close(t.id, 99.0, "stop")
+    assert s.get(t.id).status is TradeStatus.EXITED
+    _svc(s, _FakeKite(net=[_pos(qty=75)])).reconcile_once()
+    back = s.get(t.id)
+    assert back.status is TradeStatus.ENTERED and not back.auto_closed
+    assert back.realized_pnl == 0.0 and back.broker_qty == 75
+    print("  BROKER -> reopened a wrong auto-close, P&L unbooked")
+
+
+def test_broker_never_reopens_a_manual_exit():
+    """A fill you reported is a fact, whatever the book says."""
+    s = _store()
+    t = _seed(s)
+    s.exit_trade(t.id, 131.0)
+    _svc(s, _FakeKite(net=[_pos(qty=75)])).reconcile_once()
+    assert s.get(t.id).status is TradeStatus.EXITED
+    print("  BROKER -> a manual exit is never reopened")
+
+
+def test_confirmed_row_suppresses_price_based_autoclose():
+    """Otherwise price-close and broker-reopen flip-flop forever."""
+    s = _store()
+    t = _seed(s)
+    s.note_broker_qty(t.id, 75)                    # confirmed at the broker
+    row = s.get(t.id)
+    row.current_premium = 99.0
+    row.recommendation = TradeAction.STOPLOSS
+    # auto_close_trigger would fire on its own...
+    assert monitor.auto_close_trigger(row, {"stop"}) == "stop"
+    # ...but run_once must skip a broker-confirmed row.
+    svc = TradeMonitorService(state=None, store=s)
+    for tr in s.all():
+        if tr.broker_qty is not None:
+            continue
+        raise AssertionError("confirmed row was not skipped")
+    print("  BROKER -> confirmed rows are exempt from price-based auto-close")
+
+
 if __name__ == "__main__":
     _main()

@@ -168,6 +168,9 @@ class FeedController:
         self._tasks.append(asyncio.create_task(self._option_loop(settings.option_poll_seconds)))
         self._tasks.append(asyncio.create_task(self._signal_loop(settings.signal_eval_seconds)))
         self._tasks.append(asyncio.create_task(self._trade_loop(settings.signal_eval_seconds)))
+        if settings.broker_reconcile:
+            self._tasks.append(asyncio.create_task(
+                self._broker_reconcile_loop(settings.broker_reconcile_seconds)))
 
         if settings.news_active:
             self.news_service = NewsService(settings, news_store)
@@ -266,6 +269,16 @@ class FeedController:
                     self.signal_service.evaluate_all()
             except Exception as exc:  # pragma: no cover
                 log.warning("signal loop error: %s", exc)
+            await asyncio.sleep(interval)
+
+    async def _broker_reconcile_loop(self, interval: float) -> None:
+        """Mirror the broker position book into the journal (read-only)."""
+        while True:
+            try:
+                if self.trade_monitor is not None:
+                    self.trade_monitor.reconcile_once()
+            except Exception as exc:  # pragma: no cover
+                log.warning("broker reconcile error: %s", exc)
             await asyncio.sleep(interval)
 
     async def _trade_loop(self, interval: float) -> None:

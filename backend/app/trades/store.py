@@ -267,6 +267,14 @@ class TradeStore:
                 return None
         return self._apply(tid, fn)
 
+    def note_broker_qty(self, tid: str, qty: int | None) -> None:
+        """Record what the broker's position book last showed for this row."""
+        def fn(t: Trade) -> None:
+            t.broker_qty = qty
+            t.broker_checked_at = _now()
+
+        self._apply(tid, fn)
+
     def note_stop_handoff(self, tid: str, trigger: float) -> int:
         """Record that a protective stop was handed to Kite; return prior count.
 

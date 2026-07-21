@@ -103,6 +103,22 @@ function TradeCard({ t, onChange }: { t: Trade; onChange: () => void }) {
           {istTime(t.entered_at)}
         </span>
         {t.status === "partial" && <span className="tag bg-yellow-500/15 text-yellow-400">partial</span>}
+        {/* Confirmed against Zerodha's own position book — the difference
+            between "we think you hold this" and "you do". */}
+        {t.broker_qty ? (
+          <span
+            className="tag bg-bull/15 text-bull"
+            title={`Zerodha's position book shows ${t.broker_qty} qty${
+              t.broker_qty !== t.quantity ? ` — the journal says ${t.quantity}` : ""
+            }`}
+          >
+            {t.broker_qty === t.quantity ? "✓ Kite" : `⚠ Kite ${t.broker_qty}`}
+          </span>
+        ) : (
+          <span className="tag bg-panel2 text-muted" title="Not yet seen in Zerodha's position book">
+            unconfirmed
+          </span>
+        )}
         <div className="ml-auto text-right">
           <div className={`font-mono text-sm ${pnlTone}`}>₹{signed(pnl, 0)}</div>
           <div className={`text-[10px] ${pnlTone}`}>{signed(t.pnl_pct, 1)}%</div>

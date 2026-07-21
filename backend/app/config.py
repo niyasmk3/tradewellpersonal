@@ -84,6 +84,16 @@ class Settings(BaseSettings):
         default="stop,target1,invalidation", alias="AUTO_CLOSE_TRIGGERS"
     )
 
+    # --- Broker reconciliation (READ-ONLY; needs no order permission) ---
+    # Mirrors Zerodha's position book into the journal so open/closed state is
+    # observed rather than inferred from price. Once a row is confirmed at the
+    # broker, the broker becomes authoritative for it and price-based
+    # auto-close is suppressed — otherwise the two fight each other.
+    broker_reconcile: bool = Field(default=True, alias="BROKER_RECONCILE")
+    broker_reconcile_seconds: float = Field(
+        default=15.0, gt=0, alias="BROKER_RECONCILE_SECONDS"
+    )
+
     # --- Position sizing guidance ---
     # Capital the sizing suggestion is computed against. 0 = unknown -> no
     # suggestion is shown (never guess a size on someone's behalf).

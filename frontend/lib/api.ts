@@ -275,6 +275,9 @@ export interface Trade {
   /** Tradewell closed this row on a plan trigger — not a fill you reported. */
   auto_closed: boolean;
   auto_close_reason: string | null;
+  /** Quantity Zerodha's position book last reported; null = never confirmed. */
+  broker_qty: number | null;
+  broker_checked_at: number | null;
   notes: string | null;
   events: TradeEvent[];
 }

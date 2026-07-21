@@ -87,6 +87,11 @@ class Trade(BaseModel):
     # is an estimate of your exit, not a confirmed one — correct it or reopen.
     auto_closed: bool = False
     auto_close_reason: Optional[str] = None
+    # Last quantity Zerodha's position book reported for this contract. None
+    # means never confirmed there — which is NOT the same as flat, and is why
+    # absence alone never closes a row (you may simply not have bought yet).
+    broker_qty: Optional[int] = None
+    broker_checked_at: Optional[int] = None
     notes: Optional[str] = None
     events: list[TradeEvent] = []
 
