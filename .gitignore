@@ -34,3 +34,4 @@ yarn-error.log*
 .idea/
 .vscode/
 *.swp
+backend/.paper_trades.json
