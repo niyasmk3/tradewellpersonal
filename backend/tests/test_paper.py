@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from app.config import Settings
 from app.paper import charges as chg
+from app.paper import service as paper_service
 from app.paper.service import PaperTradingService, summarize
 from app.signals.models import (
     Action, Direction, ScoreBreakdown, SignalCard, SignalState, TradingMode,
@@ -23,6 +24,11 @@ from app.trades.models import TradeStatus
 from app.trades.store import TradeStore
 
 NOW = 1_700_000_000
+# Pin the clock to mid-session. After 15:10 IST the monitor emits TIME_EXIT for
+# intraday rows, which silently changes the exit reason these tests assert on —
+# so unpinned they pass all morning and fail after 15:10.
+_MIDDAY = (int(time.time()) + 19800) // 86400 * 86400 - 19800 + 12 * 3600
+paper_service.time.time = lambda: float(_MIDDAY)
 REAL_JOURNAL = pathlib.Path(__file__).resolve().parents[1] / ".trades.json"
 
 
@@ -60,7 +66,7 @@ def _card(cid="S1", token=999, lot=75):
     """Always issued relative to NOW-in-real-time: `consider` refuses cards the
     engine no longer considers valid, so a fixed 2023 epoch would expire them
     all and every entry test would silently assert nothing."""
-    live = int(time.time())
+    live = _MIDDAY
     return SignalCard(
         id=cid, symbol="NIFTY", mode=TradingMode.INTRADAY, title="t", action=Action.BUY_CE,
         direction=Direction.CE, state=SignalState.ACTIVE, contract="NIFTY 24350 CE",

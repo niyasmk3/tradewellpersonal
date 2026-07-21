@@ -27,7 +27,7 @@ def mk(entry=100.0, exit_px=None, mfe=None, mae=None, status=TradeStatus.EXITED,
         entry_premium=entry, lots=1, lot_size=75, quantity=75, initial_quantity=75,
         status=status, stop_loss=82.0, target1=127.0, target2=145.0, trailing_sl=82.0,
         created_at=NOW, entered_at=NOW, exited_at=NOW + 600, exit_premium=exit_px,
-        mfe_premium=mfe, mae_premium=mae,
+        mfe_premium=mfe, mae_premium=mae, excursion_from=over.pop('excursion_from', None),
     )
     base.update(over)
     return Trade(**base)
@@ -147,6 +147,71 @@ def test_replay_todays_two_trades():
     assert by[27.0]["reached"] == 1, by[27.0]
     assert by[40.0]["reached"] == 0
     print(f"  REPLAY -> +15% would have caught 1 of 2 (trade #2), matching the tape")
+
+
+# --- partial measurements must be REJECTED, not averaged in ------------------
+
+def test_partial_measurement_is_excluded_by_excursion_from():
+    """The authoritative check: tracking that began after the entry did not see
+    the whole trade, so the row cannot be trusted however plausible it looks."""
+    late = mk(entry=100.0, mfe=120.0, mae=105.0, exit_px=118.0,
+              excursion_from=NOW + 300)                 # started 5 min after entry
+    ontime = mk(entry=100.0, mfe=120.0, mae=95.0, exit_px=118.0,
+                excursion_from=NOW + 5)                 # started with the trade
+    out = exc.target_curve([late, ontime])
+    assert out["trades"] == 1, out["trades"]
+    assert out["excluded_partial"] == 1, out["excluded_partial"]
+    assert out["median_mae_pct"] == -5.0, out["median_mae_pct"]
+    print(f"  PARTIAL-> late-started row excluded; {out['excluded_partial']} reported")
+
+
+def test_legacy_row_with_impossible_mae_is_excluded():
+    """The 21-Jul rows have no excursion_from. An MAE ABOVE the entry is proof
+    the measurement started after the trade was already in profit."""
+    bad = mk(entry=25.80, mfe=28.50, mae=27.75, exit_px=27.45)     # MAE +7.6% (!)
+    good = mk(entry=29.37, mfe=31.00, mae=24.05, exit_px=23.95)    # MAE -18.1%
+    out = exc.target_curve([bad, good])
+    assert out["trades"] == 1, out["trades"]
+    assert out["excluded_partial"] == 1
+    assert out["median_mae_pct"] == -18.11, out["median_mae_pct"]
+    print("  PARTIAL-> legacy row with a positive MAE excluded (impossible worst case)")
+
+
+def test_the_actual_contaminated_output_is_fixed():
+    """Reproduces the exact live numbers: three real rows, two of them partial,
+    which together reported a median MAE of +6.77% — 'nothing went underwater'
+    on a day everything got stopped."""
+    ts = [mk(entry=28.70, mfe=31.00, mae=27.60, exit_px=29.95),   # MAE -3.8% ok
+          mk(entry=25.85, mfe=30.60, mae=27.60, exit_px=29.95),   # MAE +6.8% BAD
+          mk(entry=25.80, mfe=28.50, mae=27.75, exit_px=27.45)]   # MAE +7.6% BAD
+    out = exc.target_curve(ts)
+    assert out["trades"] == 1, out["trades"]
+    assert out["excluded_partial"] == 2, out["excluded_partial"]
+    assert out["median_mae_pct"] < 0, out["median_mae_pct"]
+    print(f"  PARTIAL-> live case: 3 rows -> 1 kept, 2 excluded, "
+          f"median MAE now {out['median_mae_pct']}% (was +6.77%)")
+
+
+def test_a_genuine_never_underwater_winner_is_dropped_conservatively():
+    """The heuristic's known cost, made explicit: a legacy row that ran up from
+    the first tick has a legitimately positive MAE and is dropped. It is a
+    WINNER, so dropping it biases the curve down — the safe direction."""
+    winner = mk(entry=100.0, mfe=150.0, mae=100.5, exit_px=150.0)
+    assert exc.target_curve([winner])["trades"] == 0
+    # With excursion_from present the same row is correctly KEPT.
+    tracked = mk(entry=100.0, mfe=150.0, mae=100.5, exit_px=150.0, excursion_from=NOW)
+    assert exc.target_curve([tracked])["trades"] == 1
+    print("  PARTIAL-> legacy winner dropped (conservative); tracked winner kept")
+
+
+def test_monitor_stamps_excursion_from_once():
+    t = mk(entry=100.0, exit_px=None, status=TradeStatus.ENTERED, exited_at=None)
+    monitor.evaluate(t, current_premium=104.0, spot=24400.0, ist_minutes=600)
+    first = t.excursion_from
+    assert first is not None
+    monitor.evaluate(t, current_premium=90.0, spot=24400.0, ist_minutes=600)
+    assert t.excursion_from == first, "excursion_from moved; it must be set once"
+    print("  MONITOR-> excursion_from stamped once and never overwritten")
 
 
 if __name__ == "__main__":

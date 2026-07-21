@@ -35,8 +35,36 @@ def _pct(px: float | None, entry: float) -> float | None:
     return round((px / entry - 1) * 100, 2)
 
 
+# One monitor cycle of slack: tracking that began within this of the entry is
+# treated as having covered the whole trade.
+_START_GRACE_S = 30
+
+
+def _incomplete(t: Trade, mae_pct: float | None) -> bool:
+    """True when the measurement did not cover the whole trade.
+
+    Tracking shipped mid-session on 21-Jul, so rows already open at that moment
+    have an MFE but only from the point it started. Two of them reported an MAE
+    ABOVE their entry — a "worst case" better than the fill, which is impossible
+    for a trade that was ever underwater — and the live curve duly reported a
+    median MAE of +6.77%, i.e. "the typical trade never went underwater" on a
+    day when everything got stopped. Omitting only rows with NO measurement was
+    not enough: a partial measurement is worse than a missing one, because it
+    looks valid.
+
+    `excursion_from` is authoritative and is checked first. Older rows lack it,
+    so they fall back to the positive-MAE heuristic. That test is not perfect —
+    a trade that ran up from the first tick and never traded below entry has a
+    legitimately positive MAE — but such a row is a clear winner, so dropping it
+    biases the curve DOWN. Erring pessimistic is the safe direction here.
+    """
+    if t.excursion_from is not None:
+        return t.excursion_from > t.entered_at + _START_GRACE_S
+    return mae_pct is not None and mae_pct > 0
+
+
 def rows(trades: list[Trade]) -> list[dict]:
-    """Per-trade excursion, for closed rows that actually carry a measurement."""
+    """Per-trade excursion, for closed rows carrying a COMPLETE measurement."""
     out = []
     for t in trades:
         if t.status is not TradeStatus.EXITED or not t.entry_premium:
@@ -44,6 +72,8 @@ def rows(trades: list[Trade]) -> list[dict]:
         mfe, mae = _pct(t.mfe_premium, t.entry_premium), _pct(t.mae_premium, t.entry_premium)
         if mfe is None:
             continue                       # pre-dates the tracking; not a zero
+        if _incomplete(t, mae):
+            continue                       # measured, but not from the entry
         qty = t.initial_quantity or t.quantity
         out.append({
             "id": t.id, "contract": t.contract, "direction": t.direction.value,
@@ -67,6 +97,14 @@ def target_curve(trades: list[Trade]) -> dict:
     """
     data = rows(trades)
     n = len(data)
+    # Report what was dropped. A silently shrinking sample reads as a small
+    # sample, when in fact rows were rejected for a reason worth knowing.
+    closed = [t for t in trades if t.status is TradeStatus.EXITED and t.entry_premium]
+    untracked = sum(1 for t in closed if t.mfe_premium is None)
+    partial = sum(
+        1 for t in closed
+        if t.mfe_premium is not None and _incomplete(t, _pct(t.mae_premium, t.entry_premium))
+    )
     curve = []
     for lvl in _LEVELS:
         hits = [d for d in data if d["mfe_pct"] is not None and d["mfe_pct"] >= lvl]
@@ -91,6 +129,8 @@ def target_curve(trades: list[Trade]) -> dict:
 
     return {
         "trades": n,
+        "excluded_untracked": untracked,
+        "excluded_partial": partial,
         "curve": curve,
         "best_target_pct": best["target_pct"] if best else None,
         "median_mfe_pct": med(mfes),
@@ -103,7 +143,10 @@ def target_curve(trades: list[Trade]) -> dict:
             "p80": round(maes[max(0, int(len(maes) * 0.2))], 2) if maes else None,
         },
         "note": (
-            f"{n} closed trade(s) with excursion recorded. "
+            f"{n} closed trade(s) with a COMPLETE excursion measurement"
+            + (f"; {untracked} untracked and {partial} partially-tracked row(s) excluded"
+               if (untracked or partial) else "")
+            + ". "
             "MFE is sampled every few seconds, not tick by tick, so it understates "
             "the true extreme. Under ~30 trades none of this is conclusive."
         ),

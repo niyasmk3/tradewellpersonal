@@ -110,6 +110,8 @@ def evaluate(
     # Excursion first, so it is recorded even on the cycle that closes the
     # trade — the extreme that triggers an exit is part of the trade's history.
     now_ts = int(time.time())
+    if trade.excursion_from is None:
+        trade.excursion_from = now_ts
     if trade.mfe_premium is None or current_premium > trade.mfe_premium:
         trade.mfe_premium, trade.mfe_at = current_premium, now_ts
     if trade.mae_premium is None or current_premium < trade.mae_premium:

@@ -90,6 +90,11 @@ class Trade(BaseModel):
     #
     # Sampled at the monitor's cadence (~5s), not tick by tick, so both are
     # conservative: the true extremes are at least this far out, never less.
+    # Timestamp of the FIRST excursion observation, never overwritten. This is
+    # the only reliable proof that tracking covered the whole trade: min(mfe_at,
+    # mae_at) is NOT equivalent, because both move as new extremes arrive and a
+    # trade that made a new high and then a new low reports neither's origin.
+    excursion_from: Optional[int] = None
     mfe_premium: Optional[float] = None
     mfe_at: Optional[int] = None
     mae_premium: Optional[float] = None

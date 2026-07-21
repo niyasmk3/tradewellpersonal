@@ -29,7 +29,12 @@ from app.signals.models import (
     TradingMode,
 )
 
-NOW = int(time.time())
+# Mid-session IST "now", pinned for the WHOLE module. Two routes read the wall
+# clock — /basket for card expiry, /protect for the ~15:20 MIS square-off — so
+# unpinned these tests pass in the morning and fail after 15:20. Patching it
+# per-test instead leaked into later tests and made expiry order-dependent.
+NOW = (int(time.time()) + 19800) // 86400 * 86400 - 19800 + 12 * 3600
+kb.time.time = lambda: float(NOW)  # type: ignore
 
 
 class _FakeBuilder:
@@ -208,7 +213,7 @@ def _trade(direction=Direction.PE, token=1002, strike=24200.0, status="entered",
         "token": token, "expiry": expiry, "quantity": qty,
         "status": type("S", (), {"value": status})(),
         "stop_loss": 75.4, "trailing_sl": trailing_sl, "current_premium": ltp,
-        "entered_at": NOW if entered_at is None else entered_at,
+        "entered_at": (NOW - 3600) if entered_at is None else entered_at,
         "product": product,
     })()
 
