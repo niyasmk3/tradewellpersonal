@@ -32,6 +32,7 @@ def build(
     rr2: float,
     basis: float = 0.0,
     disaster_pct: float | None = None,
+    quick_pct: float | None = None,
 ) -> RiskPlan:
     """`spot` and candle levels are in futures space; `basis` = future − index,
     so reported invalidation levels are converted to index (spot) terms."""
@@ -70,12 +71,18 @@ def build(
     # NOT used to derive targets or the risk unit: at 45% a 1.5R target would sit
     # +68% away, which no intraday option move reaches.
     disaster_sl = _round_tick(entry * (1 - disaster_pct)) if disaster_pct else None
+    # Early partial level. Sits well below target1 by construction; if a config
+    # ever pushes it past T1 it would be meaningless, so it is dropped instead.
+    quick_target = _round_tick(entry * (1 + quick_pct)) if quick_pct else None
+    if quick_target and quick_target >= target1:
+        quick_target = None
 
     return RiskPlan(
         entry_low=entry_low,
         entry_high=entry_high,
         premium_sl=premium_sl,
         disaster_sl=disaster_sl,
+        quick_target=quick_target,
         target1=target1,
         target2=target2,
         trailing_sl_rule=f"Move SL to entry (₹{entry:.2f}) after Target 1",

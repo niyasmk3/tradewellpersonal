@@ -263,6 +263,16 @@ export function SignalPanel({
           pct={pctFrom(signal.premium_sl, entryRef)}
         />
         <Stat label="Risk:Reward" value={`1:${signal.risk_reward}`} />
+        {signal.quick_target && (
+          <Stat
+            // The level that turns a spike-and-fade into a scratch instead of a
+            // loss: book half, stop to entry, let the rest run to T1/T2.
+            label="Book ½ at"
+            value={`₹${fmt(signal.quick_target)}`}
+            tone="text-accent"
+            pct={pctFrom(signal.quick_target, entryRef)}
+          />
+        )}
         <Stat
           label="Target 1"
           value={`₹${fmt(signal.target1)}`}

@@ -141,6 +141,7 @@ class SignalEngine:
             direction, pick.ltp, df, ind, price_fut, symbol, tf,
             profile.premium_sl_pct, profile.rr_target1, profile.rr_target2, basis,
             disaster_pct=self._disaster_pct(),
+            quick_pct=self.cfg.quick_target_pct or None,
         )
 
         reasons: list[str] = []
@@ -168,6 +169,7 @@ class SignalEngine:
             entry_high=plan.entry_high,
             premium_sl=plan.premium_sl,
             disaster_sl=plan.disaster_sl,
+            quick_target=plan.quick_target,
             target1=plan.target1,
             target2=plan.target2,
             trailing_sl_rule=plan.trailing_sl_rule,

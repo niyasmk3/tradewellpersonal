@@ -129,6 +129,7 @@ class TradeStore:
     def create_from_signal(
         self, card: SignalCard, lots: int, entry_premium: float, lot_size: int,
         product: str | None = None, disaster_pct: float | None = None,
+        quick_pct: float | None = None,
     ) -> Trade:
         now = _now()
         with self._lock:
@@ -150,6 +151,11 @@ class TradeStore:
                 # premium stop keeps governing — see monitor.evaluate.
                 disaster_sl=(_round_tick(entry_premium * (1 - disaster_pct))
                              if disaster_pct else None),
+                # From the FILL as well: a T0 anchored to the card's reference
+                # would sit at the wrong distance whenever the fill differs,
+                # which is exactly how today's trades went wrong.
+                quick_target=(_round_tick(entry_premium * (1 + quick_pct))
+                              if quick_pct else None),
                 invalidation_level=card.invalidation_level, invalidation_dir=card.invalidation_dir,
                 created_at=now, entered_at=now,
                 events=[TradeEvent(ts=now, kind="entered", note=f"Entered {lots} lot(s) @ ₹{entry_premium}")],

@@ -109,6 +109,8 @@ class RiskPlan(BaseModel):
     # invalidation is primary. premium_sl stays the RISK UNIT that targets and
     # sizing are derived from; this is the backstop the monitor acts on.
     disaster_sl: Optional[float] = None
+    # Early partial-book level; None disables it.
+    quick_target: Optional[float] = None
     target1: float
     target2: float
     trailing_sl_rule: str
@@ -137,6 +139,7 @@ class SignalCard(BaseModel):
     entry_high: float
     premium_sl: float
     disaster_sl: Optional[float] = None
+    quick_target: Optional[float] = None
     target1: float
     target2: float
     trailing_sl_rule: str

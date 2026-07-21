@@ -74,6 +74,11 @@ class Trade(BaseModel):
     # premium_sl — is what ends the trade before Target 1; the index
     # invalidation is the primary exit. None = legacy premium-stop behaviour.
     disaster_sl: Optional[float] = None
+    # Early partial-book level, from YOUR fill. `t0_hit` latches once reached:
+    # from then on the stop is at entry, so the remainder runs risk-free and the
+    # disaster backstop no longer applies.
+    quick_target: Optional[float] = None
+    t0_hit: bool = False
     invalidation_level: Optional[float] = None
     invalidation_dir: Optional[str] = None
 

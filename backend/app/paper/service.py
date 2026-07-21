@@ -140,6 +140,7 @@ class PaperTradingService:
             disaster_pct=(self.cfg.premium_disaster_pct
                           if self.cfg.stop_primary == "underlying"
                           and self.cfg.trading_capital > 0 else None),
+            quick_pct=self.cfg.quick_target_pct or None,
         )
         log.info("paper: entered %s %d lot(s) @ Rs%s (signal %s)",
                  card.contract, lots, fill, card.id)
@@ -159,6 +160,20 @@ class PaperTradingService:
             monitor.evaluate(trade, current, spot, ist_min, ist_day)
 
         self.store.apply_monitor(updater)
+
+        # Book half at the early target before considering exits. Without this
+        # the simulator would record the stop-to-entry benefit but never the
+        # banked profit, understating exactly the strategy being tested.
+        for trade in self.store.all():
+            if (
+                trade.t0_hit
+                and trade.status is TradeStatus.ENTERED     # not already part-booked
+                and trade.lots > 1
+                and trade.current_premium
+            ):
+                fill = round(max(0.05, trade.current_premium * (1 - self.cfg.paper_slippage_pct)), 2)
+                if self.store.book_partial(trade.id, fill, 0.5) is not None:
+                    log.info("paper: booked half of %s @ Rs%s (early target)", trade.contract, fill)
 
         # Closing happens outside apply_monitor: that call holds the store lock
         # while iterating, and closing takes the same lock to write.

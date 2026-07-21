@@ -131,6 +131,11 @@ function TradeCard({ t, onChange }: { t: Trade; onChange: () => void }) {
         <span className="text-muted">LTP <span className="text-white">₹{fmt(t.current_premium)}</span></span>
         <span className="text-muted">Qty <span className="text-white">{t.quantity}</span></span>
         <span className="text-muted">SL <span className="text-bear">₹{fmt(t.trailing_sl)}</span></span>
+        <span className="text-muted" title={t.t0_hit ? "Booked/risk-free — stop is at entry" : "Book half here; stop moves to entry"}>
+          ½ <span className={t.t0_hit ? "text-bull" : "text-accent"}>
+            {t.quick_target ? `₹${fmt(t.quick_target)}` : "—"}{t.t0_hit ? " ✓" : ""}
+          </span>
+        </span>
         <span className="text-muted">T1 <span className="text-bull">₹{fmt(t.target1)}</span></span>
         <span className="text-muted">T2 <span className="text-bull">₹{fmt(t.target2)}</span></span>
       </div>

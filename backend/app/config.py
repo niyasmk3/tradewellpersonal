@@ -113,6 +113,15 @@ class Settings(BaseSettings):
     risk_per_trade_pct: float = Field(default=1.0, gt=0, le=10, alias="RISK_PER_TRADE_PCT")
     # Risk model
     premium_sl_pct: float = Field(default=0.18, alias="PREMIUM_SL_PCT")
+    # EARLY partial-book level, as a fraction above YOUR fill. Reaching it books
+    # half the lots and moves the stop to entry, so the rest runs risk-free.
+    # Exists because Target 1 (+27%) is too far to manage a trade that spikes and
+    # gives it all back: on 21-Jul a position ran +31% and still closed at a
+    # loss. Booking half at +12% converts that into a win without capping the
+    # runner, which is what simply lowering Target 1 would do. 0 disables.
+    # Tune it from GET /trades/excursion once a real sample exists.
+    quick_target_pct: float = Field(default=0.12, ge=0, lt=1, alias="QUICK_TARGET_PCT")
+
     # Which stop actually ENDS a trade before Target 1.
     #   "underlying" — the index invalidation level is primary; the premium stop
     #                  is demoted to a disaster backstop at premium_disaster_pct.

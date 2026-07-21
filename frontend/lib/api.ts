@@ -187,6 +187,8 @@ export interface SignalCard {
   premium_sl: number;
   /** Backstop that actually ends the trade when the index invalidation is primary. */
   disaster_sl: number | null;
+  /** Early partial-book level: book half here, stop moves to entry. */
+  quick_target: number | null;
   target1: number;
   target2: number;
   trailing_sl_rule: string;
@@ -263,6 +265,8 @@ export interface Trade {
   target1: number;
   target2: number;
   trailing_sl: number;
+  quick_target: number | null;
+  t0_hit: boolean;
   invalidation_level: number | null;
   invalidation_dir: string | null;
   current_premium: number | null;

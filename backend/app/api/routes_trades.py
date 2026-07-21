@@ -94,7 +94,8 @@ def enter(body: EnterRequest) -> Trade:
     disaster_pct = (cfg.premium_disaster_pct
                     if cfg.stop_primary == "underlying" and cfg.trading_capital > 0 else None)
     return trade_store.create_from_signal(
-        card, body.lots, float(entry), lot_size, product, disaster_pct=disaster_pct)
+        card, body.lots, float(entry), lot_size, product, disaster_pct=disaster_pct,
+        quick_pct=cfg.quick_target_pct or None)
 
 
 @router.post("/{tid}/exit", response_model=Trade)

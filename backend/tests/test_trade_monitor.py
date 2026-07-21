@@ -629,5 +629,106 @@ def test_backstop_is_gated_on_configured_capital():
     print("  GATE   -> backstop only when STOP_PRIMARY=underlying AND capital is set")
 
 
+# --- early partial-book level (T0) -------------------------------------------
+
+def test_t0_latches_and_lifts_the_stop_to_entry():
+    t = make_trade(entry_premium=25.85, stop_loss=24.30, trailing_sl=24.30,
+                   quick_target=28.95, target1=37.65, target2=43.00,
+                   invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(t, current_premium=29.00, spot=24190.0, ist_minutes=630)
+    assert t.t0_hit is True
+    assert t.stop_loss == 25.85, t.stop_loss           # lifted to entry
+    assert t.trailing_sl == 25.85, t.trailing_sl
+    assert any(e.kind == "quick_target" for e in t.events)
+    print(f"  T0     -> reached Rs28.95: SL lifted 24.30 -> {t.stop_loss} (entry)")
+
+
+def test_t0_makes_the_runner_risk_free_not_a_loss():
+    """THE 21-Jul #2 case: ran +31%, then gave it all back and stopped at -6%.
+    With T0 the stop is at entry by then, so the pullback scratches instead."""
+    t = make_trade(entry_premium=25.85, stop_loss=24.30, trailing_sl=24.30,
+                   quick_target=28.95, target1=37.65, target2=43.00,
+                   invalidation_level=24210.4, invalidation_dir="below")
+    for px in (29.00, 32.30, 33.90, 31.80, 27.90, 25.80):     # the real path
+        monitor.evaluate(t, current_premium=px, spot=24190.0, ist_minutes=630)
+    assert t.recommendation is TradeAction.STOPLOSS, t.recommendation
+    assert t.trailing_sl == 25.85, t.trailing_sl
+    print(f"  T0     -> same path now stops at entry Rs{t.trailing_sl}, not Rs24.30")
+
+
+def test_t0_stop_never_slides_back_down():
+    t = make_trade(entry_premium=25.85, stop_loss=24.30, trailing_sl=24.30,
+                   quick_target=28.95, target1=37.65,
+                   invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(t, current_premium=29.00, spot=24190.0, ist_minutes=630)
+    monitor.evaluate(t, current_premium=26.50, spot=24190.0, ist_minutes=630)
+    assert t.trailing_sl == 25.85, t.trailing_sl
+    print("  T0     -> floor holds at entry across later cycles")
+
+
+def test_t0_retires_the_disaster_backstop():
+    """Half is banked and the stop is at entry — the wide backstop has done its
+    job and must not keep the runner exposed 45% below."""
+    t = make_trade(entry_premium=25.85, stop_loss=24.30, trailing_sl=24.30,
+                   disaster_sl=14.20, quick_target=28.95, target1=37.65,
+                   invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(t, current_premium=29.00, spot=24190.0, ist_minutes=630)
+    monitor.evaluate(t, current_premium=25.00, spot=24190.0, ist_minutes=630)
+    assert t.recommendation is TradeAction.STOPLOSS, t.recommendation
+    assert "Disaster" not in (t.recommendation_note or ""), t.recommendation_note
+    print("  T0     -> backstop retired; entry stop governs the runner")
+
+
+def test_t0_advises_booking_only_when_lots_allow():
+    multi = make_trade(entry_premium=25.85, stop_loss=24.30, trailing_sl=24.30,
+                       quick_target=28.95, target1=37.65, lots=2, quantity=130,
+                       invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(multi, current_premium=29.00, spot=24190.0, ist_minutes=630)
+    assert multi.recommendation is TradeAction.BOOK_PARTIAL, multi.recommendation
+
+    single = make_trade(entry_premium=25.85, stop_loss=24.30, trailing_sl=24.30,
+                        quick_target=28.95, target1=37.65,
+                        invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(single, current_premium=29.00, spot=24190.0, ist_minutes=630)
+    assert single.recommendation is TradeAction.TRAIL_SL, single.recommendation
+    assert "risk-free" in (single.recommendation_note or "")
+    print("  T0     -> 2 lots: BOOK_PARTIAL; 1 lot: risk-free trail")
+
+
+def test_t0_does_not_cap_the_runner():
+    """The whole point vs simply lowering Target 1: T0 banks half and the rest
+    still reaches T1/T2."""
+    t = make_trade(entry_premium=25.85, stop_loss=24.30, trailing_sl=24.30,
+                   quick_target=28.95, target1=37.65, target2=43.00, lots=2, quantity=130,
+                   invalidation_level=24210.4, invalidation_dir="below")
+    for px in (29.00, 33.90, 38.00, 43.50):
+        monitor.evaluate(t, current_premium=px, spot=24190.0, ist_minutes=630)
+    assert t.t0_hit and t.t1_hit
+    assert t.recommendation is TradeAction.TARGET2, t.recommendation
+    print("  T0     -> half banked early AND the runner still reached Target 2")
+
+
+def test_store_sets_t0_from_the_fill():
+    s = _store()
+    card = _make_card()
+    t = s.create_from_signal(card, lots=2, entry_premium=25.85, lot_size=65,
+                             product="MIS", quick_pct=0.12)
+    assert t.quick_target == 28.95, t.quick_target       # 25.85 x 1.12 -> tick
+    assert t.t0_hit is False
+    print(f"  STORE  -> T0 Rs{t.quick_target} computed from the FILL, not the card")
+
+
+def test_quick_target_dropped_when_it_would_exceed_target1():
+    from app.signals import risk as risk_mod
+    import pandas as pd
+    df = pd.DataFrame({"open": [100.0]*3, "high": [101.0]*3,
+                       "low": [99.0]*3, "close": [100.0]*3})
+    ind = type("I", (), {"vwap": None})()
+    plan = risk_mod.build(Direction.CE, 100.0, df, ind, 24000.0, "NIFTY", "3m",
+                          0.18, 1.5, 2.5, quick_pct=0.60)
+    assert plan.quick_target is None, plan.quick_target
+    print("  RISK   -> a T0 above Target 1 is dropped, not shipped meaningless")
+
+
 if __name__ == "__main__":
     _main()

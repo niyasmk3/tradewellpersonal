@@ -120,6 +120,24 @@ def evaluate(
     trade.pnl = round((current_premium - entry) * trade.quantity + trade.realized_pnl, 2)
     trade.pnl_pct = round((current_premium - entry) / entry * 100, 1) if entry else None
 
+    # --- early partial level ---
+    # Reaching it latches t0_hit and lifts the stop to entry, so the remainder
+    # runs risk-free. This is the answer to a trade that spikes and gives it all
+    # back: on 21-Jul one ran +31% and still closed at a loss. Booking half here
+    # banks that move WITHOUT capping the runner — which is the thing simply
+    # lowering Target 1 would have cost.
+    if (
+        not trade.t0_hit
+        and trade.quick_target
+        and current_premium >= trade.quick_target
+    ):
+        trade.t0_hit = True
+        if trade.stop_loss < entry:
+            trade.stop_loss = entry
+        _event(trade, "quick_target",
+               f"Early target ₹{trade.quick_target} reached — SL to entry ₹{entry}"
+               + (", book half" if trade.lots > 1 else " (single lot: now risk-free)"))
+
     # --- trailing-stop ratchet ---
     if not trade.t1_hit and current_premium >= trade.target1:
         trade.t1_hit = True
@@ -131,7 +149,10 @@ def evaluate(
         trailed = round(current_premium * (1 - _TRAIL_PCT), 2)
         trade.trailing_sl = max(trade.trailing_sl, trade.stop_loss, trailed)
     else:
-        trade.trailing_sl = trade.stop_loss
+        # max(), not assignment: once T0 lifted stop_loss to entry the floor
+        # must not slide back down on the next cycle.
+        trade.trailing_sl = max(trade.trailing_sl, trade.stop_loss) if trade.t0_hit \
+            else trade.stop_loss
 
     invalidated = _invalidated(trade, spot)
 
@@ -148,7 +169,9 @@ def evaluate(
     # Once Target 1 is hit the trailing stop takes over regardless: by then the
     # position is in profit, the premium is larger so the same percentage is a
     # wider absolute band, and protecting the gain is the whole point.
-    if trade.disaster_sl and not trade.t1_hit:
+    # Once half is banked and the stop is at entry, the wide backstop has done
+    # its job — protecting the free runner is what matters now.
+    if trade.disaster_sl and not trade.t1_hit and not trade.t0_hit:
         exit_level, exit_label = trade.disaster_sl, "Disaster stop"
     else:
         exit_level, exit_label = trade.trailing_sl, "Stop-loss"
@@ -176,6 +199,12 @@ def evaluate(
         else:
             # Single lot can't be partially booked — trail it instead.
             rec, note = TradeAction.TRAIL_SL, f"Target 1 reached — trailing SL at ₹{effective_sl}"
+    elif trade.t0_hit and trade.status == TradeStatus.ENTERED and trade.lots > 1:
+        rec, note = (TradeAction.BOOK_PARTIAL,
+                     f"Early target ₹{trade.quick_target} reached — book half, SL at entry ₹{entry}")
+    elif trade.t0_hit:
+        rec, note = (TradeAction.TRAIL_SL,
+                     f"Early target reached — risk-free, SL at entry ₹{entry}")
     elif trade.t1_hit:
         rec, note = TradeAction.TRAIL_SL, f"In profit — trailing SL at ₹{effective_sl}"
     else:
