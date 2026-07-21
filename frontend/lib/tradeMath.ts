@@ -231,3 +231,56 @@ export function breakevenPremium(entry: number, qty: number): number {
   const fixed = (r.brokeragePerOrder * 2 * (1 + r.gstPct)) / qty;
   return round2((entry * buyRate + fixed) / sellRate);
 }
+
+// ---- journal grouping -------------------------------------------------------
+
+export interface JournalDay<T> {
+  key: number;          // IST day bucket
+  stamp: number;        // epoch to render the heading from
+  rows: T[];
+  realized: number;
+  wins: number;
+  losses: number;
+}
+
+interface ClosableTrade {
+  status: string;
+  entered_at: number;
+  exited_at: number | null;
+  realized_pnl: number;
+}
+
+/**
+ * Closed trades bucketed into IST days, newest first.
+ *
+ * Filed under the day a trade was BOOKED (exited), not the day it was opened.
+ * That is when the P&L became real, so each day's subtotal reconciles with the
+ * realised figure for that day; grouping by entry date would let an overnight
+ * position contribute P&L to a day whose total never counted it. Rows with no
+ * exit (ignored) fall back to their entry day so they are never dropped.
+ */
+export function groupClosedByDay<T extends ClosableTrade>(trades: T[]): JournalDay<T>[] {
+  const closed = trades.filter((t) => t.status === "exited" || t.status === "ignored");
+  const byDay = new Map<number, T[]>();
+  for (const t of closed) {
+    const stamp = t.exited_at ?? t.entered_at;
+    const key = Math.floor((stamp + 19800) / 86400);
+    const list = byDay.get(key);
+    if (list) list.push(t);
+    else byDay.set(key, [t]);
+  }
+  return [...byDay.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([key, rows]) => {
+      rows.sort((a, b) => (b.exited_at ?? b.entered_at) - (a.exited_at ?? a.entered_at));
+      const booked = rows.filter((t) => t.status !== "ignored");
+      return {
+        key,
+        stamp: rows[0].exited_at ?? rows[0].entered_at,
+        rows,
+        realized: round2(booked.reduce((s, t) => s + (t.realized_pnl || 0), 0)),
+        wins: booked.filter((t) => t.realized_pnl > 0).length,
+        losses: booked.filter((t) => t.realized_pnl < 0).length,
+      };
+    });
+}

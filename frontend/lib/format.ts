@@ -45,6 +45,22 @@ export const pctFrom = (value: number | null | undefined, base: number | null | 
 export const istToday = (): string =>
   new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 
+/** IST calendar-day bucket for an epoch — the grouping key for the journal. */
+export const istDayKey = (epoch: number | null | undefined): number =>
+  epoch ? Math.floor((epoch + 19800) / 86400) : 0;
+
+/** "Mon 20 Jul 2026" — a journal day heading. */
+export const istDayLabel = (epoch: number | null | undefined): string => {
+  if (!epoch) return "Undated";
+  return new Date(epoch * 1000).toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Kolkata",
+  });
+};
+
 export const istDate = (epoch: number | null | undefined): string => {
   if (!epoch) return "—";
   return new Date(epoch * 1000).toLocaleDateString("en-IN", {

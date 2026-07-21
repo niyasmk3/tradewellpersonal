@@ -6,7 +6,7 @@
  * formula, and this is the one file in the app where a wrong formula shows a
  * trader a false rupee amount.
  */
-import { axisPositions, breakevenPremium, economics, estimateCharges, returnPct } from "../lib/tradeMath";
+import { axisPositions, breakevenPremium, economics, estimateCharges, groupClosedByDay, returnPct } from "../lib/tradeMath";
 
 let failed = 0;
 function check(name: string, got: unknown, want: unknown) {
@@ -157,6 +157,49 @@ check("legacy row: undefined too", returnPct(2250, 120, undefined, 75), 25);
 check("returnPct zero entry", returnPct(2250, 0, 75, 75), null);
 check("returnPct zero qty", returnPct(2250, 120, 0, 0), null);
 check("returnPct NaN pnl", returnPct(NaN, 120, 75, 75), null);
+
+
+// --- journal day grouping ---------------------------------------------------
+const D = 86400;
+const IST_NOON = 19676 * D + 6 * 3600;        // ~11:30 IST on an arbitrary day
+const mk = (over: Partial<any> = {}) => ({
+  status: "exited", entered_at: IST_NOON, exited_at: IST_NOON + 3600,
+  realized_pnl: 100, ...over,
+});
+
+const g = groupClosedByDay([
+  mk({ entered_at: IST_NOON, exited_at: IST_NOON + 60, realized_pnl: -500 }),        // day 0
+  mk({ entered_at: IST_NOON, exited_at: IST_NOON + 120, realized_pnl: 300 }),        // day 0, later
+  mk({ entered_at: IST_NOON + D, exited_at: IST_NOON + D + 60, realized_pnl: 900 }), // day +1
+  mk({ status: "entered", exited_at: null }),                                        // OPEN: excluded
+  mk({ status: "ignored", exited_at: null, entered_at: IST_NOON + 2 * D }),          // day +2
+]);
+check("groups one bucket per day", g.length, 3);
+check("newest day first", g[0].key > g[1].key && g[1].key > g[2].key, true);
+check("open trades excluded", g.flatMap((d) => d.rows).length, 4);
+
+// Day +2 holds only the ignored row: it must appear, but contribute no P&L
+// and count as neither a win nor a loss.
+check("ignored row is kept", g[0].rows.length, 1);
+check("ignored contributes no P&L", g[0].realized, 0);
+check("ignored is neither W nor L", [g[0].wins, g[0].losses], [0, 0]);
+
+check("day +1 subtotal", g[1].realized, 900);
+check("day 0 subtotal nets both", g[2].realized, -200);
+check("day 0 W/L", [g[2].wins, g[2].losses], [1, 1]);
+// Within a day, most recently booked first.
+check("rows newest-first within a day", g[2].rows[0].realized_pnl, 300);
+
+// Subtotals must sum to the overall realised total, or the header lies.
+const all = g.reduce((s, d) => s + d.realized, 0);
+check("subtotals reconcile with the total", all, 700);
+
+// An overnight position is filed under the day it was BOOKED, not opened.
+const overnight = groupClosedByDay([
+  mk({ entered_at: IST_NOON, exited_at: IST_NOON + D, realized_pnl: 50 }),
+]);
+check("overnight files under its exit day", overnight[0].key, Math.floor((IST_NOON + D + 19800) / 86400));
+check("empty input", groupClosedByDay([]), []);
 
 
 console.log(failed === 0 ? "\nALL PASSED" : `\n${failed} FAILED`);

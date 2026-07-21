@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Trade, TradeAction, api } from "@/lib/api";
 import { fetchKiteProtect, submitKiteBasket } from "@/lib/kiteBasket";
-import { fmt, istTime, istToday, parseNum, pctFrom, signed } from "@/lib/format";
-import { returnPct } from "@/lib/tradeMath";
+import { fmt, istDate, istDayKey, istDayLabel, istTime, istToday, parseNum, pctFrom, signed } from "@/lib/format";
+import { groupClosedByDay, returnPct } from "@/lib/tradeMath";
 
 const REC_LABEL: Record<TradeAction, string> = {
   hold: "Hold",
@@ -237,9 +237,94 @@ export function TradesPanel({
 }
 
 /** Closed-trade journal — a review surface, so it lives in the context rail. */
+function JournalRow({ t, dayKey, onChange }: { t: Trade; dayKey: number; onChange?: () => void }) {
+  const pct = returnPct(t.realized_pnl, t.entry_premium, t.initial_quantity, t.quantity);
+  // A position opened on an earlier day is filed under the day it was BOOKED,
+  // so its entry timestamp needs its own date or the row reads as same-day.
+  const enteredElsewhere = istDayKey(t.entered_at) !== dayKey;
+
+  return (
+    <div className="rounded border border-edge/60 bg-panel2 px-2 py-1.5 text-[11px]">
+      <div className="flex items-center gap-2">
+        <span className={`tag ${t.direction === "CE" ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
+          {t.direction}
+        </span>
+        <span className="truncate font-mono text-muted">{t.contract}</span>
+        {t.status === "ignored" ? (
+          <span className="ml-auto text-muted">ignored</span>
+        ) : (
+          <span className={`ml-auto font-mono ${t.realized_pnl >= 0 ? "text-bull" : "text-bear"}`}>
+            ₹{signed(t.realized_pnl, 0)}
+            {pct !== null && (
+              <span
+                className="ml-1 text-[10px] opacity-80"
+                title={`Return on ₹${Math.round(
+                  t.entry_premium * (t.initial_quantity || t.quantity),
+                ).toLocaleString("en-IN")} deployed at entry (gross of charges)`}
+              >
+                {signed(pct, 1)}%
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+
+      {/* An auto-close is Tradewell's inference, not a fill you reported: no
+          order was placed, so the price is the live premium at detection. */}
+      {t.auto_closed && (
+        <div className="mt-1 flex items-center gap-1.5 rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-400">
+          <span>auto-closed on {t.auto_close_reason} · price estimated, no order was placed</span>
+          <button
+            onClick={async () => {
+              if (!window.confirm("Reopen this position? Use it if you are still holding in Kite.")) return;
+              try {
+                await api.reopenTrade(t.id);
+                onChange?.();
+              } catch (e) {
+                alert(e instanceof Error ? e.message : "could not reopen");
+              }
+            }}
+            className="ml-auto shrink-0 underline decoration-dotted hover:text-white"
+          >
+            still holding?
+          </button>
+        </div>
+      )}
+
+      {t.status !== "ignored" && (
+        // The audit trail: what you paid, what you got, when, and how long you
+        // held it — so a trade can actually be reviewed after the fact.
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[10px] text-muted">
+          <span className={enteredElsewhere ? "text-yellow-400" : undefined}>
+            {enteredElsewhere ? `${istDate(t.entered_at)} ` : ""}
+            {istTime(t.entered_at)}
+          </span>
+          <span className="text-white/80">₹{fmt(t.entry_premium)}</span>
+          <span>→</span>
+          <span>{istTime(t.exited_at)}</span>
+          <span className="text-white/80">₹{fmt(t.exit_premium)}</span>
+          <span>· {t.quantity} qty</span>
+          {t.exited_at && (
+            <span>· held {Math.max(0, Math.round((t.exited_at - t.entered_at) / 60))}m</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TradeJournal({ trades, onChange }: { trades: Trade[]; onChange?: () => void }) {
-  const closed = trades.filter((t) => t.status === "exited" || t.status === "ignored");
   const { today, total } = realizedSummary(trades);
+
+  // Grouped by the day the trade was BOOKED (exited), not the day it was
+  // opened. That is when the money became real, so each day's subtotal
+  // reconciles with the "today" figure above it; an overnight position would
+  // otherwise contribute P&L to a day whose total did not include it. Rows
+  // entered on an earlier day flag their entry date so it stays unambiguous.
+  const days = useMemo(
+    () => groupClosedByDay(trades).map((d) => ({ ...d, label: istDayLabel(d.stamp) })),
+    [trades],
+  );
 
   if (trades.length === 0) {
     return <div className="p-3 text-xs text-muted">No trades logged yet.</div>;
@@ -255,82 +340,29 @@ export function TradeJournal({ trades, onChange }: { trades: Trade[]; onChange?:
           <span className={total >= 0 ? "text-bull" : "text-bear"}>₹{signed(total, 0)}</span>
         </span>
       </div>
-      <div className="space-y-1">
-        {closed.map((t) => (
-          <div key={t.id} className="rounded border border-edge/60 bg-panel2 px-2 py-1.5 text-[11px]">
-            <div className="flex items-center gap-2">
-              <span className={`tag ${t.direction === "CE" ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
-                {t.direction}
-              </span>
-              <span className="truncate font-mono text-muted">{t.contract}</span>
-              {t.status === "ignored" ? (
-                <span className="ml-auto text-muted">ignored</span>
-              ) : (
-                <span className={`ml-auto font-mono ${t.realized_pnl >= 0 ? "text-bull" : "text-bear"}`}>
-                  ₹{signed(t.realized_pnl, 0)}
-                  {(() => {
-                    // Return on the premium DEPLOYED AT ENTRY. `quantity`
-                    // shrinks when lots are booked, so it is the wrong base.
-                    const pct = returnPct(
-                      t.realized_pnl, t.entry_premium, t.initial_quantity, t.quantity,
-                    );
-                    return pct === null ? null : (
-                      <span
-                        className="ml-1 text-[10px] opacity-80"
-                        title={`Return on ₹${Math.round(
-                          t.entry_premium * (t.initial_quantity || t.quantity),
-                        ).toLocaleString("en-IN")} deployed at entry (gross of charges)`}
-                      >
-                        {signed(pct, 1)}%
-                      </span>
-                    );
-                  })()}
-                </span>
-              )}
-            </div>
-            {/* An auto-close is Tradewell's inference, not a fill you reported:
-                no order was placed, so the price is the live premium at
-                detection. Say so, and offer the way back. */}
-            {t.auto_closed && (
-              <div className="mt-1 flex items-center gap-1.5 rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-400">
-                <span>
-                  auto-closed on {t.auto_close_reason} · price estimated, no order was placed
-                </span>
-                <button
-                  onClick={async () => {
-                    if (!window.confirm("Reopen this position? Use it if you are still holding in Kite.")) return;
-                    try {
-                      await api.reopenTrade(t.id);
-                      onChange?.();
-                    } catch (e) {
-                      alert(e instanceof Error ? e.message : "could not reopen");
-                    }
-                  }}
-                  className="ml-auto shrink-0 underline decoration-dotted hover:text-white"
-                >
-                  still holding?
-                </button>
-              </div>
-            )}
-            {t.status !== "ignored" && (
-              // The audit trail: what you paid, what you got, when, and how long
-              // you held it — so a trade can actually be reviewed after the fact.
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[10px] text-muted">
-                <span>{istTime(t.entered_at)}</span>
-                <span className="text-white/80">₹{fmt(t.entry_premium)}</span>
-                <span>→</span>
-                <span>{istTime(t.exited_at)}</span>
-                <span className="text-white/80">₹{fmt(t.exit_premium)}</span>
-                <span>· {t.quantity} qty</span>
-                {t.exited_at && (
-                  <span>· held {Math.max(0, Math.round((t.exited_at - t.entered_at) / 60))}m</span>
-                )}
-              </div>
-            )}
+
+      {days.map((d) => (
+        <section key={d.key} className="mb-3 last:mb-0">
+          {/* Sticky so the day you are reading stays labelled while scrolling. */}
+          <header className="sticky top-0 z-10 -mx-2 mb-1 flex items-center gap-2 border-b border-edge bg-panel px-3 py-1">
+            <span className="text-[11px] font-medium text-white/90">{d.label}</span>
+            <span className="text-[10px] text-muted">
+              {d.rows.length} trade{d.rows.length === 1 ? "" : "s"}
+              {d.wins + d.losses > 0 && ` · ${d.wins}W/${d.losses}L`}
+            </span>
+            <span className={`ml-auto font-mono text-[11px] ${d.realized >= 0 ? "text-bull" : "text-bear"}`}>
+              ₹{signed(d.realized, 0)}
+            </span>
+          </header>
+          <div className="space-y-1">
+            {d.rows.map((t) => (
+              <JournalRow key={t.id} t={t} dayKey={d.key} onChange={onChange} />
+            ))}
           </div>
-        ))}
-        {closed.length === 0 && <div className="text-xs text-muted">Nothing closed yet today.</div>}
-      </div>
+        </section>
+      ))}
+
+      {days.length === 0 && <div className="text-xs text-muted">Nothing closed yet.</div>}
     </div>
   );
 }
