@@ -113,6 +113,19 @@ class Settings(BaseSettings):
     risk_per_trade_pct: float = Field(default=1.0, gt=0, le=10, alias="RISK_PER_TRADE_PCT")
     # Risk model
     premium_sl_pct: float = Field(default=0.18, alias="PREMIUM_SL_PCT")
+    # Which stop actually ENDS a trade before Target 1.
+    #   "underlying" — the index invalidation level is primary; the premium stop
+    #                  is demoted to a disaster backstop at premium_disaster_pct.
+    #   "premium"    — the old behaviour: premium_sl_pct ends the trade.
+    # Measured 21-Jul-2026: a 0.14% index range produced an 83% premium swing on
+    # a 0DTE contract, and the 18% premium stop — worth ~10 index points against
+    # a 35-point noise band — was touched 7 times while the index invalidation
+    # was never breached once. On expiry-day gamma the premium stop measures
+    # noise; the index level measures the thesis.
+    stop_primary: str = Field(default="underlying", alias="STOP_PRIMARY")
+    # The backstop, as a fraction of YOUR fill. Only reached when the premium
+    # collapses without the index invalidating — i.e. theta/IV, not direction.
+    premium_disaster_pct: float = Field(default=0.45, gt=0, lt=1, alias="PREMIUM_DISASTER_PCT")
     rr_target1: float = Field(default=1.5, alias="RR_TARGET1")
     rr_target2: float = Field(default=2.5, alias="RR_TARGET2")
     # Strike liquidity guards

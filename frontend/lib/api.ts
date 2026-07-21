@@ -185,6 +185,8 @@ export interface SignalCard {
   entry_low: number;
   entry_high: number;
   premium_sl: number;
+  /** Backstop that actually ends the trade when the index invalidation is primary. */
+  disaster_sl: number | null;
   target1: number;
   target2: number;
   trailing_sl_rule: string;

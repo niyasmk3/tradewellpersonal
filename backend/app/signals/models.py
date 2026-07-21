@@ -105,6 +105,10 @@ class RiskPlan(BaseModel):
     entry_low: float
     entry_high: float
     premium_sl: float
+    # The level that actually ends the trade before Target 1 when the index
+    # invalidation is primary. premium_sl stays the RISK UNIT that targets and
+    # sizing are derived from; this is the backstop the monitor acts on.
+    disaster_sl: Optional[float] = None
     target1: float
     target2: float
     trailing_sl_rule: str
@@ -132,6 +136,7 @@ class SignalCard(BaseModel):
     entry_low: float
     entry_high: float
     premium_sl: float
+    disaster_sl: Optional[float] = None
     target1: float
     target2: float
     trailing_sl_rule: str

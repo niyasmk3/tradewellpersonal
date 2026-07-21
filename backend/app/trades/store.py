@@ -38,6 +38,15 @@ def _now() -> int:
     return int(time.time())
 
 
+_TICK = 0.05
+
+
+def _round_tick(x: float) -> float:
+    """Snap to the NSE Rs 0.05 tick, matching signals/risk.py so the card's
+    levels and the trade's levels cannot drift by a rounding step."""
+    return round(round(x / _TICK) * _TICK, 2)
+
+
 _ENTERED_LOTS = re.compile(r"Entered\s+(\d+)\s+lot")
 
 
@@ -119,7 +128,7 @@ class TradeStore:
     # ---- create ----
     def create_from_signal(
         self, card: SignalCard, lots: int, entry_premium: float, lot_size: int,
-        product: str | None = None,
+        product: str | None = None, disaster_pct: float | None = None,
     ) -> Trade:
         now = _now()
         with self._lock:
@@ -135,6 +144,12 @@ class TradeStore:
                 product=product,
                 status=TradeStatus.ENTERED, stop_loss=card.premium_sl,
                 target1=card.target1, target2=card.target2, trailing_sl=card.premium_sl,
+                # From YOUR fill, not the card's reference: it is a percentage of
+                # what you actually paid, so entering below the zone does not buy
+                # a disproportionately tight backstop. None here means the
+                # premium stop keeps governing — see monitor.evaluate.
+                disaster_sl=(_round_tick(entry_premium * (1 - disaster_pct))
+                             if disaster_pct else None),
                 invalidation_level=card.invalidation_level, invalidation_dir=card.invalidation_dir,
                 created_at=now, entered_at=now,
                 events=[TradeEvent(ts=now, kind="entered", note=f"Entered {lots} lot(s) @ ₹{entry_premium}")],

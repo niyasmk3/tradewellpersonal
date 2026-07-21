@@ -51,28 +51,35 @@ export function RiskVisualizer({
   const basisLabel =
     entryOverride && entryOverride > 0 ? "your fill" : "top of entry zone";
 
+  // The stop that ACTUALLY ends the trade. With the index invalidation primary,
+  // that is the disaster backstop, not premium_sl — and it is ~2.5x wider. A
+  // panel that kept using premium_sl would understate the planned loss by that
+  // factor (Rs 101 vs Rs 757 on the 21-Jul card), which is the one thing this
+  // block exists to prevent.
+  const operativeStop = signal.disaster_sl ?? signal.premium_sl;
+
   const eco = useMemo(
     () =>
       economics({
         entry: basis,
-        stop: signal.premium_sl,
+        stop: operativeStop,
         target1: signal.target1,
         target2: signal.target2,
         lotSize: signal.lot_size,
         lots,
       }),
-    [basis, signal.premium_sl, signal.target1, signal.target2, signal.lot_size, lots],
+    [basis, operativeStop, signal.target1, signal.target2, signal.lot_size, lots],
   );
 
   const ax = useMemo(
     () =>
       axisPositions({
         entry: basis,
-        stop: signal.premium_sl,
+        stop: operativeStop,
         target1: signal.target1,
         target2: signal.target2,
       }),
-    [basis, signal.premium_sl, signal.target1, signal.target2],
+    [basis, operativeStop, signal.target1, signal.target2],
   );
 
   // No lot size ⇒ no rupee figure. Guessing a multiplier here would be worse
@@ -176,7 +183,7 @@ export function RiskVisualizer({
       <div className="relative mt-0.5 h-3 w-full font-mono text-[9px] text-muted">
         <span className="absolute left-0">₹0</span>
         <span className="absolute -translate-x-1/2 text-bear" style={{ left: `${ax.stop}%` }}>
-          {fmt(signal.premium_sl)}
+          {fmt(operativeStop)}
         </span>
         <span className="absolute -translate-x-1/2 text-white" style={{ left: `${ax.entry}%` }}>
           {fmt(basis)}
@@ -194,7 +201,7 @@ export function RiskVisualizer({
       <div className="mt-0.5 px-0.5 text-[10px] text-muted">
         100% of premium — no stop order is placed.{" "}
         <span className="text-yellow-400">
-          Your ₹{fmt(signal.premium_sl)} stop covers only {Math.round(eco.coveragePct)}%
+          Your ₹{fmt(operativeStop)} stop covers only {Math.round(eco.coveragePct)}%
         </span>{" "}
         of that (−{inr(eco.plannedLoss)}).
         {pctOfCapital != null && ` That is ${pctOfCapital.toFixed(1)}% of capital.`}

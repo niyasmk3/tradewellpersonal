@@ -125,17 +125,37 @@ def evaluate(
     else:
         trade.trailing_sl = trade.stop_loss
 
-    effective_sl = trade.trailing_sl
     invalidated = _invalidated(trade, spot)
 
+    # WHICH premium level actually ends the trade before Target 1.
+    #
+    # With `disaster_sl` set, the index invalidation is the primary stop and the
+    # premium level is only a backstop. The reason is measured, not theoretical:
+    # on 21-Jul-2026 a 0.14% index range produced an 83% swing in a 0DTE
+    # premium, so an 18%-of-premium stop was worth ~10 index points inside a
+    # 35-point noise band. It was touched 7 times while the index invalidation
+    # was never breached — the thesis held all day and the stop measured gamma,
+    # not risk.
+    #
+    # Once Target 1 is hit the trailing stop takes over regardless: by then the
+    # position is in profit, the premium is larger so the same percentage is a
+    # wider absolute band, and protecting the gain is the whole point.
+    if trade.disaster_sl and not trade.t1_hit:
+        exit_level, exit_label = trade.disaster_sl, "Disaster stop"
+    else:
+        exit_level, exit_label = trade.trailing_sl, "Stop-loss"
+    effective_sl = trade.trailing_sl        # what the UI and Kite hand-off show
+
     # --- recommendation (priority order) ---
-    if current_premium <= effective_sl:
-        rec, note = TradeAction.STOPLOSS, f"Stop-loss ₹{effective_sl} hit — exit now"
-    elif invalidated:
+    # Invalidation is tested FIRST: it is the structural thesis, and letting a
+    # noisy premium level pre-empt it is what this whole change exists to stop.
+    if invalidated:
         rec, note = (
             TradeAction.INVALIDATED,
             f"{trade.symbol} broke invalidation {trade.invalidation_level:.0f} — exit",
         )
+    elif current_premium <= exit_level:
+        rec, note = TradeAction.STOPLOSS, f"{exit_label} ₹{exit_level} hit — exit now"
     elif current_premium >= trade.target2:
         rec, note = TradeAction.TARGET2, f"Target 2 ₹{trade.target2} reached — book remaining"
     elif intraday_close:

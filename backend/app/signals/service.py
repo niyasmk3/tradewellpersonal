@@ -133,7 +133,12 @@ class SignalService:
         # match the quantity Kite actually receives.
         lot = _option_lot_size(card.token) or (meta.lot_size if meta and meta.lot_size else 0)
         entry = card.ref_entry_premium or card.entry_high
-        per_unit_risk = max(0.0, entry - card.premium_sl)
+        # Size against the stop that ACTUALLY ends the trade. With the index
+        # invalidation primary, that is the disaster backstop — a wider stop is
+        # more rupees per lot, so the same risk budget buys fewer lots. Sizing
+        # off the narrower premium_sl would understate risk by ~2.5x.
+        operative_sl = card.disaster_sl or card.premium_sl
+        per_unit_risk = max(0.0, entry - operative_sl)
 
         # Contract/account facts are attached BEFORE the suggestion returns
         # early: the UI needs the lot size to show rupee outcomes even when no

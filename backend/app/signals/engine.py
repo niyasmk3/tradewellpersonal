@@ -45,6 +45,20 @@ class SignalEngine:
     def __init__(self, cfg: Settings) -> None:
         self.cfg = cfg
 
+    def _disaster_pct(self) -> float | None:
+        """The backstop percentage, or None to keep the premium stop governing.
+
+        GATED ON CONFIGURED CAPITAL. The whole justification for tolerating a
+        45% stop is that sizing divides by it and hands back proportionally
+        fewer lots. With TRADING_CAPITAL unset that division never runs
+        (_apply_sizing returns early), so the wider stop would be a pure
+        increase in rupees at risk with nothing holding size down. Opt in by
+        setting TRADING_CAPITAL and RISK_PER_TRADE_PCT.
+        """
+        if self.cfg.stop_primary != "underlying" or self.cfg.trading_capital <= 0:
+            return None
+        return self.cfg.premium_disaster_pct
+
     def evaluate(
         self,
         *,
@@ -126,6 +140,7 @@ class SignalEngine:
         plan = risk_mod.build(
             direction, pick.ltp, df, ind, price_fut, symbol, tf,
             profile.premium_sl_pct, profile.rr_target1, profile.rr_target2, basis,
+            disaster_pct=self._disaster_pct(),
         )
 
         reasons: list[str] = []
@@ -152,6 +167,7 @@ class SignalEngine:
             entry_low=plan.entry_low,
             entry_high=plan.entry_high,
             premium_sl=plan.premium_sl,
+            disaster_sl=plan.disaster_sl,
             target1=plan.target1,
             target2=plan.target2,
             trailing_sl_rule=plan.trailing_sl_rule,

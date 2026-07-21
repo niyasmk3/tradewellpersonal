@@ -70,6 +70,10 @@ class Trade(BaseModel):
     target1: float
     target2: float
     trailing_sl: float
+    # Disaster backstop, computed from the ACTUAL fill. When set, this — not
+    # premium_sl — is what ends the trade before Target 1; the index
+    # invalidation is the primary exit. None = legacy premium-stop behaviour.
+    disaster_sl: Optional[float] = None
     invalidation_level: Optional[float] = None
     invalidation_dir: Optional[str] = None
 

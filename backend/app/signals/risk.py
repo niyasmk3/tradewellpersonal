@@ -31,6 +31,7 @@ def build(
     rr1: float,
     rr2: float,
     basis: float = 0.0,
+    disaster_pct: float | None = None,
 ) -> RiskPlan:
     """`spot` and candle levels are in futures space; `basis` = future − index,
     so reported invalidation levels are converted to index (spot) terms."""
@@ -65,10 +66,16 @@ def build(
     entry_low = _round_tick(entry * 0.99)
     entry_high = _round_tick(entry * 1.02)
 
+    # Backstop for when the index invalidation is the primary stop. Deliberately
+    # NOT used to derive targets or the risk unit: at 45% a 1.5R target would sit
+    # +68% away, which no intraday option move reaches.
+    disaster_sl = _round_tick(entry * (1 - disaster_pct)) if disaster_pct else None
+
     return RiskPlan(
         entry_low=entry_low,
         entry_high=entry_high,
         premium_sl=premium_sl,
+        disaster_sl=disaster_sl,
         target1=target1,
         target2=target2,
         trailing_sl_rule=f"Move SL to entry (₹{entry:.2f}) after Target 1",

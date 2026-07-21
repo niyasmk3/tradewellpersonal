@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from app.config import get_settings
+
 from app.signals.models import TradingMode
 from app.signals.store import signal_store
 from app.state import market_state
@@ -68,7 +70,13 @@ def enter(body: EnterRequest) -> Trade:
     product = (body.product or "").upper() or ("MIS" if card.mode is TradingMode.INTRADAY else "NRML")
     if product not in ("MIS", "NRML"):
         raise HTTPException(status_code=400, detail="product must be MIS or NRML")
-    return trade_store.create_from_signal(card, body.lots, float(entry), lot_size, product)
+    cfg = get_settings()
+    # Same gate as the card: no configured capital means sizing cannot shrink
+    # the position to pay for a wider stop, so the premium stop keeps governing.
+    disaster_pct = (cfg.premium_disaster_pct
+                    if cfg.stop_primary == "underlying" and cfg.trading_capital > 0 else None)
+    return trade_store.create_from_signal(
+        card, body.lots, float(entry), lot_size, product, disaster_pct=disaster_pct)
 
 
 @router.post("/{tid}/exit", response_model=Trade)

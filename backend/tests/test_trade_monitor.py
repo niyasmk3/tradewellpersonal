@@ -502,5 +502,132 @@ def test_initial_quantity_backfill_for_partially_booked_legacy_rows():
     tmp.unlink(missing_ok=True)
 
 
+# --- stop model: index invalidation primary, premium demoted to a backstop ----
+
+def test_premium_dip_no_longer_exits_when_invalidation_holds():
+    """The 21-Jul-2026 case. Entry 25.80, card stop 22.20, disaster 14.20.
+    The premium printed 22.00 while NIFTY never went near the 24210 level."""
+    t = make_trade(entry_premium=25.80, stop_loss=22.20, trailing_sl=22.20,
+                   disaster_sl=14.20, target1=34.45, target2=39.35,
+                   invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(t, current_premium=22.00, spot=24197.9, ist_minutes=625)
+    assert t.recommendation is not TradeAction.STOPLOSS, t.recommendation
+    print(f"  STOPMODEL-> premium 22.00 below the 22.20 stop, thesis intact -> {t.recommendation.value}")
+
+
+def test_disaster_backstop_still_fires():
+    t = make_trade(entry_premium=25.80, stop_loss=22.20, trailing_sl=22.20,
+                   disaster_sl=14.20, invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(t, current_premium=14.00, spot=24197.9, ist_minutes=625)
+    assert t.recommendation is TradeAction.STOPLOSS
+    assert "Disaster stop" in (t.recommendation_note or ""), t.recommendation_note
+    print("  STOPMODEL-> premium collapse to 14.00 still exits on the backstop")
+
+
+def test_invalidation_outranks_the_premium_level():
+    """Index breaks the level while the premium still looks fine -> exit."""
+    t = make_trade(entry_premium=25.80, stop_loss=22.20, trailing_sl=22.20,
+                   disaster_sl=14.20, invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(t, current_premium=25.00, spot=24215.0, ist_minutes=625)
+    assert t.recommendation is TradeAction.INVALIDATED
+    print("  STOPMODEL-> index breached -> INVALIDATED, whatever the premium says")
+
+
+def test_trailing_takes_over_after_target1():
+    """Once in profit the trail governs again — the backstop must not widen a
+    won trade back into a loser."""
+    t = make_trade(entry_premium=25.80, stop_loss=22.20, trailing_sl=22.20,
+                   disaster_sl=14.20, target1=34.45, target2=99.0,
+                   invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(t, current_premium=35.00, spot=24190.0, ist_minutes=625)   # T1
+    assert t.t1_hit and t.stop_loss == 25.80          # SL moved to entry
+    monitor.evaluate(t, current_premium=25.00, spot=24190.0, ist_minutes=625)   # give it back
+    assert t.recommendation is TradeAction.STOPLOSS, t.recommendation
+    assert "Disaster" not in (t.recommendation_note or ""), t.recommendation_note
+    print("  STOPMODEL-> after T1 the trail governs, not the backstop")
+
+
+def test_legacy_rows_without_a_backstop_keep_old_behaviour():
+    t = make_trade(entry_premium=25.80, stop_loss=22.20, trailing_sl=22.20,
+                   disaster_sl=None, invalidation_level=24210.4, invalidation_dir="below")
+    monitor.evaluate(t, current_premium=22.00, spot=24197.9, ist_minutes=625)
+    assert t.recommendation is TradeAction.STOPLOSS
+    print("  STOPMODEL-> legacy row (no backstop) still stops on the premium level")
+
+
+def test_replay_todays_premium_path():
+    """Drive the REAL 21-Jul minute bars through both models."""
+    bars = [(25.40, 26.00, 22.00), (22.00, 27.25, 21.90), (26.85, 29.20, 25.95),
+            (27.00, 27.00, 23.20), (23.25, 24.25, 21.25), (21.25, 24.15, 21.25),
+            (22.45, 24.90, 22.35), (24.00, 25.65, 23.25), (25.20, 26.55, 25.00),
+            (26.40, 28.35, 26.35), (27.55, 28.50, 24.75), (25.10, 26.65, 24.90),
+            (26.55, 27.00, 25.30), (25.15, 35.10, 24.80)]
+    SPOT = 24195.0                       # never breached 24210.4 all window
+    for label, disaster in (("old model", None), ("new model", 14.20)):
+        t = make_trade(entry_premium=25.80, stop_loss=22.20, trailing_sl=22.20,
+                       disaster_sl=disaster, target1=34.45, target2=39.35,
+                       invalidation_level=24210.4, invalidation_dir="below")
+        outcome = None
+        for close, high, low in bars:
+            for px in (low, high, close):          # worst-case tick ordering
+                monitor.evaluate(t, current_premium=px, spot=SPOT, ist_minutes=625)
+                if t.recommendation is TradeAction.STOPLOSS and outcome is None:
+                    outcome = f"stopped at Rs{px}"
+                if t.t1_hit and outcome is None:
+                    outcome = "reached Target 1"
+            if outcome:
+                break
+        print(f"  REPLAY   -> {label}: {outcome}")
+        if disaster is None:
+            assert outcome and "stopped" in outcome
+        else:
+            assert outcome == "reached Target 1", outcome
+
+
+def test_store_actually_sets_the_backstop():
+    """REGRESSION. The first version of this change added `disaster_pct` to
+    create_from_signal's signature and never used it, so Trade.disaster_sl was
+    always None and the monitor kept stopping at the old level — while the CARD
+    already sized down 3x and the panel already showed the wider loss. Every
+    stop-model test passed because they all build Trade directly via
+    make_trade(); none went through the store. This one does."""
+    s = _store()
+    card = _make_card()
+    card.premium_sl = 22.20
+    t = s.create_from_signal(card, lots=1, entry_premium=25.80, lot_size=65,
+                             product="MIS", disaster_pct=0.45)
+    assert t.disaster_sl == 14.20, t.disaster_sl        # 25.80 x 0.55 -> tick
+    monitor.evaluate(t, current_premium=22.00, spot=24400.0, ist_minutes=625)
+    assert t.recommendation is not TradeAction.STOPLOSS, t.recommendation
+    assert monitor.auto_close_trigger(t, {"stop", "target1", "invalidation"}) is None
+    print(f"  STORE  -> backstop Rs{t.disaster_sl} set from the FILL; 22.00 no longer stops")
+
+
+def test_store_omits_the_backstop_when_not_requested():
+    s = _store()
+    t = s.create_from_signal(_make_card(), lots=1, entry_premium=25.80, lot_size=65,
+                             product="MIS", disaster_pct=None)
+    assert t.disaster_sl is None
+    print("  STORE  -> no backstop requested -> premium stop still governs")
+
+
+def test_backstop_is_gated_on_configured_capital():
+    """The wider stop is only justified if sizing shrinks the position to pay
+    for it. With TRADING_CAPITAL unset that never happens, so the gate must
+    withhold the backstop entirely rather than widen risk for free."""
+    from app.config import Settings
+    from app.signals.engine import SignalEngine
+    no_capital = SignalEngine(Settings(_env_file=None, STOP_PRIMARY="underlying",
+                                       TRADING_CAPITAL=0))
+    with_capital = SignalEngine(Settings(_env_file=None, STOP_PRIMARY="underlying",
+                                         TRADING_CAPITAL=500000))
+    off = SignalEngine(Settings(_env_file=None, STOP_PRIMARY="premium",
+                                TRADING_CAPITAL=500000))
+    assert no_capital._disaster_pct() is None, "widened risk with no sizing to pay for it"
+    assert with_capital._disaster_pct() == 0.45
+    assert off._disaster_pct() is None
+    print("  GATE   -> backstop only when STOP_PRIMARY=underlying AND capital is set")
+
+
 if __name__ == "__main__":
     _main()

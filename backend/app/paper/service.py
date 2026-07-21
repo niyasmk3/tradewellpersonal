@@ -135,7 +135,12 @@ class PaperTradingService:
         fill = round(min(base * (1 + self.cfg.paper_slippage_pct), card.entry_high), 2)
 
         lots = max(1, self.cfg.paper_lots or (card.suggested_lots or 1))
-        t = self.store.create_from_signal(card, lots, fill, lot, product=None)
+        t = self.store.create_from_signal(
+            card, lots, fill, lot, product=None,
+            disaster_pct=(self.cfg.premium_disaster_pct
+                          if self.cfg.stop_primary == "underlying"
+                          and self.cfg.trading_capital > 0 else None),
+        )
         log.info("paper: entered %s %d lot(s) @ Rs%s (signal %s)",
                  card.contract, lots, fill, card.id)
         return t
