@@ -291,6 +291,41 @@ def test_expired_or_inactive_cards_are_not_entered():
     print("  PAPER  -> expired/cancelled cards skipped, and not marked seen")
 
 
+def test_below_zone_fills_are_refused_and_stay_retryable():
+    """The 21-Jul-2026 incident. Card zone 26.85-27.65; the simulator filled at
+    23.59 (12% below), inherited the card's 22.20 stop, and was left Rs 1.39 of
+    room. It must wait instead — and the card must NOT be burned, because the
+    premium can come back into the zone while the card is still valid."""
+    s = _store()
+    svc = PaperTradingService(_cfg(), _State(px=23.49), s)
+    c = _card(cid="ZONE")
+    c.entry_low, c.entry_high, c.premium_sl = 26.85, 27.65, 22.20
+    c.ref_entry_premium = 27.10
+
+    svc.consider(c)
+    assert not s.all(), "entered below the published entry zone"
+    assert "ZONE" not in svc._seen, "below-zone card was burned; it may re-enter the zone"
+
+    # Premium recovers into the zone -> the same card is now taken.
+    svc.state = _State(px=27.00)
+    svc.consider(c)
+    assert len(s.all()) == 1, "did not enter once the premium came back into the zone"
+    assert 26.85 <= s.all()[0].entry_premium <= 27.65, s.all()[0].entry_premium
+    print("  PAPER  -> below-zone fill refused, retried, entered at Rs%.2f once in zone"
+          % s.all()[0].entry_premium)
+
+
+def test_no_tick_yet_is_retryable_not_burned():
+    s = _store()
+    svc = PaperTradingService(_cfg(), _State(px=None), s)
+    c = _card(cid="NOTICK")
+    c.ref_entry_premium = None
+    c.entry_high = 0.0
+    svc.consider(c)
+    assert "NOTICK" not in svc._seen, "a missing tick permanently burned the card"
+    print("  PAPER  -> no tick yet: card stays eligible next cycle")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

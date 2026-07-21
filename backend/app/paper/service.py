@@ -91,6 +91,31 @@ class PaperTradingService:
         # definition of freshness, so no second arbitrary staleness rule.
         if card.state.value != "active" or int(time.time()) >= card.valid_until:
             return                       # NOT marked seen — it may still be live next cycle
+
+        # The premium is read BEFORE the card is marked seen, because the
+        # entry-zone check below must be retryable: a premium currently outside
+        # the zone can come back into it while the card is still valid, and
+        # burning the card here would lose a trade the plan would have taken.
+        live = None
+        if card.token is not None:
+            live = self.state.ticks.get(card.token, {}).get("last_price")
+        base = live or card.ref_entry_premium or card.entry_high
+        if not base or base <= 0:
+            return                       # no tick yet — retry next cycle
+
+        # ENTRY-ZONE FLOOR. Previously only the top was clamped, so the
+        # simulator would happily buy a premium that had already collapsed
+        # below the zone — on 21-Jul it filled at 23.59 against a published
+        # zone of 26.85-27.65 (12% below), inherited the card's stop verbatim,
+        # and was left with 1.39 of room. That is not the trade the plan
+        # proposed. For a PE, a premium falling this far inside the validity
+        # window means the index rallied — the setup was already going wrong,
+        # and buying the dip into it is the opposite of the signal.
+        if base < card.entry_low:
+            log.info("paper: %s at Rs%.2f is below the entry zone (Rs%.2f-%.2f) — waiting",
+                     card.contract, base, card.entry_low, card.entry_high)
+            return                       # NOT marked seen — may re-enter the zone
+
         self._seen.add(card.id)          # marked even if skipped below: never retried
 
         open_now = [t for t in self.store.all()
@@ -105,15 +130,8 @@ class PaperTradingService:
             log.info("paper: skipping %s — no lot size", card.contract)
             return
 
-        # Fill at the live premium, paying slippage. entry_high is what a real
-        # basket would LIMIT at, so a fill above it is not achievable.
-        live = None
-        if card.token is not None:
-            live = self.state.ticks.get(card.token, {}).get("last_price")
-        base = live or card.ref_entry_premium or card.entry_high
-        if not base or base <= 0:
-            log.info("paper: skipping %s — no premium", card.contract)
-            return
+        # entry_high is what a real basket would LIMIT at, so a fill above it is
+        # not achievable; the floor above keeps it inside the zone.
         fill = round(min(base * (1 + self.cfg.paper_slippage_pct), card.entry_high), 2)
 
         lots = max(1, self.cfg.paper_lots or (card.suggested_lots or 1))
