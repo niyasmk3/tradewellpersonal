@@ -292,11 +292,7 @@ class FeedController:
             try:
                 if self.paper is not None:
                     from app.signals.store import signal_store
-                    for symbol in get_settings().signal_symbols:
-                        for mode in get_settings().signal_mode_list:
-                            resp = signal_store.latest(symbol, mode)
-                            if resp is not None and resp.signal is not None:
-                                self.paper.consider(resp.signal)
+                    self.paper.scan(signal_store)
                     self.paper.run_once()
             except Exception as exc:  # pragma: no cover
                 log.warning("paper loop error: %s", exc)

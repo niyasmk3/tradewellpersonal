@@ -9,6 +9,7 @@ Run:  python backend/tests/test_paper.py
 import os
 import pathlib
 import sys
+import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -56,6 +57,10 @@ class _State:
 
 
 def _card(cid="S1", token=999, lot=75):
+    """Always issued relative to NOW-in-real-time: `consider` refuses cards the
+    engine no longer considers valid, so a fixed 2023 epoch would expire them
+    all and every entry test would silently assert nothing."""
+    live = int(time.time())
     return SignalCard(
         id=cid, symbol="NIFTY", mode=TradingMode.INTRADAY, title="t", action=Action.BUY_CE,
         direction=Direction.CE, state=SignalState.ACTIVE, contract="NIFTY 24350 CE",
@@ -63,7 +68,7 @@ def _card(cid="S1", token=999, lot=75):
         entry_low=118.0, entry_high=124.0, premium_sl=100.0, target1=150.0, target2=180.0,
         trailing_sl_rule="r", risk_reward=1.5, confidence=80.0,
         underlying_invalidation="u", invalidation_note="n", invalidation_level=24300.0,
-        invalidation_dir="above", created_at=NOW, valid_until=NOW + 480,
+        invalidation_dir="above", created_at=live, valid_until=live + 600,
         score=ScoreBreakdown(direction=Direction.CE, components=[], total=80.0, max=100),
         lot_size=lot,
     )
@@ -223,6 +228,67 @@ def test_summary_reports_expectancy_and_reasons():
     assert out["expectancy"] == round(out["net_pnl"] / 2, 2)
     print(f"  PAPER  -> 2 trades, 50% win, expectancy Rs{out['expectancy']}, "
           f"reasons {out['by_reason']}")
+
+
+# --- the loop wiring, which shipped broken and untested -----------------------
+
+def test_scan_reaches_the_real_signal_store():
+    """Regression: the feed loop passed configured modes through as STRINGS
+    where a TradingMode was required, so scan threw
+    'str' object has no attribute 'value' on every cycle for a whole session.
+    The loop caught and logged it, so nothing was simulated and nothing looked
+    broken. This drives a REAL SignalStore, not a stub, so the enum boundary
+    is actually crossed."""
+    from app.signals.models import Bias, MarketStatus, Regime, SignalResponse
+    from app.signals.store import SignalStore
+
+    sig = SignalStore(store_path=None)          # memory-only
+    card = _card(cid="LOOP-1")
+    resp = SignalResponse(
+        symbol="NIFTY", mode=TradingMode.INTRADAY, evaluated_at=NOW,
+        status=MarketStatus(
+            symbol="NIFTY", mode=TradingMode.INTRADAY, regime=Regime.MODERATE_BULLISH,
+            regime_label="R", bias=Bias.BULLISH, bull_score=80, bear_score=20,
+            headline="h", vix_status=None, news_label=None, news_net=None, notes=[],
+        ),
+        action=Action.BUY_CE, signal=card, no_trade_reason=None, score=None,
+    )
+    sig.reconcile(resp, int(time.time()))
+
+    store = _store()
+    svc = PaperTradingService(_cfg(), _State(px=120.0), store)
+    svc.scan(sig)                                # must not raise, and must enter
+    assert len(store.all()) == 1, f"scan did not enter: {len(store.all())}"
+    print("  PAPER  -> scan() crosses the mode-enum boundary and enters")
+
+
+def test_scan_tolerates_an_unknown_configured_mode():
+    from app.signals.store import SignalStore
+    store = _store()
+    svc = PaperTradingService(_cfg(SIGNAL_MODES="intraday,bogus"), _State(px=120.0), store)
+    svc.scan(SignalStore(store_path=None))       # must not raise
+    print("  PAPER  -> an unknown mode in config is skipped, not fatal")
+
+
+def test_expired_or_inactive_cards_are_not_entered():
+    """A fill after the entry window simulates a trade the engine was not
+    offering. And an expired card must stay retryable, not be burned."""
+    s = _store()
+    svc = PaperTradingService(_cfg(), _State(px=120.0), s)
+
+    stale = _card(cid="OLD")
+    stale.valid_until = int(time.time()) - 1
+    svc.consider(stale)
+    assert not s.all(), "entered an expired card"
+    assert "OLD" not in svc._seen, "expired card was burned; it may be live next cycle"
+
+    from app.signals.models import SignalState
+    dead = _card(cid="DEAD")
+    dead.valid_until = int(time.time()) + 600
+    dead.state = SignalState.CANCELLED
+    svc.consider(dead)
+    assert not s.all(), "entered a cancelled card"
+    print("  PAPER  -> expired/cancelled cards skipped, and not marked seen")
 
 
 if __name__ == "__main__":

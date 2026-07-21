@@ -62,11 +62,36 @@ class PaperTradingService:
         }
 
     # ---- entry -------------------------------------------------------------
+    def scan(self, store) -> None:
+        """Offer every currently-active signal to `consider`.
+
+        Lives here rather than in the feed loop so it is covered by tests. The
+        first version of this was inline in services.py, passed the configured
+        modes through as raw STRINGS where a TradingMode was required, and threw
+        `'str' object has no attribute 'value'` on every cycle for an entire
+        session — silently, because the loop caught and logged it. Nothing was
+        ever simulated, and no test touched the path.
+        """
+        for symbol in self.cfg.signal_symbols:
+            for mode in self.cfg.signal_mode_list:
+                try:
+                    resp = store.latest(symbol, TradingMode(mode))
+                except ValueError:               # unknown mode in config
+                    continue
+                if resp is not None and resp.signal is not None:
+                    self.consider(resp.signal)
+
     def consider(self, card: SignalCard) -> None:
-        """Open a simulated position for a freshly issued signal."""
+        """Open a simulated position for a currently-valid signal."""
         if card.id in self._seen:
             return
-        self._seen.add(card.id)          # marked even if skipped: never retried
+        # A card the engine no longer considers tradeable must not be entered:
+        # filling minutes after it expired would simulate a trade the live
+        # system was not offering. `state`/`valid_until` are the engine's own
+        # definition of freshness, so no second arbitrary staleness rule.
+        if card.state.value != "active" or int(time.time()) >= card.valid_until:
+            return                       # NOT marked seen — it may still be live next cycle
+        self._seen.add(card.id)          # marked even if skipped below: never retried
 
         open_now = [t for t in self.store.all()
                     if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
