@@ -284,6 +284,42 @@ export interface Trade {
   events: TradeEvent[];
 }
 
+// ---- Paper trading (simulated; no orders) ----
+export interface PaperRow {
+  id: string;
+  contract: string;
+  direction: "CE" | "PE" | "NONE";
+  entered_at: number;
+  exited_at: number | null;
+  entry: number;
+  exit: number;
+  quantity: number;
+  reason: string | null;
+  gross_pnl: number;
+  charges: number;
+  net_pnl: number;
+  return_pct: number;
+}
+
+export interface PaperSummary {
+  trades: number;
+  open: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  gross_pnl: number;
+  charges: number;
+  net_pnl: number;
+  avg_win: number;
+  avg_loss: number;
+  expectancy: number;
+  by_reason: Record<string, number>;
+  note: string;
+  rows: PaperRow[];
+  slippage_pct: number;
+  lots: number;
+}
+
 // ---- Backtest (Phase 5) ----
 export interface BacktestTrade {
   entry_ts: number;
@@ -380,6 +416,7 @@ export const api = {
   enterTrade: (symbol: string, mode: TradingMode, lots: number, entry_premium?: number, signal_id?: string) =>
     postJSON<Trade>("/trades/enter", { symbol, mode, lots, entry_premium, signal_id }),
   restartFeed: () => postJSON<AuthStatus>("/auth/feed/restart", {}),
+  paperSummary: () => getJSON<PaperSummary>("/paper/summary"),
   reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),
   exitTrade: (id: string, exit_premium?: number) =>
     postJSON<Trade>(`/trades/${id}/exit`, { exit_premium }),

@@ -15,6 +15,7 @@ from app.api import (
     routes_auth,
     routes_backtest,
     routes_kite_basket,
+    routes_paper,
     routes_market,
     routes_news,
     routes_options,
@@ -81,6 +82,7 @@ app.include_router(routes_trades.router)
 app.include_router(routes_news.router)
 app.include_router(routes_backtest.router)
 app.include_router(routes_kite_basket.router)
+app.include_router(routes_paper.router)
 
 
 @app.get("/health", tags=["meta"])

@@ -21,7 +21,7 @@ from app.signals.service import SignalService
 from app.signals.store import signal_store
 from app.state import market_state
 from app.trades.service import TradeMonitorService
-from app.trades.store import trade_store
+from app.trades.store import TradeStore, trade_store
 
 log = logging.getLogger("tradewell.services")
 
@@ -86,6 +86,7 @@ class FeedController:
         self.chain_builder: OptionChainBuilder | None = None
         self.signal_service: SignalService | None = None
         self.trade_monitor: TradeMonitorService | None = None
+        self.paper: "PaperTradingService | None" = None
         self.news_service: NewsService | None = None
         self.running: bool = False
         self._tasks: list[asyncio.Task] = []
@@ -164,10 +165,24 @@ class FeedController:
 
         self.signal_service = SignalService(settings, market_state, signal_store)
         self.trade_monitor = TradeMonitorService(market_state, trade_store)
+        if settings.paper_trading:
+            # Its OWN store file. A paper position must never appear in the
+            # real journal, the realised P&L, or the circuit breakers — and
+            # must never be reconciled against the broker's position book,
+            # where it has no counterpart.
+            from pathlib import Path as _Path
+
+            from app.paper.service import PaperTradingService
+            paper_store = TradeStore(path=_Path(__file__).resolve().parents[1] / ".paper_trades.json")
+            self.paper_store = paper_store
+            self.paper = PaperTradingService(settings, market_state, paper_store)
+            log.warning("PAPER TRADING ON — simulated fills only, no orders are placed")
 
         self._tasks.append(asyncio.create_task(self._option_loop(settings.option_poll_seconds)))
         self._tasks.append(asyncio.create_task(self._signal_loop(settings.signal_eval_seconds)))
         self._tasks.append(asyncio.create_task(self._trade_loop(settings.signal_eval_seconds)))
+        if settings.paper_trading:
+            self._tasks.append(asyncio.create_task(self._paper_loop(settings.signal_eval_seconds)))
         if settings.broker_reconcile:
             self._tasks.append(asyncio.create_task(
                 self._broker_reconcile_loop(settings.broker_reconcile_seconds)))
@@ -269,6 +284,22 @@ class FeedController:
                     self.signal_service.evaluate_all()
             except Exception as exc:  # pragma: no cover
                 log.warning("signal loop error: %s", exc)
+            await asyncio.sleep(interval)
+
+    async def _paper_loop(self, interval: float) -> None:
+        """Simulate entries on new signals and exits on plan triggers."""
+        while True:
+            try:
+                if self.paper is not None:
+                    from app.signals.store import signal_store
+                    for symbol in get_settings().signal_symbols:
+                        for mode in get_settings().signal_mode_list:
+                            resp = signal_store.latest(symbol, mode)
+                            if resp is not None and resp.signal is not None:
+                                self.paper.consider(resp.signal)
+                    self.paper.run_once()
+            except Exception as exc:  # pragma: no cover
+                log.warning("paper loop error: %s", exc)
             await asyncio.sleep(interval)
 
     async def _broker_reconcile_loop(self, interval: float) -> None:

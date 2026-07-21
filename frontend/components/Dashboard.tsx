@@ -18,6 +18,7 @@ import { SignalPanel } from "./SignalPanel";
 import { TradesPanel, TradeJournal, realizedSummary } from "./TradesPanel";
 import { NewsPanel } from "./NewsPanel";
 import { BacktestPanel } from "./BacktestPanel";
+import { PaperPanel } from "./PaperPanel";
 
 // lightweight-charts touches the DOM — load the chart client-side only.
 const PriceChart = dynamic(() => import("./PriceChart").then((m) => m.PriceChart), {
@@ -54,6 +55,8 @@ export function Dashboard() {
   const signalRes = mode === "positional" ? positionalSig : intradaySig;
   const news = usePolling(() => api.news(), 15000, []);
   const mood = usePolling(() => api.marketMood(), 60000, []);
+  // Simulated book — polled slowly; it only changes when a signal fires.
+  const paper = usePolling(() => api.paperSummary(), 15000, []);
 
   // Trades are global (not per-symbol). `tradesTick` forces an immediate refetch after an action.
   const [tradesTick, setTradesTick] = useState(0);
@@ -135,6 +138,12 @@ export function Dashboard() {
       badge: (news.data?.items ?? []).some((n) => n.is_market_moving),
     },
     { key: "journal", label: "Journal", node: <TradeJournal trades={allTrades} onChange={refreshTrades} /> },
+    {
+      key: "paper",
+      label: "Paper",
+      node: <PaperPanel data={paper.data} error={paper.error} />,
+      badge: (paper.data?.open ?? 0) > 0,
+    },
     ...(symbol === "NIFTY"
       ? [{ key: "backtest", label: "Backtest", node: <BacktestPanel symbol={symbol} /> }]
       : []),

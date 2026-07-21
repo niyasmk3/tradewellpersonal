@@ -1,0 +1,241 @@
+"""Paper-trading tests.
+
+The point of paper trading is EVIDENCE, so the two things that must hold are:
+its numbers are honest (net of the same charges a real fill pays), and it can
+never contaminate the real journal that gates live signals.
+
+Run:  python backend/tests/test_paper.py
+"""
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from app.config import Settings
+from app.paper import charges as chg
+from app.paper.service import PaperTradingService, summarize
+from app.signals.models import (
+    Action, Direction, ScoreBreakdown, SignalCard, SignalState, TradingMode,
+)
+from app.trades.models import TradeStatus
+from app.trades.store import TradeStore
+
+NOW = 1_700_000_000
+REAL_JOURNAL = pathlib.Path(__file__).resolve().parents[1] / ".trades.json"
+
+
+def _cfg(**over):
+    """Settings built from ALIASES, with the .env file disabled.
+
+    Both details matter. Settings fields declare `Field(alias=...)`, so pydantic
+    populates by alias — passing `paper_slippage_pct=` is silently dropped and
+    the default is used, which quietly made three of these tests assert the
+    default instead of the value under test. And loading the real .env would
+    make results depend on the developer's own configuration.
+    """
+    base = {"PAPER_TRADING": True, "PAPER_LOTS": 1, "PAPER_SLIPPAGE_PCT": 0.0,
+            "SIGNAL_MAX_OPEN_POSITIONS": 2}
+    base.update(over)
+    return Settings(_env_file=None, **base)
+
+
+def _store(name="/tmp/tw-paper-test.json"):
+    p = pathlib.Path(name)
+    p.unlink(missing_ok=True)
+    return TradeStore(path=p)
+
+
+class _State:
+    def __init__(self, px=None, spot=24400.0):
+        self.ticks = {999: {"last_price": px}} if px is not None else {}
+        self._spot = spot
+
+    def underlying_snapshot(self, sym):
+        return type("S", (), {"ltp": self._spot})()
+
+
+def _card(cid="S1", token=999, lot=75):
+    return SignalCard(
+        id=cid, symbol="NIFTY", mode=TradingMode.INTRADAY, title="t", action=Action.BUY_CE,
+        direction=Direction.CE, state=SignalState.ACTIVE, contract="NIFTY 24350 CE",
+        strike=24350.0, token=token, expiry="2026-07-24",
+        entry_low=118.0, entry_high=124.0, premium_sl=100.0, target1=150.0, target2=180.0,
+        trailing_sl_rule="r", risk_reward=1.5, confidence=80.0,
+        underlying_invalidation="u", invalidation_note="n", invalidation_level=24300.0,
+        invalidation_dir="above", created_at=NOW, valid_until=NOW + 480,
+        score=ScoreBreakdown(direction=Direction.CE, components=[], total=80.0, max=100),
+        lot_size=lot,
+    )
+
+
+# --- charges must match the TypeScript model exactly -------------------------
+
+def test_charges_match_the_frontend_model():
+    """These are the same worked numbers frontend/tests/tradeMath.test.ts pins.
+    If the two ever disagree, one of them is lying to the trader."""
+    assert chg.charges(100.0, 175.0, 75, 2) == 69.22, chg.charges(100.0, 175.0, 75, 2)
+    assert chg.charges(100.0, 0.0, 75, 1) == 26.98, chg.charges(100.0, 0.0, 75, 1)
+    print("  CHARGES-> round trip Rs69.22 / lapse Rs26.98 — matches tradeMath.ts")
+
+
+def test_net_pnl_is_below_gross():
+    gross = (150.0 - 120.0) * 75
+    net = chg.net_pnl(120.0, 150.0, 75)
+    assert net < gross
+    assert abs((gross - net) - chg.charges(120.0, 150.0, 75, 2)) < 0.01
+    print(f"  CHARGES-> gross Rs{gross:.0f} -> net Rs{net:.2f}")
+
+
+# --- entry -------------------------------------------------------------------
+
+def test_enters_once_per_signal():
+    s, svc = _store(), None
+    svc = PaperTradingService(_cfg(), _State(px=120.0), s)
+    svc.consider(_card())
+    svc.consider(_card())                     # same id again
+    assert len(s.all()) == 1, len(s.all())
+    print("  PAPER  -> one entry per signal id, repeats ignored")
+
+
+def test_entry_pays_slippage_but_never_above_entry_high():
+    s = _store()
+    svc = PaperTradingService(_cfg(PAPER_SLIPPAGE_PCT=0.01), _State(px=120.0), s)
+    svc.consider(_card())
+    t = s.all()[0]
+    assert t.entry_premium == 121.2, t.entry_premium          # 120 x 1.01
+    # A live premium already at the cap must not fill above it: entry_high is
+    # the LIMIT a real basket would send.
+    s2 = _store("/tmp/tw-paper-test2.json")
+    PaperTradingService(_cfg(PAPER_SLIPPAGE_PCT=0.05), _State(px=123.0), s2).consider(_card())
+    assert s2.all()[0].entry_premium == 124.0, s2.all()[0].entry_premium
+    print("  PAPER  -> slippage paid on entry, capped at entry_high Rs124.00")
+
+
+def test_open_position_cap_is_respected():
+    """The simulation must not take trades the live throttle would have blocked."""
+    s = _store()
+    svc = PaperTradingService(_cfg(SIGNAL_MAX_OPEN_POSITIONS=2), _State(px=120.0), s)
+    for i in range(4):
+        svc.consider(_card(cid=f"S{i}"))
+    assert len(s.all()) == 2, len(s.all())
+    print("  PAPER  -> stopped at the 2-position cap, like the live throttle")
+
+
+def test_skips_when_lot_size_or_premium_is_unknown():
+    s = _store()
+    PaperTradingService(_cfg(), _State(px=120.0), s).consider(_card(lot=0))
+    assert not s.all()
+    s2 = _store("/tmp/tw-paper-test3.json")
+    svc = PaperTradingService(_cfg(), _State(px=None), s2)
+    c = _card(cid="S9")
+    c.ref_entry_premium = None
+    c.entry_high = 0.0
+    svc.consider(c)
+    assert not s2.all()
+    print("  PAPER  -> refuses to invent a lot size or a premium")
+
+
+# --- exit --------------------------------------------------------------------
+
+def test_exits_on_stop_and_books_net_of_charges():
+    s = _store()
+    cfg = _cfg()
+    PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
+    svc = PaperTradingService(cfg, _State(px=99.0), s)     # stop is 100
+    svc.run_once()
+    t = s.all()[0]
+    assert t.status is TradeStatus.EXITED and t.auto_close_reason == "stop"
+    out = summarize(s)
+    assert out["trades"] == 1 and out["losses"] == 1
+    assert out["net_pnl"] < out["gross_pnl"], (out["net_pnl"], out["gross_pnl"])
+    print(f"  PAPER  -> stopped out: gross Rs{out['gross_pnl']} net Rs{out['net_pnl']} "
+          f"(charges Rs{out['charges']})")
+
+
+def test_exits_on_target_and_on_invalidation():
+    s = _store()
+    cfg = _cfg()
+    PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
+    PaperTradingService(cfg, _State(px=151.0), s).run_once()      # T1 = 150
+    assert s.all()[0].auto_close_reason == "target1"
+
+    s2 = _store("/tmp/tw-paper-test4.json")
+    PaperTradingService(cfg, _State(px=120.0), s2).consider(_card())
+    PaperTradingService(cfg, _State(px=130.0, spot=24290.0), s2).run_once()  # spot < 24300
+    assert s2.all()[0].auto_close_reason == "invalidation"
+    print("  PAPER  -> exits on target1 and on underlying invalidation")
+
+
+def test_exit_slippage_reduces_the_fill():
+    s = _store()
+    cfg = _cfg(PAPER_SLIPPAGE_PCT=0.01)
+    PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
+    PaperTradingService(cfg, _State(px=151.0), s).run_once()
+    t = s.all()[0]
+    assert t.exit_premium == round(151.0 * 0.99, 2), t.exit_premium
+    print(f"  PAPER  -> exit filled at Rs{t.exit_premium}, below the Rs151.00 tape")
+
+
+def test_no_exit_without_a_live_premium():
+    s = _store()
+    cfg = _cfg()
+    PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
+    PaperTradingService(cfg, _State(px=None), s).run_once()
+    assert s.all()[0].status is TradeStatus.ENTERED
+    print("  PAPER  -> a dead ticker does not close paper positions")
+
+
+# --- the separation that matters ---------------------------------------------
+
+def test_paper_never_touches_the_real_journal():
+    before = REAL_JOURNAL.read_text() if REAL_JOURNAL.exists() else ""
+    s = _store()
+    cfg = _cfg()
+    PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
+    PaperTradingService(cfg, _State(px=99.0), s).run_once()
+    after = REAL_JOURNAL.read_text() if REAL_JOURNAL.exists() else ""
+    assert before == after, "paper trading modified the REAL journal"
+    print("  PAPER  -> .trades.json byte-identical; simulated book is isolated")
+
+
+def test_restart_does_not_re_enter_open_signals():
+    """A mid-session restart must not double-enter a card already taken."""
+    s = _store()
+    cfg = _cfg()
+    PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
+    fresh = PaperTradingService(cfg, _State(px=120.0), s)   # simulates a restart
+    fresh.consider(_card())
+    assert len(s.all()) == 1, len(s.all())
+    print("  PAPER  -> seen-set rebuilt from the store; no double entry")
+
+
+def test_summary_reports_expectancy_and_reasons():
+    s = _store()
+    cfg = _cfg()
+    for i, px in enumerate((151.0, 99.0)):
+        PaperTradingService(cfg, _State(px=120.0), s).consider(_card(cid=f"S{i}"))
+        PaperTradingService(cfg, _State(px=px), s).run_once()
+    out = summarize(s)
+    assert out["trades"] == 2 and out["wins"] == 1 and out["losses"] == 1
+    assert out["win_rate"] == 50.0
+    assert set(out["by_reason"]) == {"target1", "stop"}, out["by_reason"]
+    assert out["expectancy"] == round(out["net_pnl"] / 2, 2)
+    print(f"  PAPER  -> 2 trades, 50% win, expectancy Rs{out['expectancy']}, "
+          f"reasons {out['by_reason']}")
+
+
+if __name__ == "__main__":
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    failed = 0
+    for t in tests:
+        try:
+            t()
+        except AssertionError as e:
+            failed += 1
+            print(f"  FAIL  {t.__name__}: {e}")
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print(f"  ERROR {t.__name__}: {type(e).__name__}: {e}")
+    print("\n" + ("ALL PASSED" if failed == 0 else f"{failed} FAILED"))
+    sys.exit(1 if failed else 0)

@@ -94,6 +94,18 @@ class Settings(BaseSettings):
         default=15.0, gt=0, alias="BROKER_RECONCILE_SECONDS"
     )
 
+    # --- Paper trading (SIMULATED; no broker, no money, no orders) ---
+    # Takes every issued signal in simulation and exits it by the plan, so the
+    # engine can be forward-tested on live ticks while you are away. Paper
+    # positions live in their own store and never reach the real journal, the
+    # realised P&L, or the circuit breakers.
+    paper_trading: bool = Field(default=False, alias="PAPER_TRADING")
+    # Lots per simulated trade. 0 = use the card's suggested_lots.
+    paper_lots: int = Field(default=1, ge=0, alias="PAPER_LOTS")
+    # Charged against the fill on BOTH legs. The tape's last price is not the
+    # ask you would pay, and a paper book that ignores that is a fantasy.
+    paper_slippage_pct: float = Field(default=0.004, ge=0, le=0.1, alias="PAPER_SLIPPAGE_PCT")
+
     # --- Position sizing guidance ---
     # Capital the sizing suggestion is computed against. 0 = unknown -> no
     # suggestion is shown (never guess a size on someone's behalf).
