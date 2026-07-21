@@ -82,6 +82,11 @@ class Trade(BaseModel):
     exited_at: Optional[int] = None
     exit_premium: Optional[float] = None
     realized_pnl: float = 0.0            # booked P&L (partials + final)
+    # True when Tradewell closed this row itself on a plan trigger rather than
+    # you recording a fill. The premium is the live price at DETECTION, so it
+    # is an estimate of your exit, not a confirmed one — correct it or reopen.
+    auto_closed: bool = False
+    auto_close_reason: Optional[str] = None
     notes: Optional[str] = None
     events: list[TradeEvent] = []
 

@@ -73,6 +73,17 @@ class Settings(BaseSettings):
         default=0.05, gt=0, le=0.5, alias="KITE_SL_LIMIT_BUFFER_PCT"
     )
 
+    # --- Journal auto-close (advisory bookkeeping; places NO orders) ---
+    # When a plan trigger fires, close the journal row so P&L, the daily loss
+    # limit and the open-position circuit breakers reflect it without waiting
+    # for a manual click. Tradewell cannot observe your real fill, so the row
+    # is flagged `auto_closed` and can be reopened.
+    auto_close_journal: bool = Field(default=True, alias="AUTO_CLOSE_JOURNAL")
+    # Comma-separated subset of: stop, target1, target2, invalidation, time_exit
+    auto_close_triggers: str = Field(
+        default="stop,target1,invalidation", alias="AUTO_CLOSE_TRIGGERS"
+    )
+
     # --- Position sizing guidance ---
     # Capital the sizing suggestion is computed against. 0 = unknown -> no
     # suggestion is shown (never guess a size on someone's behalf).

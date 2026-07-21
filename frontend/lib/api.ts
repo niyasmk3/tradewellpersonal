@@ -272,6 +272,9 @@ export interface Trade {
   exited_at: number | null;
   exit_premium: number | null;
   realized_pnl: number;
+  /** Tradewell closed this row on a plan trigger — not a fill you reported. */
+  auto_closed: boolean;
+  auto_close_reason: string | null;
   notes: string | null;
   events: TradeEvent[];
 }
@@ -372,6 +375,7 @@ export const api = {
   enterTrade: (symbol: string, mode: TradingMode, lots: number, entry_premium?: number, signal_id?: string) =>
     postJSON<Trade>("/trades/enter", { symbol, mode, lots, entry_premium, signal_id }),
   restartFeed: () => postJSON<AuthStatus>("/auth/feed/restart", {}),
+  reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),
   exitTrade: (id: string, exit_premium?: number) =>
     postJSON<Trade>(`/trades/${id}/exit`, { exit_premium }),
   partialTrade: (id: string, exit_premium?: number, fraction = 0.5) =>

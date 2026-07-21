@@ -105,6 +105,23 @@ def update_trade(tid: str, body: UpdateRequest) -> Trade:
     return updated
 
 
+@router.post("/{tid}/reopen", response_model=Trade)
+def reopen(tid: str) -> Trade:
+    """Reverse an auto-close: you are in fact still holding this position.
+
+    Tradewell closes rows on plan triggers without seeing your broker, so the
+    close is an inference. Only auto-closed rows can be reopened — a fill you
+    reported yourself is a fact, not a guess.
+    """
+    t = trade_store.reopen(tid)
+    if t is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Only an auto-closed trade can be reopened",
+        )
+    return t
+
+
 @router.post("/{tid}/ignore", response_model=Trade)
 def ignore_trade(tid: str) -> Trade:
     updated = trade_store.ignore(tid)

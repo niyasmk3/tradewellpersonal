@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 
+from app.config import get_settings
 from app.state import MarketState
 from app.trades import monitor
 from app.trades.store import TradeStore
@@ -25,6 +26,16 @@ class TradeMonitorService:
         self.state = state
         self.store = store
 
+    def _auto_close_set(self) -> set[str]:
+        cfg = get_settings()
+        if not cfg.auto_close_journal:
+            return set()
+        names = {n.strip().lower() for n in cfg.auto_close_triggers.split(",") if n.strip()}
+        unknown = names - set(monitor.AUTO_CLOSE_NAMES)
+        if unknown:
+            log.warning("ignoring unknown AUTO_CLOSE_TRIGGERS: %s", ", ".join(sorted(unknown)))
+        return names & set(monitor.AUTO_CLOSE_NAMES)
+
     def run_once(self) -> None:
         ist_min = _ist_minutes()
         ist_day = _ist_date()
@@ -40,3 +51,20 @@ class TradeMonitorService:
             monitor.evaluate(trade, current, spot, ist_min, ist_day)
 
         self.store.apply_monitor(updater)
+
+        # Auto-close runs AFTER the monitor pass and outside the updater, not
+        # inside it: apply_monitor holds the store lock while iterating the live
+        # trades, and auto_close takes the same lock to write. Collecting the
+        # decisions first, then acting, keeps that re-entrancy impossible.
+        enabled = self._auto_close_set()
+        if not enabled:
+            return
+        for trade in self.store.all():
+            reason = monitor.auto_close_trigger(trade, enabled)
+            if reason is None:
+                continue
+            px = trade.current_premium
+            closed = self.store.auto_close(trade.id, float(px), reason)
+            if closed is not None:
+                log.info("auto-closed %s (%s) @ ₹%s — advisory only, no order placed",
+                         trade.contract, reason, px)

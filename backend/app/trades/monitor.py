@@ -13,6 +13,42 @@ from app.trades.models import Trade, TradeAction, TradeEvent, TradeStatus
 _TRAIL_PCT = 0.12          # once in profit, trail 12% below the live premium
 _INTRADAY_EXIT_MIN = 15 * 60 + 10   # 15:10 IST — start flagging intraday exit
 
+AUTO_CLOSE_NAMES = ("stop", "target1", "target2", "invalidation", "time_exit")
+
+
+def auto_close_trigger(trade: Trade, enabled: set[str]) -> str | None:
+    """Which enabled trigger (if any) says this position should now be closed.
+
+    Bookkeeping only. Tradewell places no order, so this records what the plan
+    says happened — it cannot know that YOU actually exited, which is why the
+    close it produces is marked `auto_closed` and stays reversible.
+
+    Target 1 is tested on the PRICE, not on the recommendation: at T1 the
+    monitor advises "book partial, trail the rest" (or trails a single lot), so
+    it never emits a TARGET1 recommendation and a recommendation-based check
+    would silently never fire.
+
+    Order matters — stop and invalidation outrank the targets, so a bar that
+    reaches both is recorded as the loss, never the win.
+    """
+    if trade.status not in (TradeStatus.ENTERED, TradeStatus.PARTIAL):
+        return None
+    px = trade.current_premium
+    if px is None or px <= 0:
+        return None                      # never close on a stale/absent premium
+
+    if "stop" in enabled and trade.recommendation is TradeAction.STOPLOSS:
+        return "stop"
+    if "invalidation" in enabled and trade.recommendation is TradeAction.INVALIDATED:
+        return "invalidation"
+    if "time_exit" in enabled and trade.recommendation is TradeAction.TIME_EXIT:
+        return "time_exit"
+    if "target2" in enabled and px >= trade.target2:
+        return "target2"
+    if "target1" in enabled and px >= trade.target1:
+        return "target1"
+    return None
+
 
 def _event(trade: Trade, kind: str, note: str) -> None:
     trade.events.append(TradeEvent(ts=int(time.time()), kind=kind, note=note))

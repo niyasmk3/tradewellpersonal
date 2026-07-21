@@ -210,6 +210,63 @@ class TradeStore:
 
         return self._apply(tid, fn)
 
+    def auto_close(self, tid: str, exit_premium: float, reason: str) -> Trade | None:
+        """Close a row on a plan trigger, flagged as Tradewell's own doing.
+
+        Distinct from `exit_trade` on purpose. That records a fill YOU report;
+        this records what the plan says should have happened, at the live
+        premium seen at detection. No order was placed, so the price is an
+        estimate of your exit and the row stays reversible via `reopen`.
+        """
+        def fn(t: Trade) -> None:
+            if t.status not in _OPEN:
+                return
+            realized = round((exit_premium - t.entry_premium) * t.quantity, 2)
+            t.realized_pnl = round(t.realized_pnl + realized, 2)
+            t.exit_premium = exit_premium
+            t.pnl = t.realized_pnl
+            t.status = TradeStatus.EXITED
+            t.exited_at = _now()
+            t.auto_closed = True
+            t.auto_close_reason = reason
+            t.events.append(TradeEvent(
+                ts=_now(), kind="auto_closed",
+                note=(f"Auto-closed on {reason} @ ₹{exit_premium} (estimated) · "
+                      f"P&L ₹{t.realized_pnl} — no order was placed"),
+            ))
+
+        return self._apply(tid, fn)
+
+    def reopen(self, tid: str, exit_premium: float | None = None) -> Trade | None:
+        """Undo an auto-close: you are still holding, or filled elsewhere.
+
+        Only auto-closed rows may be reopened — a fill you reported yourself is
+        a fact, and quietly reversing it would corrupt the journal.
+        """
+        def fn(t: Trade) -> None:
+            if not t.auto_closed or t.status is not TradeStatus.EXITED:
+                return
+            # Roll back exactly what auto_close booked.
+            realized = round((t.exit_premium - t.entry_premium) * t.quantity, 2) if t.exit_premium else 0.0
+            t.realized_pnl = round(t.realized_pnl - realized, 2)
+            # Back to PARTIAL only if lots were genuinely booked earlier — a
+            # residual realized_pnl of 0.00 is not proof either way.
+            booked = any(e.kind == "partial" for e in t.events)
+            t.status = TradeStatus.PARTIAL if booked else TradeStatus.ENTERED
+            t.exited_at = None
+            t.exit_premium = None
+            t.auto_closed = False
+            t.auto_close_reason = None
+            t.pnl = None
+            t.events.append(TradeEvent(ts=_now(), kind="reopened",
+                                       note="Auto-close reversed — position still held"))
+
+        with self._lock:
+            t = self._trades.get(tid)
+            if t is None or not t.auto_closed:
+                return None
+        return self._apply(tid, fn)
+
     def note_stop_handoff(self, tid: str, trigger: float) -> int:
         """Record that a protective stop was handed to Kite; return prior count.
 

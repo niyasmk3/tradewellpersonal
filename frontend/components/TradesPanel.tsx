@@ -220,7 +220,7 @@ export function TradesPanel({
 }
 
 /** Closed-trade journal — a review surface, so it lives in the context rail. */
-export function TradeJournal({ trades }: { trades: Trade[] }) {
+export function TradeJournal({ trades, onChange }: { trades: Trade[]; onChange?: () => void }) {
   const closed = trades.filter((t) => t.status === "exited" || t.status === "ignored");
   const { today, total } = realizedSummary(trades);
 
@@ -254,6 +254,30 @@ export function TradeJournal({ trades }: { trades: Trade[] }) {
                 </span>
               )}
             </div>
+            {/* An auto-close is Tradewell's inference, not a fill you reported:
+                no order was placed, so the price is the live premium at
+                detection. Say so, and offer the way back. */}
+            {t.auto_closed && (
+              <div className="mt-1 flex items-center gap-1.5 rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-400">
+                <span>
+                  auto-closed on {t.auto_close_reason} · price estimated, no order was placed
+                </span>
+                <button
+                  onClick={async () => {
+                    if (!window.confirm("Reopen this position? Use it if you are still holding in Kite.")) return;
+                    try {
+                      await api.reopenTrade(t.id);
+                      onChange?.();
+                    } catch (e) {
+                      alert(e instanceof Error ? e.message : "could not reopen");
+                    }
+                  }}
+                  className="ml-auto shrink-0 underline decoration-dotted hover:text-white"
+                >
+                  still holding?
+                </button>
+              </div>
+            )}
             {t.status !== "ignored" && (
               // The audit trail: what you paid, what you got, when, and how long
               // you held it — so a trade can actually be reviewed after the fact.

@@ -134,7 +134,7 @@ export function Dashboard() {
       node: <NewsPanel data={news.data} error={news.error} bare />,
       badge: (news.data?.items ?? []).some((n) => n.is_market_moving),
     },
-    { key: "journal", label: "Journal", node: <TradeJournal trades={allTrades} /> },
+    { key: "journal", label: "Journal", node: <TradeJournal trades={allTrades} onChange={refreshTrades} /> },
     ...(symbol === "NIFTY"
       ? [{ key: "backtest", label: "Backtest", node: <BacktestPanel symbol={symbol} /> }]
       : []),
