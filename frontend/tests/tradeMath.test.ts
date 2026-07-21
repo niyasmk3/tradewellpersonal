@@ -6,7 +6,7 @@
  * formula, and this is the one file in the app where a wrong formula shows a
  * trader a false rupee amount.
  */
-import { axisPositions, breakevenPremium, economics, estimateCharges } from "../lib/tradeMath";
+import { axisPositions, breakevenPremium, economics, estimateCharges, returnPct } from "../lib/tradeMath";
 
 let failed = 0;
 function check(name: string, got: unknown, want: unknown) {
@@ -134,6 +134,30 @@ check("lapse cheaper than round trip", lapse.total < rt.total, true);
 check("STT scales with exit price", estimateCharges(100, 175, 75, 2)!.total > estimateCharges(100, 75, 75, 2)!.total, true);
 check("charges null on zero qty", estimateCharges(100, 175, 0, 2), null);
 check("breakevenPremium matches economics", breakevenPremium(100, 75), e1.breakeven);
+
+// --- journal return % -------------------------------------------------------
+// 1 lot: 75 qty at Rs 120 = Rs 9,000 deployed. Exit at 150 -> +Rs 2,250.
+// 2250 / 9000 = 25.00%
+check("returnPct simple", returnPct(2250, 120, 75, 75), 25);
+check("returnPct loss", returnPct(-1575, 120, 75, 75), -17.5);
+check("returnPct flat", returnPct(0, 120, 75, 75), 0);
+
+// THE PARTIAL CASE. 2 lots (150 qty) at Rs 120 = Rs 18,000 deployed.
+// Book 1 lot at 150 (+2,250), exit the rest at 160 (+3,000) => +Rs 5,250.
+// book_partial has by now shrunk `quantity` to 75, so the naive denominator
+// would be Rs 9,000 and report 58.33% — more than double the truth.
+check("returnPct uses ENTRY size, not the remainder", returnPct(5250, 120, 150, 75), 29.17);
+check("naive denominator would have been wrong", returnPct(5250, 120, null, 75), 58.33);
+
+// Legacy rows carry no initial_quantity; with no partial the two agree.
+check("legacy row falls back to quantity", returnPct(2250, 120, null, 75), 25);
+check("legacy row: undefined too", returnPct(2250, 120, undefined, 75), 25);
+
+// Degenerate inputs must yield null, never a bogus percentage.
+check("returnPct zero entry", returnPct(2250, 0, 75, 75), null);
+check("returnPct zero qty", returnPct(2250, 120, 0, 0), null);
+check("returnPct NaN pnl", returnPct(NaN, 120, 75, 75), null);
+
 
 console.log(failed === 0 ? "\nALL PASSED" : `\n${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

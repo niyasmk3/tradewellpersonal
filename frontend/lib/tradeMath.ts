@@ -195,6 +195,30 @@ export function estimateCharges(
 }
 
 /**
+ * Return on a closed trade, as a percentage of the premium actually deployed.
+ *
+ * The denominator is the size at ENTRY, not the size left at exit. Booking a
+ * partial shrinks `quantity`, so dividing the whole realised P&L by the
+ * remainder inflates the figure — a 2-lot trade half-booked reads roughly
+ * double its true return. Callers pass `initial_quantity`, falling back to
+ * `quantity` only for legacy rows, where no partial ran and the two are equal.
+ *
+ * Gross, matching the rupee figure beside it; charges are shown separately.
+ */
+export function returnPct(
+  realizedPnl: number,
+  entryPremium: number,
+  initialQty: number | null | undefined,
+  fallbackQty: number,
+): number | null {
+  const qty = initialQty && initialQty > 0 ? initialQty : fallbackQty;
+  if (!(qty > 0) || !(entryPremium > 0)) return null;
+  const deployed = entryPremium * qty;
+  if (!Number.isFinite(realizedPnl) || deployed <= 0) return null;
+  return round2((realizedPnl / deployed) * 100);
+}
+
+/**
  * Closed-form breakeven: the premium P at which (P−E)·qty exactly equals the
  * round-trip charges on a buy at E and a sell at P. Solving for P rather than
  * iterating keeps it exact.

@@ -54,7 +54,12 @@ class Trade(BaseModel):
     entry_premium: float
     lots: int
     lot_size: int
-    quantity: int                        # lots * lot_size
+    quantity: int                        # lots * lot_size; SHRINKS on a partial
+    # Size at entry, never mutated. book_partial reduces `quantity`, so it is
+    # the wrong denominator for a return figure — dividing the full realised
+    # P&L by the remainder inflates it (2 lots half-booked reads ~2x). None on
+    # legacy rows, where `quantity` is still correct because no partial ran.
+    initial_quantity: Optional[int] = None
     # Kite product the position was opened with. A protective SELL MUST carry
     # the same one: MIS and NRML are separate books, so a mismatched exit order
     # opens a NEW short leg instead of closing the long. None on legacy rows.

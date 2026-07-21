@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Trade, TradeAction, api } from "@/lib/api";
 import { fetchKiteProtect, submitKiteBasket } from "@/lib/kiteBasket";
 import { fmt, istTime, istToday, parseNum, pctFrom, signed } from "@/lib/format";
+import { returnPct } from "@/lib/tradeMath";
 
 const REC_LABEL: Record<TradeAction, string> = {
   hold: "Hold",
@@ -267,6 +268,23 @@ export function TradeJournal({ trades, onChange }: { trades: Trade[]; onChange?:
               ) : (
                 <span className={`ml-auto font-mono ${t.realized_pnl >= 0 ? "text-bull" : "text-bear"}`}>
                   ₹{signed(t.realized_pnl, 0)}
+                  {(() => {
+                    // Return on the premium DEPLOYED AT ENTRY. `quantity`
+                    // shrinks when lots are booked, so it is the wrong base.
+                    const pct = returnPct(
+                      t.realized_pnl, t.entry_premium, t.initial_quantity, t.quantity,
+                    );
+                    return pct === null ? null : (
+                      <span
+                        className="ml-1 text-[10px] opacity-80"
+                        title={`Return on ₹${Math.round(
+                          t.entry_premium * (t.initial_quantity || t.quantity),
+                        ).toLocaleString("en-IN")} deployed at entry (gross of charges)`}
+                      >
+                        {signed(pct, 1)}%
+                      </span>
+                    );
+                  })()}
                 </span>
               )}
             </div>

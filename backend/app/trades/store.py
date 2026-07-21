@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -35,6 +36,38 @@ _OPEN = (TradeStatus.ENTERED, TradeStatus.PARTIAL)
 
 def _now() -> int:
     return int(time.time())
+
+
+_ENTERED_LOTS = re.compile(r"Entered\s+(\d+)\s+lot")
+
+
+def _backfill_initial_quantity(t: Trade) -> None:
+    """Recover the entry size on rows written before the field existed.
+
+    `quantity` shrinks each time lots are booked, so on a partially-booked row
+    it is the REMAINDER, while `realized_pnl` covers every leg. Dividing one by
+    the other overstates the return badly — a real 10-lot row that booked four
+    partials read -118.8%, which is impossible for a bought option.
+
+    Rows with no partial are unambiguous: quantity never moved. Rows with one
+    parse the lot count out of their own "Entered N lot(s)" event, which this
+    codebase wrote itself. Anything unparseable is left as None so the UI shows
+    no percentage rather than a wrong one.
+    """
+    if t.initial_quantity:
+        return
+    if not any(e.kind == "partial" for e in t.events):
+        t.initial_quantity = t.quantity
+        return
+    for e in t.events:
+        if e.kind != "entered":
+            continue
+        m = _ENTERED_LOTS.search(e.note or "")
+        if m:
+            qty = int(m.group(1)) * max(1, t.lot_size)
+            if qty >= t.quantity:          # sanity: never smaller than what is left
+                t.initial_quantity = qty
+        return
 
 
 class TradeStore:
@@ -64,6 +97,7 @@ class TradeStore:
         for raw in data:
             try:  # one bad record must not drop the rest
                 t = Trade.model_validate(raw)
+                _backfill_initial_quantity(t)
                 self._trades[t.id] = t
             except Exception:
                 log.warning("unparseable trade record kept as orphan (won't be lost on save)")
@@ -97,6 +131,7 @@ class TradeStore:
                 direction=card.direction, contract=card.contract, strike=card.strike,
                 expiry=card.expiry, token=card.token, entry_premium=entry_premium,
                 lots=lots, lot_size=lot_size, quantity=lots * lot_size,
+                initial_quantity=lots * lot_size,
                 product=product,
                 status=TradeStatus.ENTERED, stop_loss=card.premium_sl,
                 target1=card.target1, target2=card.target2, trailing_sl=card.premium_sl,

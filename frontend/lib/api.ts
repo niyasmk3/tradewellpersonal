@@ -254,6 +254,8 @@ export interface Trade {
   lots: number;
   lot_size: number;
   quantity: number;
+  /** Size at entry — `quantity` shrinks on a partial, so this is the return base. */
+  initial_quantity: number | null;
   status: TradeStatus;
   stop_loss: number;
   target1: number;

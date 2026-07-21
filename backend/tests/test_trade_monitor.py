@@ -455,5 +455,52 @@ def test_confirmed_row_suppresses_price_based_autoclose():
     print("  BROKER -> confirmed rows are exempt from price-based auto-close")
 
 
+def test_initial_quantity_backfill_for_partially_booked_legacy_rows():
+    """A real journal row read -118.8% before this: 10 lots entered, four
+    partials booked, so `quantity` was the 1-lot REMAINDER while realized_pnl
+    covered all ten. A bought option cannot lose more than 100%."""
+    import json, pathlib as _p
+    from app.trades.store import TradeStore
+    tmp = _p.Path("/tmp/tw-backfill-test.json")
+    row = {
+        "id": "T-legacy", "signal_id": None, "symbol": "NIFTY",
+        "mode": "intraday", "direction": "PE", "contract": "NIFTY 24150 PE",
+        "strike": 24150.0, "expiry": "2026-07-21", "token": 1,
+        "entry_premium": 81.55, "lots": 1, "lot_size": 65, "quantity": 65,
+        "status": "exited", "stop_loss": 66.9, "target1": 100.0, "target2": 110.0,
+        "trailing_sl": 81.55, "created_at": NOW, "entered_at": NOW,
+        "exited_at": NOW + 500, "exit_premium": 71.85, "realized_pnl": -6298.5,
+        "events": [
+            {"ts": NOW, "kind": "entered", "note": "Entered 10 lot(s) @ Rs81.55"},
+            {"ts": NOW + 1, "kind": "partial", "note": "Booked 5 lot(s)"},
+            {"ts": NOW + 2, "kind": "partial", "note": "Booked 2 lot(s)"},
+            {"ts": NOW + 3, "kind": "exited", "note": "Exited"},
+        ],
+    }
+    tmp.write_text(json.dumps([row]))
+    t = TradeStore(path=tmp).get("T-legacy")
+    assert t.initial_quantity == 650, t.initial_quantity
+    pct = t.realized_pnl / (t.initial_quantity * t.entry_premium) * 100
+    assert -100 < pct < 0, pct
+    print(f"  BACKFILL -> 10-lot legacy row: init 650, return {pct:.1f}% (was -118.8%)")
+
+    # A row with NO partial is unambiguous: quantity never moved.
+    row2 = dict(row, id="T-nopartial", quantity=650, lots=10,
+                events=[{"ts": NOW, "kind": "entered", "note": "Entered 10 lot(s) @ Rs81.55"}])
+    tmp.write_text(json.dumps([row2]))
+    assert TradeStore(path=tmp).get("T-nopartial").initial_quantity == 650
+    print("  BACKFILL -> no-partial row keeps its own quantity")
+
+    # Unparseable entry note + partials -> None, so the UI shows NO percentage
+    # rather than a wrong one.
+    row3 = dict(row, id="T-weird",
+                events=[{"ts": NOW, "kind": "entered", "note": "???"},
+                        {"ts": NOW + 1, "kind": "partial", "note": "Booked"}])
+    tmp.write_text(json.dumps([row3]))
+    assert TradeStore(path=tmp).get("T-weird").initial_quantity is None
+    print("  BACKFILL -> unparseable row yields None, never a guess")
+    tmp.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     _main()
