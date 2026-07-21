@@ -31,6 +31,24 @@ def list_trades() -> list[Trade]:
     return trade_store.all()
 
 
+@router.get("/excursion")
+def excursion(source: str = "live") -> dict:
+    """How far trades actually ran before ending — the target/stop evidence.
+
+    `source=paper` reads the simulated book, which accumulates far faster than
+    the live one and is the intended way to gather a usable sample.
+    """
+    from app.trades import excursion as exc
+
+    if source == "paper":
+        from app.services import feed
+        store = getattr(feed, "paper_store", None)
+        if store is None:
+            raise HTTPException(status_code=409, detail="Paper trading is off")
+        return exc.target_curve(store.all())
+    return exc.target_curve(trade_store.all())
+
+
 @router.post("/enter", response_model=Trade)
 def enter(body: EnterRequest) -> Trade:
     """Create a tracked trade from the currently-active signal for (symbol, mode)."""

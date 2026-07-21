@@ -107,6 +107,14 @@ def evaluate(
         # otherwise: keep the existing recommendation untouched
         return
 
+    # Excursion first, so it is recorded even on the cycle that closes the
+    # trade — the extreme that triggers an exit is part of the trade's history.
+    now_ts = int(time.time())
+    if trade.mfe_premium is None or current_premium > trade.mfe_premium:
+        trade.mfe_premium, trade.mfe_at = current_premium, now_ts
+    if trade.mae_premium is None or current_premium < trade.mae_premium:
+        trade.mae_premium, trade.mae_at = current_premium, now_ts
+
     trade.current_premium = current_premium
     entry = trade.entry_premium
     trade.pnl = round((current_premium - entry) * trade.quantity + trade.realized_pnl, 2)

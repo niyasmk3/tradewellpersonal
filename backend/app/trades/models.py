@@ -77,6 +77,19 @@ class Trade(BaseModel):
     invalidation_level: Optional[float] = None
     invalidation_dir: Optional[str] = None
 
+    # --- excursion, recorded by the monitor while the position is OPEN ---
+    # MFE = best premium seen, MAE = worst. Because they stop updating when the
+    # trade closes, they are bounded by the trade's own life — so "MFE >= 15%"
+    # on a stopped-out row means precisely "a 15% target would have caught this
+    # BEFORE the stop did", which is the question worth answering.
+    #
+    # Sampled at the monitor's cadence (~5s), not tick by tick, so both are
+    # conservative: the true extremes are at least this far out, never less.
+    mfe_premium: Optional[float] = None
+    mfe_at: Optional[int] = None
+    mae_premium: Optional[float] = None
+    mae_at: Optional[int] = None
+
     # live, updated by the monitor
     current_premium: Optional[float] = None
     pnl: Optional[float] = None
