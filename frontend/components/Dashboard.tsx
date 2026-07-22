@@ -18,6 +18,7 @@ import { SignalPanel } from "./SignalPanel";
 import { TradesPanel, TradeJournal, realizedSummary } from "./TradesPanel";
 import { NewsPanel } from "./NewsPanel";
 import { BacktestPanel } from "./BacktestPanel";
+import { RiskSettings } from "./RiskSettings";
 import { PaperPanel } from "./PaperPanel";
 
 // lightweight-charts touches the DOM — load the chart client-side only.
@@ -124,6 +125,7 @@ export function Dashboard() {
   // Context rail: tabs stay user-controlled (never auto-switch — the layout must
   // not move under the cursor mid-session).
   const [ctxTab, setCtxTab] = useState("chain");
+  const [riskOpen, setRiskOpen] = useState(false);
   const allTrades = trades.data ?? [];
   const openTrades = allTrades.filter((t) => t.status === "entered" || t.status === "partial");
   const hasOpen = openTrades.length > 0;
@@ -175,6 +177,7 @@ export function Dashboard() {
         alerts={alerts}
         realizedToday={realized.today}
         realizedTotal={realized.total}
+        onRiskSettings={() => setRiskOpen(true)}
         className="mx-2 mt-2 shrink-0"
       />
 
@@ -247,6 +250,8 @@ export function Dashboard() {
           <ContextRail tabs={ctxTabs} tab={ctxTab} onTab={setCtxTab} className="min-h-0 flex-1" />
         </section>
       </main>
+
+      {riskOpen && <RiskSettings onClose={() => setRiskOpen(false)} />}
     </div>
   );
 }

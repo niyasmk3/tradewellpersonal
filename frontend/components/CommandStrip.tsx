@@ -39,6 +39,7 @@ export function CommandStrip({
   alerts,
   realizedToday,
   realizedTotal,
+  onRiskSettings,
   className = "",
 }: {
   status: MarketStatus | null;
@@ -53,6 +54,7 @@ export function CommandStrip({
   alerts: { muted: boolean; toggle: () => void };
   realizedToday: number;
   realizedTotal: number;
+  onRiskSettings?: () => void;
   className?: string;
 }) {
   const biasTone =
@@ -137,6 +139,15 @@ export function CommandStrip({
         >
           {alerts.muted ? "🔕" : "🔔"}
         </button>
+        {onRiskSettings && (
+          <button
+            onClick={onRiskSettings}
+            title="Risk limits — daily loss, open drawdown, streak and position caps"
+            className="rounded-md border border-edge bg-panel px-2 py-0.5 text-xs text-muted transition hover:text-white"
+          >
+            🛡
+          </button>
+        )}
       </span>
     </div>
   );

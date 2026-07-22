@@ -22,6 +22,7 @@ from app.signals.models import (
     SignalResponse,
 )
 from app.signals.store import RiskState, SignalStore, ThrottleConfig
+from app.signals.risk_limits import risk_limit_store
 from app.state import MarketState
 from app.trades.store import trade_store
 
@@ -63,15 +64,26 @@ class SignalService:
         self.store = store
         self.engine = SignalEngine(cfg)
         self.profiles = build_profiles(cfg)
-        self.throttle = ThrottleConfig(
-            max_per_day=cfg.signal_max_per_day,
-            min_gap_s=cfg.signal_min_gap_s,
-            cooldown_s=cfg.signal_cooldown_s,
-            flip_guard_s=cfg.signal_flip_guard_s,
-            max_consecutive_losses=cfg.signal_max_consecutive_losses,
-            daily_loss_limit=cfg.signal_daily_loss_limit,
-            max_open_positions=cfg.signal_max_open_positions,
-            max_open_drawdown=cfg.signal_max_open_drawdown,
+
+    def _throttle(self) -> ThrottleConfig:
+        """Built FRESH each evaluation, not cached at init.
+
+        The four loss/breaker limits are editable live from the UI, so the
+        throttle must read them at decision time — caching them here would mean
+        a limit set at 11:00 did nothing until the next backend restart. The
+        timing fields (per-day cap, gaps, flip guard) stay .env-only and come
+        straight from config.
+        """
+        limits = risk_limit_store.effective(self.cfg)
+        return ThrottleConfig(
+            max_per_day=self.cfg.signal_max_per_day,
+            min_gap_s=self.cfg.signal_min_gap_s,
+            cooldown_s=self.cfg.signal_cooldown_s,
+            flip_guard_s=self.cfg.signal_flip_guard_s,
+            max_consecutive_losses=int(limits["max_consecutive_losses"]),
+            daily_loss_limit=limits["daily_loss_limit"],
+            max_open_positions=int(limits["max_open_positions"]),
+            max_open_drawdown=limits["max_open_drawdown"],
         )
 
     def _risk_state(self, now: int) -> RiskState:
@@ -145,7 +157,8 @@ class SignalService:
         # capital is configured, and "no suggestion" must not mean "no numbers".
         card.lot_size = lot or None
         card.trading_capital = capital or None
-        card.daily_loss_limit = self.cfg.signal_daily_loss_limit or None
+        # Live value, so the card reflects a limit set from the UI this session.
+        card.daily_loss_limit = risk_limit_store.effective(self.cfg)["daily_loss_limit"] or None
 
         if capital <= 0:
             card.sizing_note = "Set TRADING_CAPITAL in .env for a size suggestion"
@@ -218,7 +231,7 @@ class SignalService:
             news=news_store.sentiment(symbol),
         )
         self._apply_sizing(fresh, symbol)
-        return self.store.reconcile(fresh, now, self.throttle, self._risk_state(now))
+        return self.store.reconcile(fresh, now, self._throttle(), self._risk_state(now))
 
     def evaluate_all(self) -> None:
         for symbol in self.cfg.signal_symbols:
