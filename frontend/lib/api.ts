@@ -202,6 +202,8 @@ export interface SignalCard {
   score: ScoreBreakdown;
   ref_spot: number | null;
   ref_entry_premium: number | null;
+  /** Live LTP of this card's option, fresh at request time; null if no tick. */
+  live_premium: number | null;
   /** Lots implied by TRADING_CAPITAL × RISK_PER_TRADE_PCT; null when unconfigured. */
   suggested_lots: number | null;
   sizing_note: string | null;

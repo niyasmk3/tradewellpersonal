@@ -48,6 +48,13 @@ def current_signal(symbol: str, mode: str = Query("intraday")) -> SignalResponse
     latest = signal_store.latest(symbol, tmode)
     if latest is None:
         raise HTTPException(status_code=503, detail="Signal engine warming up — no evaluation yet")
+    # Attach the live premium at request time (not at issue) so it ticks with
+    # each poll — latest() already returned a deep copy, so this is safe.
+    if latest.signal is not None and latest.signal.token is not None:
+        from app.state import market_state
+
+        ltp = market_state.ticks.get(latest.signal.token, {}).get("last_price")
+        latest.signal.live_premium = float(ltp) if ltp and ltp > 0 else None
     return latest
 
 

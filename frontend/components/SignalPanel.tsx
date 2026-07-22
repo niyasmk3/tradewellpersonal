@@ -313,6 +313,41 @@ export function SignalPanel({
         )}
       </div>
 
+      {/* LIVE price of this contract, against the entry zone — the "is it
+          buyable at this price right now" read. Ticks with each 3s poll. */}
+      {(() => {
+        const ltp = signal.live_premium;
+        if (ltp == null) {
+          return (
+            <div className="mt-1.5 px-3 text-[11px] text-muted">
+              LTP <span className="font-mono">—</span> · no live tick for this strike
+            </div>
+          );
+        }
+        const inZone = ltp >= signal.entry_low && ltp <= signal.entry_high;
+        const below = ltp < signal.entry_low;
+        const zoneLabel = inZone ? "in entry zone" : below ? "below zone — cheaper than plan" : "above zone — chasing";
+        const zoneTone = inZone ? "text-bull" : below ? "text-accent" : "text-yellow-400";
+        const ref = signal.ref_entry_premium ?? signal.entry_high;
+        const pct = ref ? ((ltp / ref - 1) * 100) : null;
+        return (
+          <div className="mt-1.5 flex items-center gap-2 px-3">
+            <span className="text-[10px] uppercase tracking-wide text-muted">LTP</span>
+            <span className={`font-mono text-lg leading-none ${zoneTone}`}>₹{fmt(ltp)}</span>
+            {pct != null && (
+              <span className="font-mono text-[11px] text-muted">
+                {pct >= 0 ? "+" : "−"}{Math.abs(pct).toFixed(1)}% vs plan
+              </span>
+            )}
+            <span className={`tag ml-auto ${
+              inZone ? "bg-bull/15 text-bull" : below ? "bg-accent/15 text-accent" : "bg-yellow-500/15 text-yellow-400"
+            }`}>
+              {zoneLabel}
+            </span>
+          </div>
+        );
+      })()}
+
       {/* key numbers — pinned */}
       <div className="mt-2 grid shrink-0 grid-cols-3 gap-1.5 px-3">
         <Stat label="Entry zone" value={`₹${fmt(signal.entry_low)}–₹${fmt(signal.entry_high)}`} />

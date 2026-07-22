@@ -159,6 +159,10 @@ class SignalCard(BaseModel):
     # reference values captured at creation (used by Phase 3 monitoring)
     ref_spot: Optional[float] = None
     ref_entry_premium: Optional[float] = None
+    # Live LTP of THIS card's option, attached fresh at request time (not
+    # persisted) so the UI can show what the contract is trading at right now
+    # against the entry zone. None when there is no live tick for the token.
+    live_premium: Optional[float] = None
 
     # Lots implied by TRADING_CAPITAL x RISK_PER_TRADE_PCT and this card's own
     # premium stop. None when capital isn't configured — the tool must not
