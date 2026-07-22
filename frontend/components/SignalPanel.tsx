@@ -71,6 +71,7 @@ export function SignalPanel({
   error,
   onEntered,
   onIgnore,
+  onReprice,
   className = "",
 }: {
   data: SignalResponse | null;
@@ -79,6 +80,7 @@ export function SignalPanel({
   error?: string | null;
   onEntered: () => void;
   onIgnore: (signalId: string) => void;
+  onReprice?: () => void;
   className?: string;
 }) {
   const signal = data?.signal ?? null;
@@ -98,6 +100,32 @@ export function SignalPanel({
   }, [signal?.id]);
 
   const expired = countdown === "expired" || (signal ? signal.state !== "active" : false);
+
+  // How long ago the card was PRICED. The Kite hand-off refuses anything older
+  // than 15 min because its entry zone was priced off a stale premium; a
+  // positional card stays "active" far longer, so it can look orderable while
+  // the hand-off rejects it. Surface that, with a one-click re-price.
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 5000);
+    return () => clearInterval(id);
+  }, []);
+  const [repricing, setRepricing] = useState(false);
+  const pricedAgoMin = signal ? Math.max(0, Math.floor((nowSec - signal.created_at) / 60)) : 0;
+  const STALE_MIN = 15; // must match _MAX_CARD_AGE_S on the backend
+
+  const reprice = async () => {
+    if (!signal) return;
+    setRepricing(true);
+    try {
+      await api.repriceSignal(symbol, mode);
+      onReprice?.(); // bump the parent poll so the fresh levels show at once
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "could not refresh the price");
+    } finally {
+      setRepricing(false);
+    }
+  };
 
   /**
    * Hand the order to Kite pre-filled. Tradewell places nothing — this opens
@@ -247,6 +275,34 @@ export function SignalPanel({
             title="This contract expires TODAY — gamma and theta are extreme; premiums move much faster than usual"
           >
             0DTE
+          </span>
+        )}
+        {/* Pricing freshness + one-click re-price. Only shown once the pricing
+            is old enough to matter; goes amber past the hand-off's 15-min cutoff. */}
+        {!expired && pricedAgoMin >= 5 && (
+          <span className="ml-auto flex items-center gap-1.5">
+            <span
+              className={`text-[10px] ${pricedAgoMin >= STALE_MIN ? "text-yellow-400" : "text-muted"}`}
+              title={
+                pricedAgoMin >= STALE_MIN
+                  ? `Priced ${pricedAgoMin}m ago — too old to place in Kite. Refresh to re-price against the current premium.`
+                  : `Priced ${pricedAgoMin}m ago`
+              }
+            >
+              priced {pricedAgoMin}m ago
+            </span>
+            <button
+              onClick={reprice}
+              disabled={repricing}
+              title="Re-price this trade against the current premium — same strike, today's price"
+              className={`rounded border px-1.5 py-0.5 text-[10px] transition disabled:opacity-40 ${
+                pricedAgoMin >= STALE_MIN
+                  ? "border-yellow-500/60 bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25"
+                  : "border-edge bg-panel text-muted hover:text-white"
+              }`}
+            >
+              {repricing ? "…" : "↻ Refresh"}
+            </button>
           </span>
         )}
       </div>

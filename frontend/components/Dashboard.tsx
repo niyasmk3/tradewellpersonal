@@ -47,11 +47,14 @@ export function Dashboard() {
   // Signals run on NIFTY only. Both modes are polled ALWAYS — regardless of the
   // viewed symbol/mode — so alerts can fire while you watch another chart.
   const modesOn = enabledModes.data?.modes ?? ["intraday", "positional"];
+  // Bumped after a re-price so the refreshed levels appear immediately rather
+  // than on the next 3s poll.
+  const [sigTick, setSigTick] = useState(0);
   const intradaySig = usePolling(
-    () => api.signal("NIFTY", "intraday"), 3000, [], modesOn.includes("intraday"),
+    () => api.signal("NIFTY", "intraday"), 3000, [sigTick], modesOn.includes("intraday"),
   );
   const positionalSig = usePolling(
-    () => api.signal("NIFTY", "positional"), 3000, [], modesOn.includes("positional"),
+    () => api.signal("NIFTY", "positional"), 3000, [sigTick], modesOn.includes("positional"),
   );
   const signalRes = mode === "positional" ? positionalSig : intradaySig;
   const news = usePolling(() => api.news(), 15000, []);
@@ -227,6 +230,7 @@ export function Dashboard() {
             error={signalRes.error}
             onEntered={refreshTrades}
             onIgnore={(id) => setDismissed(id)}
+            onReprice={() => setSigTick((n) => n + 1)}
             className="min-h-0 flex-1"
           />
         </section>

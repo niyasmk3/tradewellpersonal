@@ -19,6 +19,43 @@ def _round_tick(x: float) -> float:
     return round(round(x / _TICK) * _TICK, 2)
 
 
+def price_ladder(
+    entry: float,
+    premium_sl_pct: float,
+    rr1: float,
+    rr2: float,
+    disaster_pct: float | None = None,
+    quick_pct: float | None = None,
+) -> dict:
+    """The premium levels derived purely from `entry` — entry zone, stop,
+    targets, disaster backstop, early-partial level.
+
+    Extracted so a REFRESH can re-price a card against the current premium with
+    the exact same maths `build` uses at issue time; two copies would drift.
+    The invalidation is NOT here — it is an index-structure level, recomputed
+    separately from candles, not a function of the premium.
+    """
+    premium_sl = _round_tick(entry * (1 - premium_sl_pct))
+    risk = max(entry - premium_sl, _TICK)
+    target1 = _round_tick(entry + risk * rr1)
+    target2 = _round_tick(entry + risk * rr2)
+    disaster_sl = _round_tick(entry * (1 - disaster_pct)) if disaster_pct else None
+    quick_target = _round_tick(entry * (1 + quick_pct)) if quick_pct else None
+    if quick_target and quick_target >= target1:
+        quick_target = None
+    return {
+        "entry_low": _round_tick(entry * 0.99),
+        "entry_high": _round_tick(entry * 1.02),
+        "premium_sl": premium_sl,
+        "disaster_sl": disaster_sl,
+        "quick_target": quick_target,
+        "target1": target1,
+        "target2": target2,
+        "trailing_sl_rule": f"Move SL to entry (₹{entry:.2f}) after Target 1",
+        "risk_reward": round(rr1, 2),
+    }
+
+
 def build(
     direction: Direction,
     entry: float,
@@ -58,35 +95,19 @@ def build(
         underlying = f"{symbol} must stay below {level_idx:.0f}"
         note = f"Exit if {symbol} closes above {level_idx:.0f} on the {timeframe} candle"
 
-    # --- premium stop + targets ---
-    premium_sl = _round_tick(entry * (1 - premium_sl_pct))
-    risk = max(entry - premium_sl, _TICK)
-    target1 = _round_tick(entry + risk * rr1)
-    target2 = _round_tick(entry + risk * rr2)
-
-    entry_low = _round_tick(entry * 0.99)
-    entry_high = _round_tick(entry * 1.02)
-
-    # Backstop for when the index invalidation is the primary stop. Deliberately
-    # NOT used to derive targets or the risk unit: at 45% a 1.5R target would sit
-    # +68% away, which no intraday option move reaches.
-    disaster_sl = _round_tick(entry * (1 - disaster_pct)) if disaster_pct else None
-    # Early partial level. Sits well below target1 by construction; if a config
-    # ever pushes it past T1 it would be meaningless, so it is dropped instead.
-    quick_target = _round_tick(entry * (1 + quick_pct)) if quick_pct else None
-    if quick_target and quick_target >= target1:
-        quick_target = None
+    # --- premium stop + targets (shared with the refresh path) ---
+    ladder = price_ladder(entry, premium_sl_pct, rr1, rr2, disaster_pct, quick_pct)
 
     return RiskPlan(
-        entry_low=entry_low,
-        entry_high=entry_high,
-        premium_sl=premium_sl,
-        disaster_sl=disaster_sl,
-        quick_target=quick_target,
-        target1=target1,
-        target2=target2,
-        trailing_sl_rule=f"Move SL to entry (₹{entry:.2f}) after Target 1",
-        risk_reward=round(rr1, 2),
+        entry_low=ladder["entry_low"],
+        entry_high=ladder["entry_high"],
+        premium_sl=ladder["premium_sl"],
+        disaster_sl=ladder["disaster_sl"],
+        quick_target=ladder["quick_target"],
+        target1=ladder["target1"],
+        target2=ladder["target2"],
+        trailing_sl_rule=ladder["trailing_sl_rule"],
+        risk_reward=ladder["risk_reward"],
         underlying_invalidation=underlying,
         invalidation_note=note,
         invalidation_level=level_idx,

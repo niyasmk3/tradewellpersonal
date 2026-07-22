@@ -54,3 +54,56 @@ def signal_history(symbol: str, mode: str = Query("intraday")) -> list[SignalCar
 
     tmode = _resolve(symbol, mode)
     return signal_store.history(symbol, tmode)
+
+
+@router.post("/{symbol}/reprice", response_model=SignalCard)
+def reprice_signal(symbol: str, mode: str = Query("intraday")) -> SignalCard:
+    """Re-price the active card against the CURRENT premium so it is orderable
+    again — the same trade at today's price.
+
+    A positional card stays valid for the session, but the Kite hand-off refuses
+    anything older than 15 minutes because its entry zone was priced off a stale
+    premium. This recomputes that zone (and the stop/targets) from the live LTP
+    of the same strike, using the exact ladder the engine issues with, and
+    re-stamps the card so the hand-off accepts it.
+    """
+    import time
+
+    from app.signals import risk as risk_mod
+    from app.signals.modes import build_profiles
+    from app.signals.store import signal_store
+    from app.state import market_state
+
+    tmode = _resolve(symbol, mode)
+    cfg = get_settings()
+    resp = signal_store.latest(symbol, tmode)
+    if resp is None or resp.signal is None:
+        raise HTTPException(status_code=409, detail="No active signal to refresh")
+    card = resp.signal
+    if card.token is None:
+        raise HTTPException(status_code=409, detail="This card has no tracked contract to re-price")
+
+    # The live premium of the SAME strike. Refusing without it is the point —
+    # a refresh that fell back to a stale reference would defeat itself.
+    tick = market_state.ticks.get(card.token, {})
+    ltp = tick.get("last_price")
+    if not ltp or ltp <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail="No live premium for this strike right now — cannot re-price",
+        )
+
+    profile = build_profiles(cfg).get(mode)
+    if profile is None:
+        raise HTTPException(status_code=409, detail=f"Mode '{mode}' is not enabled")
+
+    disaster_pct = (cfg.premium_disaster_pct
+                    if cfg.stop_primary == "underlying" and cfg.trading_capital > 0 else None)
+    ladder = risk_mod.price_ladder(
+        float(ltp), profile.premium_sl_pct, profile.rr_target1, profile.rr_target2,
+        disaster_pct=disaster_pct, quick_pct=cfg.quick_target_pct or None,
+    )
+    refreshed = signal_store.reprice_active(symbol, tmode, float(ltp), ladder, int(time.time()))
+    if refreshed is None:
+        raise HTTPException(status_code=409, detail="No active signal to refresh")
+    return refreshed

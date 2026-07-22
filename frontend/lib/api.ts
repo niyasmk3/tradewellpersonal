@@ -424,6 +424,8 @@ export const api = {
   restartFeed: () => postJSON<AuthStatus>("/auth/feed/restart", {}),
   paperSummary: () => getJSON<PaperSummary>("/paper/summary"),
   reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),
+  repriceSignal: (symbol: string, mode: TradingMode) =>
+    postJSON<SignalCard>(`/signals/${symbol}/reprice?mode=${mode}`, {}),
   exitTrade: (id: string, exit_premium?: number) =>
     postJSON<Trade>(`/trades/${id}/exit`, { exit_premium }),
   partialTrade: (id: string, exit_premium?: number, fraction = 0.5) =>

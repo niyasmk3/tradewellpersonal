@@ -269,6 +269,49 @@ class SignalStore:
         if now:
             self._slot(key, now).last_retired_at = now  # starts the cooldown
 
+    def reprice_active(
+        self, symbol: str, mode: TradingMode, new_entry: float, ladder: dict, now: int,
+    ) -> SignalCard | None:
+        """Re-price the ACTIVE card's premium levels against `new_entry`.
+
+        Keeps the card's identity, strike, direction and index invalidation —
+        it is the same trade at today's price. Only the premium-derived ladder
+        (entry zone, stop, targets, backstop, early-partial) and the freshness
+        timestamps change. Returns the refreshed card, or None if there is no
+        active card to re-price.
+
+        Deliberately does NOT touch the daily throttle counters: refreshing a
+        card the user is already looking at is not a new signal, so it must not
+        consume the day's signal budget.
+        """
+        key = _key(symbol, mode)
+        with self._lock:
+            card = self._active.get(key)
+            if card is None:
+                return None
+            card.entry_low = ladder["entry_low"]
+            card.entry_high = ladder["entry_high"]
+            card.premium_sl = ladder["premium_sl"]
+            card.disaster_sl = ladder["disaster_sl"]
+            card.quick_target = ladder["quick_target"]
+            card.target1 = ladder["target1"]
+            card.target2 = ladder["target2"]
+            card.trailing_sl_rule = ladder["trailing_sl_rule"]
+            card.risk_reward = ladder["risk_reward"]
+            card.ref_entry_premium = new_entry
+            # Re-stamp so the Kite hand-off's freshness guard passes, and extend
+            # the entry window from now rather than the original issue time.
+            span = card.valid_until - card.created_at
+            card.created_at = now
+            card.valid_until = now + max(span, 0)
+            # The _latest response references this same object, but refresh its
+            # evaluated_at so the UI shows the card as just-updated.
+            resp = self._latest.get(key)
+            if resp is not None:
+                resp.evaluated_at = now
+            self._save_locked()
+            return card.model_copy(deep=True)
+
     def latest(self, symbol: str, mode: TradingMode) -> SignalResponse | None:
         # Deep-copy: the stored response references the live active card, whose
         # .state the eval loop may mutate (_retire) while this is being serialised.
