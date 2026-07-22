@@ -118,8 +118,14 @@ export function SignalPanel({
     if (!signal) return;
     setRepricing(true);
     try {
-      await api.repriceSignal(symbol, mode);
-      onReprice?.(); // bump the parent poll so the fresh levels show at once
+      const res = await api.repriceSignal(symbol, mode);
+      // Refresh re-validates the live score first: if the setup no longer
+      // qualifies the signal is CLOSED, not re-priced. Say so — a silently
+      // vanishing card would be worse than the stale one.
+      if (res.status === "closed") {
+        alert(res.reason ?? "Setup no longer valid — signal closed.");
+      }
+      onReprice?.(); // bump the parent poll so the fresh (or now-absent) card shows
     } catch (e) {
       alert(e instanceof Error ? e.message : "could not refresh the price");
     } finally {

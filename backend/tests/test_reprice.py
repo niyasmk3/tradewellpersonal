@@ -140,6 +140,123 @@ def test_ladder_matches_engine_build_exactly():
     print("  LADDER -> refresh ladder == engine build, field for field")
 
 
+def test_close_active_cancels_and_blanks_the_response():
+    """The score-revalidation path: a card whose thesis died is CLOSED, not
+    re-priced. The served response must then show no signal."""
+    old = _card(created=BASE)
+    s = _store_with_active(old)
+    ok = s.close_active("NIFTY", TradingMode.POSITIONAL, BASE + 3600,
+                        "PE score is now 50, below 72 — setup no longer valid, signal closed")
+    assert ok is True
+    latest = s.latest("NIFTY", TradingMode.POSITIONAL)
+    assert latest.signal is None
+    assert latest.action.value == "avoid"
+    assert "no longer valid" in (latest.no_trade_reason or "")
+    print("  CLOSE  -> active card cancelled, response blanked with the reason")
+
+
+def test_close_active_no_card_returns_false():
+    s = SignalStore(store_path=None)
+    assert s.close_active("NIFTY", TradingMode.POSITIONAL, BASE, "x") is False
+    print("  CLOSE  -> nothing to close -> False")
+
+
+def test_a_closed_card_is_not_repriceable():
+    """After close, reprice_active must find nothing (the route 409s / re-checks)."""
+    old = _card(created=BASE)
+    s = _store_with_active(old)
+    s.close_active("NIFTY", TradingMode.POSITIONAL, BASE + 60, "dead")
+    ladder = risk_mod.price_ladder(30.0, 0.18, 2.0, 3.5)
+    assert s.reprice_active("NIFTY", TradingMode.POSITIONAL, 30.0, ladder, BASE + 120) is None
+    print("  CLOSE  -> a closed card cannot then be re-priced")
+
+
+# --- endpoint-level: the revalidation branch itself ---------------------------
+
+def _install_endpoint(resp, ltp=30.0):
+    """Point the reprice route at a synthetic store state + a live premium."""
+    from app.api import routes_signals as rs
+    from app.signals import store as store_mod
+    from app import state as state_mod
+
+    class _FakeStore:
+        def __init__(self): self.closed = None; self.repriced = None
+        def latest(self, sym, mode): return resp
+        def close_active(self, sym, mode, now, reason): self.closed = reason; return True
+        def reprice_active(self, sym, mode, ltp, ladder, now):
+            self.repriced = ltp; return resp.signal
+    fake = _FakeStore()
+    store_mod.signal_store = fake
+    state_mod.market_state.ticks = {999: {"last_price": ltp}} if ltp else {}
+    return rs, fake
+
+
+def _status(regime, bull, bear):
+    return MarketStatus(
+        symbol="NIFTY", mode=TradingMode.POSITIONAL, regime=regime, regime_label="R",
+        bias=Bias.BEARISH, bull_score=bull, bear_score=bear, headline="h",
+        vix_status=None, news_label=None, news_net=None, notes=[],
+    )
+
+
+def test_endpoint_closes_when_live_score_below_threshold():
+    """The user's case: a PE card held at issue-confidence 80 whose LIVE bear
+    score has since fallen to 50 (needs 72 positional) is CLOSED, not re-priced."""
+    card = _card(created=BASE)
+    resp = SignalResponse(symbol="NIFTY", mode=TradingMode.POSITIONAL, evaluated_at=BASE,
+                          status=_status(Regime.MODERATE_BEARISH, 20.0, 50.0),
+                          action=Action.BUY_PE, signal=card, no_trade_reason=None, score=None)
+    rs, fake = _install_endpoint(resp)
+    out = rs.reprice_signal("NIFTY", "positional")
+    assert out.status == "closed", out.status
+    assert out.score == 50.0 and out.score_needed == 72
+    assert fake.closed and fake.repriced is None       # closed, never re-priced
+    print(f"  ENDPOINT-> bear 50 < 72 -> CLOSED (not re-priced)")
+
+
+def test_endpoint_reprices_when_live_score_still_valid():
+    card = _card(created=BASE)
+    resp = SignalResponse(symbol="NIFTY", mode=TradingMode.POSITIONAL, evaluated_at=BASE,
+                          status=_status(Regime.MODERATE_BEARISH, 20.0, 80.0),
+                          action=Action.BUY_PE, signal=card, no_trade_reason=None, score=None)
+    rs, fake = _install_endpoint(resp, ltp=31.5)
+    out = rs.reprice_signal("NIFTY", "positional")
+    assert out.status == "repriced" and out.signal is not None
+    assert fake.repriced == 31.5 and fake.closed is None
+    print("  ENDPOINT-> bear 80 >= 72 -> RE-PRICED against live 31.5")
+
+
+def test_endpoint_warmup_neither_closes_nor_reprices():
+    """A warmup-depressed score is 'no data', not 'thesis dead' — must not close."""
+    from fastapi import HTTPException
+    card = _card(created=BASE)
+    resp = SignalResponse(symbol="NIFTY", mode=TradingMode.POSITIONAL, evaluated_at=BASE,
+                          status=_status(Regime.WARMING_UP, 25.0, 40.0),
+                          action=Action.BUY_PE, signal=card, no_trade_reason=None, score=None)
+    rs, fake = _install_endpoint(resp)
+    try:
+        rs.reprice_signal("NIFTY", "positional")
+        assert False, "warmup should 409"
+    except HTTPException as e:
+        assert e.status_code == 409 and "warming up" in e.detail.lower()
+    assert fake.closed is None and fake.repriced is None
+    print("  ENDPOINT-> warming up -> 409, card untouched")
+
+
+def test_endpoint_ce_uses_bull_score():
+    """Direction→score mapping: a CE card is validated against bull_score."""
+    card = _card(created=BASE)
+    card.direction = Direction.CE
+    resp = SignalResponse(symbol="NIFTY", mode=TradingMode.POSITIONAL, evaluated_at=BASE,
+                          status=_status(Regime.MODERATE_BULLISH, 45.0, 90.0),  # bull LOW, bear high
+                          action=Action.BUY_CE, signal=card, no_trade_reason=None, score=None)
+    rs, fake = _install_endpoint(resp)
+    out = rs.reprice_signal("NIFTY", "positional")
+    # bull 45 < 72 -> closed, even though bear is 90. Must read the RIGHT score.
+    assert out.status == "closed" and out.score == 45.0, (out.status, out.score)
+    print("  ENDPOINT-> CE validated against bull_score (45<72 -> closed), not bear")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

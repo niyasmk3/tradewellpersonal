@@ -269,6 +269,29 @@ class SignalStore:
         if now:
             self._slot(key, now).last_retired_at = now  # starts the cooldown
 
+    def close_active(self, symbol: str, mode: TradingMode, now: int, reason: str) -> bool:
+        """Retire the active card and blank the served response.
+
+        Used by refresh when the live score no longer qualifies: the signal must
+        not merely be re-priced, it must go away — an orderable card for a dead
+        thesis is exactly what refresh exists to prevent. Returns True if a card
+        was actually closed.
+        """
+        key = _key(symbol, mode)
+        with self._lock:
+            card = self._active.get(key)
+            if card is None:
+                return False
+            self._retire(key, card, SignalState.CANCELLED, now)
+            resp = self._latest.get(key)
+            if resp is not None:
+                resp.signal = None
+                resp.action = Action.AVOID
+                resp.no_trade_reason = reason
+                resp.evaluated_at = now
+            self._save_locked()
+            return True
+
     def reprice_active(
         self, symbol: str, mode: TradingMode, new_entry: float, ladder: dict, now: int,
     ) -> SignalCard | None:

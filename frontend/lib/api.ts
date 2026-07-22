@@ -222,6 +222,14 @@ export interface SignalResponse {
   score: ScoreBreakdown | null;
 }
 
+export interface RepriceResult {
+  status: "repriced" | "closed";
+  signal: SignalCard | null;
+  score: number | null;
+  score_needed: number | null;
+  reason: string | null;
+}
+
 export interface AuthStatus {
   authenticated: boolean;
   api_key_configured: boolean;
@@ -425,7 +433,7 @@ export const api = {
   paperSummary: () => getJSON<PaperSummary>("/paper/summary"),
   reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),
   repriceSignal: (symbol: string, mode: TradingMode) =>
-    postJSON<SignalCard>(`/signals/${symbol}/reprice?mode=${mode}`, {}),
+    postJSON<RepriceResult>(`/signals/${symbol}/reprice?mode=${mode}`, {}),
   exitTrade: (id: string, exit_premium?: number) =>
     postJSON<Trade>(`/trades/${id}/exit`, { exit_premium }),
   partialTrade: (id: string, exit_premium?: number, fraction = 0.5) =>

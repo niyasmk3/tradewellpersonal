@@ -1,7 +1,10 @@
 """Signal-engine REST endpoints (per trading mode)."""
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from app.config import get_settings
 from app.signals.models import SignalCard, SignalResponse, TradingMode
@@ -56,20 +59,36 @@ def signal_history(symbol: str, mode: str = Query("intraday")) -> list[SignalCar
     return signal_store.history(symbol, tmode)
 
 
-@router.post("/{symbol}/reprice", response_model=SignalCard)
-def reprice_signal(symbol: str, mode: str = Query("intraday")) -> SignalCard:
-    """Re-price the active card against the CURRENT premium so it is orderable
-    again — the same trade at today's price.
+class RepriceResult(BaseModel):
+    status: str                       # "repriced" | "closed"
+    signal: Optional[SignalCard] = None
+    score: Optional[float] = None     # live score for the card's direction
+    score_needed: Optional[float] = None
+    reason: Optional[str] = None
 
-    A positional card stays valid for the session, but the Kite hand-off refuses
-    anything older than 15 minutes because its entry zone was priced off a stale
-    premium. This recomputes that zone (and the stop/targets) from the live LTP
-    of the same strike, using the exact ladder the engine issues with, and
-    re-stamps the card so the hand-off accepts it.
+
+@router.post("/{symbol}/reprice", response_model=RepriceResult)
+def reprice_signal(symbol: str, mode: str = Query("intraday")) -> RepriceResult:
+    """Re-validate the active card, then either re-price it or close it.
+
+    Two things happen in one click, because a positional card that has sat for
+    hours can be stale in BOTH senses:
+      * its ENTRY PRICE is stale — the Kite hand-off refuses anything older than
+        15 min because the zone was priced off a since-moved premium;
+      * its THESIS may be stale — the live score for that direction may have
+        decayed below the tradeable threshold while the card was held steady.
+
+    So refresh reads the LIVE score for the card's direction (which the engine
+    recomputes every cycle, even while the signal is held). If it no longer
+    qualifies, the signal is CLOSED — handing back a freshly-priced card for a
+    dead setup is the exact trap this guards against. If it still qualifies, the
+    premium ladder is recomputed from the live LTP of the same strike and the
+    card is re-stamped so the hand-off accepts it.
     """
     import time
 
     from app.signals import risk as risk_mod
+    from app.signals.models import Direction
     from app.signals.modes import build_profiles
     from app.signals.store import signal_store
     from app.state import market_state
@@ -83,27 +102,44 @@ def reprice_signal(symbol: str, mode: str = Query("intraday")) -> SignalCard:
     if card.token is None:
         raise HTTPException(status_code=409, detail="This card has no tracked contract to re-price")
 
-    # The live premium of the SAME strike. Refusing without it is the point —
-    # a refresh that fell back to a stale reference would defeat itself.
-    tick = market_state.ticks.get(card.token, {})
-    ltp = tick.get("last_price")
+    profile = build_profiles(cfg).get(mode)
+    if profile is None:
+        raise HTTPException(status_code=409, detail=f"Mode '{mode}' is not enabled")
+
+    # The engine can't score during warm-up, so a low number there is "no data",
+    # not "thesis died" — do not close on it. Ask the user to retry shortly.
+    if resp.status.regime == "warming_up":
+        raise HTTPException(
+            status_code=409,
+            detail="Engine warming up — can't re-validate the score yet, try again shortly",
+        )
+
+    # Live score for THIS card's direction, recomputed this cycle.
+    live_score = resp.status.bull_score if card.direction is Direction.CE else resp.status.bear_score
+    now = int(time.time())
+
+    if live_score < profile.score_valid:
+        reason = (f"{card.direction.value} score is now {live_score:.0f}, "
+                  f"below {profile.score_valid} — setup no longer valid, signal closed")
+        signal_store.close_active(symbol, tmode, now, reason)
+        return RepriceResult(status="closed", score=live_score,
+                             score_needed=profile.score_valid, reason=reason)
+
+    # Still valid → re-price against the live premium of the same strike.
+    ltp = market_state.ticks.get(card.token, {}).get("last_price")
     if not ltp or ltp <= 0:
         raise HTTPException(
             status_code=409,
             detail="No live premium for this strike right now — cannot re-price",
         )
-
-    profile = build_profiles(cfg).get(mode)
-    if profile is None:
-        raise HTTPException(status_code=409, detail=f"Mode '{mode}' is not enabled")
-
     disaster_pct = (cfg.premium_disaster_pct
                     if cfg.stop_primary == "underlying" and cfg.trading_capital > 0 else None)
     ladder = risk_mod.price_ladder(
         float(ltp), profile.premium_sl_pct, profile.rr_target1, profile.rr_target2,
         disaster_pct=disaster_pct, quick_pct=cfg.quick_target_pct or None,
     )
-    refreshed = signal_store.reprice_active(symbol, tmode, float(ltp), ladder, int(time.time()))
+    refreshed = signal_store.reprice_active(symbol, tmode, float(ltp), ladder, now)
     if refreshed is None:
         raise HTTPException(status_code=409, detail="No active signal to refresh")
-    return refreshed
+    return RepriceResult(status="repriced", signal=refreshed,
+                         score=live_score, score_needed=profile.score_valid)
