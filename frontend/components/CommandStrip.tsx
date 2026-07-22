@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { MarketStatus, TradingMode } from "@/lib/api";
 import { signed } from "@/lib/format";
+import { AlertToneMenu } from "./AlertToneMenu";
 
 function ScoreMeter({ label, value, tone }: { label: string; value: number; tone: "bull" | "bear" }) {
   const bar = tone === "bull" ? "bg-bull" : "bg-bear";
@@ -57,6 +59,7 @@ export function CommandStrip({
   onRiskSettings?: () => void;
   className?: string;
 }) {
+  const [toneMenu, setToneMenu] = useState(false);
   const biasTone =
     status?.bias === "bullish" ? "text-bull" : status?.bias === "bearish" ? "text-bear" : "text-muted";
 
@@ -139,6 +142,17 @@ export function CommandStrip({
         >
           {alerts.muted ? "🔕" : "🔔"}
         </button>
+        {/* Tone picker — its own control so it doesn't fight the mute toggle. */}
+        <span className="relative">
+          <button
+            onClick={() => setToneMenu((v) => !v)}
+            title="Choose the alert tone"
+            className="rounded-md border border-edge bg-panel px-1.5 py-0.5 text-[10px] text-muted transition hover:text-white"
+          >
+            ▾
+          </button>
+          {toneMenu && <AlertToneMenu onClose={() => setToneMenu(false)} />}
+        </span>
         {onRiskSettings && (
           <button
             onClick={onRiskSettings}
