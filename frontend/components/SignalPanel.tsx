@@ -283,34 +283,41 @@ export function SignalPanel({
             0DTE
           </span>
         )}
-        {/* Pricing freshness + one-click re-price. Only shown once the pricing
-            is old enough to matter; goes amber past the hand-off's 15-min cutoff. */}
-        {!expired && pricedAgoMin >= 5 && (
-          <span className="ml-auto flex items-center gap-1.5">
-            <span
-              className={`text-[10px] ${pricedAgoMin >= STALE_MIN ? "text-yellow-400" : "text-muted"}`}
-              title={
-                pricedAgoMin >= STALE_MIN
-                  ? `Priced ${pricedAgoMin}m ago — too old to place in Kite. Refresh to re-price against the current premium.`
-                  : `Priced ${pricedAgoMin}m ago`
-              }
-            >
-              priced {pricedAgoMin}m ago
-            </span>
-            <button
-              onClick={reprice}
-              disabled={repricing}
-              title="Re-price this trade against the current premium — same strike, today's price"
-              className={`rounded border px-1.5 py-0.5 text-[10px] transition disabled:opacity-40 ${
-                pricedAgoMin >= STALE_MIN
-                  ? "border-yellow-500/60 bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25"
-                  : "border-edge bg-panel text-muted hover:text-white"
-              }`}
-            >
-              {repricing ? "…" : "↻ Refresh"}
-            </button>
-          </span>
-        )}
+        {/* Pricing freshness + one-click re-price, both modes. Available from 2m
+            (intraday cards only live 8m, so a 5m gate barely appeared). Amber —
+            "worth refreshing" — when the price has drifted out of the entry
+            zone, or when it is past the Kite hand-off's 15-min cutoff. */}
+        {!expired &&
+          (() => {
+            const ltp = signal.live_premium;
+            const outOfZone = ltp != null && (ltp < signal.entry_low || ltp > signal.entry_high);
+            const attention = pricedAgoMin >= STALE_MIN || outOfZone;
+            if (pricedAgoMin < 2 && !outOfZone) return null;
+            const why = outOfZone
+              ? "Price has drifted out of the entry zone — refresh to re-price and re-validate."
+              : pricedAgoMin >= STALE_MIN
+                ? `Priced ${pricedAgoMin}m ago — too old to place in Kite. Refresh to re-price against the current premium.`
+                : `Priced ${pricedAgoMin}m ago`;
+            return (
+              <span className="ml-auto flex items-center gap-1.5">
+                <span className={`text-[10px] ${attention ? "text-yellow-400" : "text-muted"}`} title={why}>
+                  priced {pricedAgoMin}m ago
+                </span>
+                <button
+                  onClick={reprice}
+                  disabled={repricing}
+                  title="Re-validate the score and re-price against the current premium — same strike, today's price. Closes the signal if it no longer qualifies."
+                  className={`rounded border px-1.5 py-0.5 text-[10px] transition disabled:opacity-40 ${
+                    attention
+                      ? "border-yellow-500/60 bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25"
+                      : "border-edge bg-panel text-muted hover:text-white"
+                  }`}
+                >
+                  {repricing ? "…" : "↻ Refresh"}
+                </button>
+              </span>
+            );
+          })()}
       </div>
 
       {/* LIVE price of this contract, against the entry zone — the "is it
