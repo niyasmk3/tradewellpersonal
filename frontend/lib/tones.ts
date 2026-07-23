@@ -1,17 +1,18 @@
 "use client";
 
 /**
- * Alert tone packs, synthesized with WebAudio — no asset files, so nothing to
- * download and no CSP/host concerns.
+ * Alert tone packs — synthesized WebAudio sequences, plus optional real audio
+ * samples served from /public/tones (small AAC files, decoded once and cached).
  *
- * Each pack defines two sequences:
+ * Each pack defines two tones:
  *   good   — a new tradeable signal appeared
  *   urgent — a stop-loss / invalidation / time-exit fired on an open position
  *
  * The good/urgent split is not decoration: a trader must be able to tell "an
  * opportunity" from "get out" without looking at the screen. So in EVERY pack
- * `urgent` is lower and/or falling and/or repeated, and `good` rises. Adding a
- * pack whose two tones sound alike would defeat the point.
+ * `urgent` is lower and/or falling and/or repeated (for samples: longer and
+ * louder), and `good` stays short. Adding a pack whose two tones sound alike
+ * would defeat the point.
  */
 
 export type ChimeKind = "good" | "urgent";
@@ -24,12 +25,22 @@ interface Note {
   gain?: number;     // peak gain, default 0.22
 }
 
+/** A slice of a real audio file instead of a synthesized sequence. */
+export interface SamplePlay {
+  url: string;       // under /public — same-origin, no CSP concerns
+  offset?: number;   // seconds into the file, default 0
+  dur?: number;      // seconds to play (fades out at the end), default full
+  gain?: number;     // linear volume, default 1
+}
+
+type Tone = Note[] | SamplePlay;
+
 export interface TonePack {
   id: string;
   label: string;
   hint: string;
-  good: Note[];
-  urgent: Note[];
+  good: Tone;
+  urgent: Tone;
 }
 
 // Descending, repeated, or low = "urgent" across the board — see the module doc.
@@ -92,6 +103,15 @@ export const TONE_PACKS: TonePack[] = [
       { freq: 466.16, at: 0.52, dur: 0.28, gain: 0.1 },        // low, triple = alarm
     ],
   },
+  {
+    id: "buzzer",
+    label: "Buzzer",
+    hint: "A real warning buzzer — loud and impossible to sleep through",
+    // Same sample both ways; the split is length and volume: a short burst
+    // says "look up", the long full-volume run says "act now".
+    good: { url: "/tones/buzzer.m4a", dur: 1.6, gain: 0.7 },
+    urgent: { url: "/tones/buzzer.m4a", dur: 4.0, gain: 1 },
+  },
 ];
 
 const _byId = Object.fromEntries(TONE_PACKS.map((p) => [p.id, p]));
@@ -115,6 +135,54 @@ export function setToneId(id: string): void {
       /* storage unavailable — falls back to default next load */
     }
   }
+}
+
+// Decoded once per URL and reused — an AudioBuffer is context-independent, so
+// the cache survives the throwaway contexts each play creates. A failed load
+// is evicted so a transient 404/network error doesn't mute the pack forever.
+const _buffers: Record<string, Promise<AudioBuffer>> = {};
+
+function playSample(s: SamplePlay) {
+  try {
+    const Ctx =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctx();
+    const load = (_buffers[s.url] ??= fetch(s.url)
+      .then((r) => {
+        if (!r.ok) throw new Error(`tone fetch ${r.status}`);
+        return r.arrayBuffer();
+      })
+      .then((b) => ctx.decodeAudioData(b)));
+    load
+      .then((buf) => {
+        const offset = s.offset ?? 0;
+        const dur = Math.min(s.dur ?? buf.duration, Math.max(0.1, buf.duration - offset));
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const gain = ctx.createGain();
+        const peak = s.gain ?? 1;
+        const t = ctx.currentTime;
+        gain.gain.setValueAtTime(peak, t);
+        // Hold, then fade the tail so a mid-sample cut doesn't click.
+        gain.gain.setValueAtTime(peak, t + Math.max(0, dur - 0.25));
+        gain.gain.linearRampToValueAtTime(0.0001, t + dur);
+        src.connect(gain).connect(ctx.destination);
+        src.start(t, offset, dur + 0.05);
+        setTimeout(() => ctx.close(), (dur + 0.4) * 1000);
+      })
+      .catch(() => {
+        delete _buffers[s.url];
+        ctx.close();
+      });
+  } catch {
+    /* audio unavailable (no user gesture yet) — the desktop notification still fires */
+  }
+}
+
+function playTone(tone: Note[] | SamplePlay) {
+  if (Array.isArray(tone)) playSequence(tone);
+  else playSample(tone);
 }
 
 function playSequence(notes: Note[]) {
@@ -147,11 +215,11 @@ function playSequence(notes: Note[]) {
 /** Play the CURRENTLY SELECTED pack's tone for `kind`. */
 export function chime(kind: ChimeKind = "good") {
   const pack = _byId[getToneId()] ?? _byId[DEFAULT_ID];
-  playSequence(kind === "urgent" ? pack.urgent : pack.good);
+  playTone(kind === "urgent" ? pack.urgent : pack.good);
 }
 
 /** Preview a SPECIFIC pack (for the picker), without changing the selection. */
 export function previewTone(id: string, kind: ChimeKind = "good") {
   const pack = _byId[id];
-  if (pack) playSequence(kind === "urgent" ? pack.urgent : pack.good);
+  if (pack) playTone(kind === "urgent" ? pack.urgent : pack.good);
 }
