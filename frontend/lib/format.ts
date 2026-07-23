@@ -70,6 +70,12 @@ export const istDate = (epoch: number | null | undefined): string => {
   });
 };
 
+/** "22 Jul 12:03:04" — when the row can span days, the time alone is ambiguous. */
+export const istDateTime = (epoch: number | null | undefined): string => {
+  if (!epoch) return "—";
+  return `${istDate(epoch)} ${istTime(epoch)}`;
+};
+
 export const istTime = (epoch: number | null | undefined): string => {
   if (!epoch) return "—";
   return new Date(epoch * 1000).toLocaleTimeString("en-IN", {

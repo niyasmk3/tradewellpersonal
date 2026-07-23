@@ -1,7 +1,7 @@
 "use client";
 
 import { PaperSummary } from "@/lib/api";
-import { istTime, signed } from "@/lib/format";
+import { istDateTime, istDayKey, istTime, signed } from "@/lib/format";
 
 /**
  * Forward-test results: every issued signal taken in simulation and exited by
@@ -91,10 +91,17 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                 </span>
               </div>
               <div className="mt-0.5 flex flex-wrap gap-x-2 font-mono text-[10px] text-muted">
-                <span>{istTime(r.entered_at)}</span>
+                <span>{istDateTime(r.entered_at)}</span>
                 <span className="text-white/80">₹{r.entry}</span>
                 <span>→</span>
-                <span>{istTime(r.exited_at)}</span>
+                {/* Repeat the date on exit only when it differs — a positional
+                    round trip can close days later, and "13:19 → 10:28" with no
+                    dates reads as time travel. Same-day exits stay compact. */}
+                <span>
+                  {istDayKey(r.exited_at) !== istDayKey(r.entered_at)
+                    ? istDateTime(r.exited_at)
+                    : istTime(r.exited_at)}
+                </span>
                 <span className="text-white/80">₹{r.exit}</span>
                 <span>· {r.quantity} qty</span>
                 <span title="Charges deducted from the gross move">· ₹{Math.round(r.charges)} chg</span>
