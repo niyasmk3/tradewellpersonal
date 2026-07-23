@@ -138,11 +138,16 @@ class SignalEngine:
                 action=action, signal=signal, no_trade_reason=reason, score=score,
             )
 
-        # Non-tradeable regimes short-circuit to no-trade / wait.
+        # Non-tradeable regimes short-circuit to no-trade / wait. The BEST
+        # direction's breakdown still rides along: the score panel (and its
+        # trend history) must not go blank just because the regime gates the
+        # trade — "compression, bear building toward 78" is exactly the
+        # context worth watching.
         if not reg.tradeable:
             wait_regimes = {Regime.COMPRESSION, Regime.BREAKOUT_DEVELOPING, Regime.REVERSAL, Regime.WARMING_UP}
             action = Action.WAIT if reg.regime in wait_regimes else Action.AVOID
-            return resp(action, reason="; ".join(reg.notes) or reg.regime.value)
+            best = bull if bull.total >= bear.total else bear
+            return resp(action, reason="; ".join(reg.notes) or reg.regime.value, score=best)
 
         direction = Direction.CE if reg.bias is Bias.BULLISH else Direction.PE
         chosen = bull if direction is Direction.CE else bear

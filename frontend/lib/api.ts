@@ -232,6 +232,36 @@ export interface SignalResponse {
   score: ScoreBreakdown | null;
 }
 
+/** One evaluation (~5s) of both directional scores — the trend behind the number. */
+export interface ScoreHistoryPoint {
+  ts: number;
+  bull: number;
+  bear: number;
+  direction: "CE" | "PE" | null;
+  /** Component points of the best direction at that moment, keyed by name. */
+  components: Record<string, number>;
+}
+
+/** A card the engine issued — including the ones that came and went unseen. */
+export interface SignalHistoryRow {
+  id: string;
+  mode: TradingMode;
+  direction: "CE" | "PE";
+  contract: string;
+  score: number;
+  state: SignalState;
+  /** Whether you acted on it: journal, paper book, both, or not at all. */
+  taken: "live" | "paper" | "both" | null;
+  created_at: number;
+  valid_until: number;
+  entry_low: number;
+  entry_high: number;
+  premium_sl: number;
+  target1: number;
+  target2: number;
+  ref_entry_premium: number | null;
+}
+
 export interface RepriceResult {
   status: "repriced" | "closed";
   signal: SignalCard | null;
@@ -467,6 +497,12 @@ export const api = {
   reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),
   repriceSignal: (symbol: string, mode: TradingMode) =>
     postJSON<RepriceResult>(`/signals/${symbol}/reprice?mode=${mode}`, {}),
+  scoreHistory: (symbol: string, mode: TradingMode, minutes = 120) =>
+    getJSON<{ points: ScoreHistoryPoint[]; count: number }>(
+      `/signals/${symbol}/score-history?mode=${mode}&minutes=${minutes}`,
+    ),
+  signalHistory: (symbol: string) =>
+    getJSON<{ rows: SignalHistoryRow[]; count: number }>(`/signals/${symbol}/history?mode=all`),
   exitTrade: (id: string, exit_premium?: number) =>
     postJSON<Trade>(`/trades/${id}/exit`, { exit_premium }),
   partialTrade: (id: string, exit_premium?: number, fraction = 0.5) =>

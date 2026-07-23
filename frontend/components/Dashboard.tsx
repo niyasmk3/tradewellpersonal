@@ -6,6 +6,7 @@ import { Timeframe, TradingMode, api } from "@/lib/api";
 import { istTime } from "@/lib/format";
 import { useLiveData } from "@/lib/useLiveData";
 import { usePolling } from "@/lib/usePolling";
+import { SignalHistoryPanel } from "./SignalHistoryPanel";
 import { useSignalAlert } from "@/lib/useSignalAlert";
 import { useTradeAlert } from "@/lib/useTradeAlert";
 import { useNewsAlert } from "@/lib/useNewsAlert";
@@ -61,6 +62,7 @@ export function Dashboard() {
   const mood = usePolling(() => api.marketMood(), 60000, []);
   // Simulated book — polled slowly; it only changes when a signal fires.
   const paper = usePolling(() => api.paperSummary(), 15000, []);
+  const signalHist = usePolling(() => api.signalHistory(symbol), 15000, [symbol]);
 
   // Trades are global (not per-symbol). `tradesTick` forces an immediate refetch after an action.
   const [tradesTick, setTradesTick] = useState(0);
@@ -148,6 +150,19 @@ export function Dashboard() {
       label: "Paper",
       node: <PaperPanel data={paper.data} error={paper.error} />,
       badge: (paper.data?.open ?? 0) > 0,
+    },
+    {
+      key: "signals",
+      label: "Signals",
+      node: <SignalHistoryPanel data={signalHist.data} error={signalHist.error} />,
+      // A card that retired UNTAKEN in the last hour is exactly the "did I
+      // miss something?" case this tab exists for — surface it as a dot.
+      badge: (signalHist.data?.rows ?? []).some(
+        (r) =>
+          r.state !== "active" &&
+          r.taken === null &&
+          Date.now() / 1000 - r.created_at < 3600,
+      ),
     },
     ...(symbol === "NIFTY"
       ? [{ key: "backtest", label: "Backtest", node: <BacktestPanel symbol={symbol} /> }]

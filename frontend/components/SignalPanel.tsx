@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ApiError, ScoreBreakdown, SignalResponse, TradingMode, api } from "@/lib/api";
+import { ApiError, ScoreBreakdown, ScoreHistoryPoint, SignalResponse, TradingMode, api } from "@/lib/api";
 import { fetchKiteBasket, submitKiteBasket } from "@/lib/kiteBasket";
 import { fmt, istToday, parseNum, pctFrom } from "@/lib/format";
+import { usePolling } from "@/lib/usePolling";
 import { RiskVisualizer } from "./RiskVisualizer";
 
 function useCountdown(validUntil: number | undefined) {
@@ -41,13 +42,62 @@ function Stat({
   );
 }
 
-function ScoreBars({ score }: { score: ScoreBreakdown }) {
+/** Inline sparkline for a hover popover. Pure SVG, no library. */
+function Spark({ values, max, color = "#4a9eff", gate }: {
+  values: number[];
+  max: number;
+  color?: string;
+  /** Dashed reference line; defaults to `max` ("full points"). */
+  gate?: number;
+}) {
+  const W = 196;
+  const H = 42;
+  if (values.length < 2) {
+    return <div className="py-2 text-center text-[10px] text-muted">collecting history…</div>;
+  }
+  const x = (i: number) => (i / (values.length - 1)) * (W - 6) + 3;
+  const y = (v: number) => H - 4 - (Math.max(0, Math.min(v, max)) / max) * (H - 8);
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const last = values[values.length - 1];
+  return (
+    <svg width={W} height={H} className="block">
+      <line x1="3" y1={y(gate ?? max)} x2={W - 3} y2={y(gate ?? max)} stroke="#3a4356" strokeDasharray="3 3" />
+      <line x1="3" y1={y(0)} x2={W - 3} y2={y(0)} stroke="#252b38" />
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" />
+      <circle cx={x(values.length - 1)} cy={y(last)} r="2.5" fill={color} />
+    </svg>
+  );
+}
+
+function ScoreBars({
+  score,
+  history,
+}: {
+  score: ScoreBreakdown;
+  /** Same-day evaluation trail; null until the poll lands (or old backend). */
+  history: ScoreHistoryPoint[] | null;
+}) {
+  const [hover, setHover] = useState<string | null>(null);
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
       {score.components.map((c) => {
         const pct = c.max > 0 ? (c.points / c.max) * 100 : 0;
+        const series = (history ?? [])
+          .map((p) => p.components?.[c.name])
+          .filter((v): v is number => typeof v === "number");
         return (
-          <div key={c.name} className="min-w-0">
+          // Roll-over target: mouse, keyboard focus, and tap all open the
+          // trend popover — a hover-only affordance is invisible on touch.
+          <div
+            key={c.name}
+            className="relative min-w-0 cursor-help"
+            tabIndex={0}
+            onMouseEnter={() => setHover(c.name)}
+            onMouseLeave={() => setHover((h) => (h === c.name ? null : h))}
+            onFocus={() => setHover(c.name)}
+            onBlur={() => setHover((h) => (h === c.name ? null : h))}
+            onClick={() => setHover((h) => (h === c.name ? null : c.name))}
+          >
             <div className="flex justify-between text-[10px] text-muted">
               <span className="truncate">{c.name}</span>
               <span className="font-mono">
@@ -57,6 +107,17 @@ function ScoreBars({ score }: { score: ScoreBreakdown }) {
             <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-edge">
               <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
             </div>
+            {hover === c.name && (
+              <div className="absolute left-0 top-full z-20 mt-1 rounded-md border border-edge bg-panel px-2 pb-1 pt-1.5 shadow-lg">
+                <div className="mb-0.5 flex items-baseline justify-between gap-3 text-[9px] text-muted">
+                  <span className="truncate">{c.name} — today</span>
+                  <span className="font-mono">
+                    now {c.points}/{c.max}
+                  </span>
+                </div>
+                <Spark values={series} max={c.max} />
+              </div>
+            )}
           </div>
         );
       })}
@@ -85,6 +146,9 @@ export function SignalPanel({
 }) {
   const signal = data?.signal ?? null;
   const countdown = useCountdown(signal?.valid_until);
+  // Same-day score trail for the hover sparklines. Cheap (decimated server-
+  // side) and shared by every component row, so one poll for the panel.
+  const scoreHist = usePolling(() => api.scoreHistory(symbol, mode), 30000, [symbol, mode]);
   const [entering, setEntering] = useState(false);
   const [lots, setLots] = useState("1");
   const [entryPx, setEntryPx] = useState("");
@@ -262,7 +326,25 @@ export function SignalPanel({
             <div className="mb-1 text-[10px] uppercase text-muted">
               Best-direction score ({data.score.direction}) · {data.score.total.toFixed(0)}/100
             </div>
-            <ScoreBars score={data.score} />
+            <ScoreBars score={data.score} history={scoreHist.data?.points ?? null} />
+            {/* The build-up that matters most while waiting: both totals
+                against the 78 issue gate, so "bear grinding toward a card"
+                is visible without hovering anything. */}
+            {(scoreHist.data?.points?.length ?? 0) >= 2 && (
+              <div className="mt-2 rounded-md border border-edge/60 bg-panel2 px-2 pb-1 pt-1.5">
+                <div className="flex justify-between text-[9px] text-muted">
+                  <span>
+                    score trend · <span className="text-bull">CE {scoreHist.data!.points.at(-1)!.bull.toFixed(0)}</span>{" "}
+                    <span className="text-bear">PE {scoreHist.data!.points.at(-1)!.bear.toFixed(0)}</span>
+                  </span>
+                  <span>dotted = 78 issue gate</span>
+                </div>
+                <div className="flex gap-3">
+                  <Spark values={scoreHist.data!.points.map((p) => p.bull)} max={100} color="#16c784" gate={78} />
+                  <Spark values={scoreHist.data!.points.map((p) => p.bear)} max={100} color="#ea3943" gate={78} />
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -473,7 +555,7 @@ export function SignalPanel({
       {/* score */}
       <div className="mt-3 border-t border-edge pt-3">
         <div className="mb-1.5 text-[10px] uppercase text-muted">Score breakdown · {conf.toFixed(0)}/100</div>
-        <ScoreBars score={signal.score} />
+        <ScoreBars score={signal.score} history={scoreHist.data?.points ?? null} />
       </div>
       </div>
       {/* ---- end scroll region ---- */}

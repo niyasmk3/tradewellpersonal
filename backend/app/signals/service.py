@@ -21,6 +21,7 @@ from app.signals.models import (
     Regime,
     SignalResponse,
 )
+from app.signals.score_history import score_history
 from app.signals.sizing import apply_fund_sizing
 from app.signals.store import RiskState, SignalStore, ThrottleConfig
 from app.signals.risk_limits import risk_limit_store
@@ -236,6 +237,15 @@ class SignalService:
             news=news_store.sentiment(symbol),
         )
         self._apply_sizing(fresh, symbol)
+        # Score trend, recorded from the PRE-throttle evaluation: the throttle
+        # shapes what is OFFERED, not what the market scored. record() swallows
+        # its own failures — the trend feature must never stop a signal.
+        score_history.record(
+            symbol, profile.mode.value, now,
+            fresh.status.bull_score, fresh.status.bear_score,
+            fresh.score.direction.value if fresh.score else None,
+            {c.name: c.points for c in fresh.score.components} if fresh.score else None,
+        )
         return self.store.reconcile(fresh, now, self._throttle(), self._risk_state(now))
 
     def evaluate_all(self) -> None:

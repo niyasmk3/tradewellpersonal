@@ -21,8 +21,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from fastapi import HTTPException
 
+from app.api import routes_trades
 from app.api.routes_trades import _guard_size
 from app.config import Settings
+from app.signals.risk_limits import RiskLimitStore
+
+# The guard reads the runtime risk-limit overlay. Tests must see the .env
+# values under test, NOT whatever the developer's real .risk_limits.json holds
+# — an edit made in the live dashboard must never flip a test.
+routes_trades.risk_limit_store = RiskLimitStore(path=None)
 from app.signals.models import (
     Action, Direction, ScoreBreakdown, SignalCard, SignalState, TradingMode,
 )
