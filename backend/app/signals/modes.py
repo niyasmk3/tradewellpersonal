@@ -35,8 +35,38 @@ class ModeProfile:
     horizon: str                  # human-readable holding horizon
 
 
+def all_profiles(cfg: Settings) -> dict[str, ModeProfile]:
+    """Every known profile, whether or not it is enabled in config.
+
+    The journal needs a mode's stop/target geometry to re-price a trade against
+    the actual fill, and a position can outlive the mode being switched off in
+    `SIGNAL_MODES` — so that lookup must not depend on what is enabled today.
+    """
+    return _build_all(cfg)
+
+
+def ladder_params(cfg: Settings, mode: TradingMode) -> tuple[float, float, float] | None:
+    """(premium_sl_pct, rr_target1, rr_target2) for `mode`, or None if unknown.
+
+    This is what lets `TradeStore.create_from_signal` rebuild the whole price
+    ladder from your fill using the same numbers the card was built with.
+    """
+    p = _build_all(cfg).get(mode.value if isinstance(mode, TradingMode) else str(mode))
+    return (p.premium_sl_pct, p.rr_target1, p.rr_target2) if p else None
+
+
 def build_profiles(cfg: Settings) -> dict[str, ModeProfile]:
-    """Return the enabled mode profiles keyed by mode value."""
+    """Return the enabled mode profiles keyed by mode value.
+
+    Ordered by `SIGNAL_MODES`, not by declaration order: `evaluate_all` walks
+    this dict, and the open-position cap is shared across modes — so whichever
+    mode comes first takes the last free slot when both qualify in one cycle.
+    """
+    everything = _build_all(cfg)
+    return {m: everything[m] for m in cfg.signal_mode_list if m in everything}
+
+
+def _build_all(cfg: Settings) -> dict[str, ModeProfile]:
     all_profiles = {
         TradingMode.INTRADAY.value: ModeProfile(
             mode=TradingMode.INTRADAY,
@@ -69,4 +99,4 @@ def build_profiles(cfg: Settings) -> dict[str, ModeProfile]:
             horizon="Multi-day swing · monthly options",
         ),
     }
-    return {m: all_profiles[m] for m in cfg.signal_mode_list if m in all_profiles}
+    return all_profiles

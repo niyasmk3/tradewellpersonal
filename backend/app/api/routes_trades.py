@@ -6,6 +6,9 @@ from fastapi import APIRouter, HTTPException
 from app.config import get_settings
 
 from app.signals.models import TradingMode
+from app.signals.modes import ladder_params
+from app.signals.risk import price_ladder
+from app.signals.risk_limits import risk_limit_store
 from app.signals.store import signal_store
 from app.state import market_state
 from app.trades.models import (
@@ -93,9 +96,58 @@ def enter(body: EnterRequest) -> Trade:
     # the position to pay for a wider stop, so the premium stop keeps governing.
     disaster_pct = (cfg.premium_disaster_pct
                     if cfg.stop_primary == "underlying" and cfg.trading_capital > 0 else None)
+    # The mode's own stop/target geometry, so the journal re-prices the ladder
+    # against the fill instead of inheriting levels drawn for another premium.
+    params = ladder_params(cfg, card.mode)
+    sl_pct, rr1, rr2 = params if params else (None, None, None)
+
+    _guard_size(body, card, float(entry), lot_size, sl_pct, rr1, rr2, cfg)
+
     return trade_store.create_from_signal(
         card, body.lots, float(entry), lot_size, product, disaster_pct=disaster_pct,
-        quick_pct=cfg.quick_target_pct or None)
+        quick_pct=cfg.quick_target_pct or None, sl_pct=sl_pct, rr1=rr1, rr2=rr2)
+
+
+def _guard_size(body: EnterRequest, card, entry: float, lot_size: int,
+                sl_pct: float | None, rr1: float | None, rr2: float | None, cfg) -> None:
+    """Refuse a first attempt to journal more lots than the card suggested.
+
+    NOT a hard block: `/trades/enter` records a fill that already happened at the
+    broker, so refusing outright would only produce an untracked position, which
+    is strictly worse. It refuses ONCE, with the rupee risk spelled out, and the
+    caller re-submits with `acknowledge_oversize`.
+
+    This is the guard that was missing on 20-Jul: ten-lot sizes against a card
+    suggesting one or two turned three stop-outs into -₹54,437, and the same
+    override reappeared on 22-Jul at 31% of the daily limit on a single trade.
+    """
+    suggested = card.suggested_lots or 0
+    if body.acknowledge_oversize or suggested <= 0 or body.lots <= suggested:
+        return
+
+    # Risk against the RE-PRICED stop — the one this trade will actually carry,
+    # from the same function that builds it, so the warning cannot quote a
+    # different number than the journal ends up holding.
+    stop = (price_ladder(entry, sl_pct, rr1 or 0, rr2 or 0)["premium_sl"]
+            if sl_pct else card.premium_sl)
+    risk = max(entry - stop, 0.0) * body.lots * lot_size
+    limit = risk_limit_store.effective(cfg).get("daily_loss_limit", 0.0)
+    share = f", {risk / limit * 100:.0f}% of your ₹{limit:,.0f} daily loss limit" if limit > 0 else ""
+    # A structured detail so the UI can offer "journal it anyway" instead of
+    # showing a dead-end error — the point is a speed bump, not a wall.
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "oversize_lots",
+            "message": (
+                f"{body.lots} lots is above the card's suggested {suggested}. "
+                f"At ₹{entry} with the stop at ₹{stop}, that risks ₹{risk:,.0f}{share}."
+            ),
+            "lots": body.lots,
+            "suggested_lots": suggested,
+            "risk_rupees": round(risk, 2),
+        },
+    )
 
 
 @router.post("/{tid}/exit", response_model=Trade)

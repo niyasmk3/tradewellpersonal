@@ -207,6 +207,14 @@ export interface SignalCard {
   /** Lots implied by TRADING_CAPITAL × RISK_PER_TRADE_PCT; null when unconfigured. */
   suggested_lots: number | null;
   sizing_note: string | null;
+  /**
+   * Affordability prefill from the runtime-editable trading fund: how many
+   * whole lots the fund buys at the freshest premium. Tracks live_premium on
+   * each poll. Null when the fund is unset or no premium/lot size is known.
+   */
+  fund_lots: number | null;
+  fund_qty: number | null;
+  fund_note: string | null;
   /** Contract multiplier — required to turn premium levels into rupees. */
   lot_size: number | null;
   trading_capital: number | null;
@@ -392,15 +400,31 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const d = body?.detail;
-    // FastAPI validation errors arrive as an array of {loc,msg,...}.
+    // FastAPI validation errors arrive as an array of {loc,msg,...}. A refusal
+    // the UI can offer a way THROUGH — an oversize entry, say — arrives as an
+    // object carrying a `code`, so the caller can branch on it.
     const msg = Array.isArray(d)
       ? d.map((e) => e?.msg ?? JSON.stringify(e)).join("; ")
       : typeof d === "string"
         ? d
-        : `${res.status} — ${path}`;
-    throw new Error(msg);
+        : typeof d?.message === "string"
+          ? d.message
+          : `${res.status} — ${path}`;
+    throw new ApiError(msg, res.status, typeof d?.code === "string" ? d.code : undefined);
   }
   return res.json() as Promise<T>;
+}
+
+/** An HTTP failure that kept its status and machine-readable code. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
 }
 
 export const api = {
@@ -429,8 +453,15 @@ export const api = {
   news: () => getJSON<NewsResponse>("/news"),
   marketMood: () => getJSON<MarketMood | null>("/market/mood"),
   trades: () => getJSON<Trade[]>("/trades"),
-  enterTrade: (symbol: string, mode: TradingMode, lots: number, entry_premium?: number, signal_id?: string) =>
-    postJSON<Trade>("/trades/enter", { symbol, mode, lots, entry_premium, signal_id }),
+  // `acknowledge_oversize` clears the one-time refusal when lots exceed the
+  // card's suggestion; send it only after the trader has seen the rupee risk.
+  enterTrade: (
+    symbol: string, mode: TradingMode, lots: number, entry_premium?: number,
+    signal_id?: string, acknowledge_oversize = false,
+  ) =>
+    postJSON<Trade>("/trades/enter", {
+      symbol, mode, lots, entry_premium, signal_id, acknowledge_oversize,
+    }),
   restartFeed: () => postJSON<AuthStatus>("/auth/feed/restart", {}),
   paperSummary: () => getJSON<PaperSummary>("/paper/summary"),
   reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),

@@ -26,6 +26,31 @@ from app.signals.models import (
     SignalState,
 )
 
+def premium_quote(
+    ticks: dict | None, token: int | None, chain_ltp: float, now: int
+) -> tuple[float, int | None]:
+    """The freshest premium available for `token`, and that quote's age.
+
+    Returns (price, age_seconds). Two sources exist for an option's premium and
+    they fail independently: the CHAIN snapshot (chain_ltp) is rebuilt on a
+    poll and can freeze while ticks still flow; the TICK stream can die for one
+    token while the chain keeps returning its last build. Preferring the tick's
+    last_price whenever one exists, but always aging the quote by the tick's
+    exchange timestamp, covers both: a fresh tick corrects a stale chain, and a
+    dead tick stream turns into a large age the caller can refuse.
+
+    age None means "no timestamped tick at all" — the caller cannot distinguish
+    fresh from ancient, which for issuing a priced card is the same as stale.
+    (The `ts` is the exchange's own stamp, so a pre-open tick carried over from
+    yesterday ages by a full day rather than looking current.)
+    """
+    tick = (ticks or {}).get(token) or {}
+    ltp = tick.get("last_price")
+    price = float(ltp) if ltp and ltp > 0 else chain_ltp
+    ts = tick.get("ts")
+    return price, (max(0, now - int(ts)) if ts else None)
+
+
 _HEADLINES = {
     Regime.STRONG_BULLISH: "Search for CE opportunity",
     Regime.MODERATE_BULLISH: "Search for CE opportunity",
@@ -137,8 +162,32 @@ class SignalEngine:
         if pick is None or pick.ltp is None:
             return resp(Action.AVOID, reason="No liquid strike available", score=chosen)
 
+        # FRESHNESS GATE + freshest-price override. The chain snapshot the pick
+        # came from can lag the tape by minutes (candle-verified on 21/22-Jul:
+        # 5 of 9 cards were priced on stale premiums, one at the PREVIOUS DAY'S
+        # CLOSE while the contract opened 10% higher — every zone/SL/target on
+        # those cards described a market that no longer existed). The rule:
+        # price the plan from the newest quote available, and if even that is
+        # older than the cutoff, say so and issue nothing.
+        entry_px, quote_age = premium_quote(ticks, pick.token, pick.ltp, now)
+        max_age = self.cfg.signal_max_premium_age_s
+        if max_age > 0 and ticks is not None:
+            if quote_age is None:
+                return resp(
+                    Action.AVOID, score=chosen,
+                    reason=(f"No timestamped quote for {pick.tradingsymbol or pick.strike} "
+                            "— refusing to price a card on an unverifiable premium"),
+                )
+            if quote_age > max_age:
+                return resp(
+                    Action.AVOID, score=chosen,
+                    reason=(f"Premium quote for {pick.tradingsymbol or pick.strike} is "
+                            f"{quote_age}s old (limit {max_age}s) — the zone it would "
+                            "price no longer exists"),
+                )
+
         plan = risk_mod.build(
-            direction, pick.ltp, df, ind, price_fut, symbol, tf,
+            direction, entry_px, df, ind, price_fut, symbol, tf,
             profile.premium_sl_pct, profile.rr_target1, profile.rr_target2, basis,
             disaster_pct=self._disaster_pct(),
             quick_pct=self.cfg.quick_target_pct or None,
@@ -184,6 +233,6 @@ class SignalEngine:
             valid_until=now + profile.validity_seconds,
             score=chosen,
             ref_spot=spot_ltp,
-            ref_entry_premium=pick.ltp,
+            ref_entry_premium=entry_px,
         )
         return resp(card.action, signal=card, score=chosen)

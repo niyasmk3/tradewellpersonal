@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     # hours (design goal is 1-4/day) and the highest-confidence ones still lost.
     score_valid: int = Field(default=78, alias="SCORE_VALID")
     score_wait: int = Field(default=70, alias="SCORE_WAIT")
+    # A card may only be issued on a premium quote at most this old. Added after
+    # 21/22-Jul, when 5 of 9 cards priced their entry zone off a stale premium —
+    # one literally at the previous day's close while the market opened 10%
+    # higher — making the published zones unfillable and every level below them
+    # wrong. Candle-verified: refs lagged the tape by 3 min to a full day.
+    # 0 disables (tests / offline replay).
+    signal_max_premium_age_s: int = Field(default=120, ge=0, alias="SIGNAL_MAX_PREMIUM_AGE_S")
 
     # --- Signal throttle (added 2026-07-20 after an 11-signal / -Rs70k day) ---
     # A tradeable score is necessary but NOT sufficient: these gates cap how
@@ -72,6 +79,20 @@ class Settings(BaseSettings):
     kite_sl_limit_buffer_pct: float = Field(
         default=0.05, gt=0, le=0.5, alias="KITE_SL_LIMIT_BUFFER_PCT"
     )
+
+    # --- Off-desk signal delivery (see app/notify.py) ---
+    # The browser alert only fires with the dashboard open. A webhook reaches
+    # your phone. Empty (default) disables it entirely — no network call is made.
+    # ntfy example:     https://ntfy.sh/<your-private-topic>
+    # Telegram example: https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>
+    alert_webhook_url: str = Field(default="", alias="ALERT_WEBHOOK_URL")
+    # "text" posts a plain body (ntfy); "json" posts {title,text,message,...}.
+    alert_webhook_format: str = Field(default="text", alias="ALERT_WEBHOOK_FORMAT")
+    # Only push cards at or above this score. 0 = every issued card. The default
+    # is deliberately below score_valid: the throttle already caps the engine at
+    # 4 cards/day, so filtering further would only re-create the missed-signal
+    # problem this exists to solve.
+    alert_min_score: float = Field(default=0.0, ge=0, le=100, alias="ALERT_MIN_SCORE")
 
     # --- Journal auto-close (advisory bookkeeping; places NO orders) ---
     # When a plan trigger fires, close the journal row so P&L, the daily loss
@@ -111,6 +132,13 @@ class Settings(BaseSettings):
     # suggestion is shown (never guess a size on someone's behalf).
     trading_capital: float = Field(default=0.0, ge=0, alias="TRADING_CAPITAL")
     risk_per_trade_pct: float = Field(default=1.0, gt=0, le=10, alias="RISK_PER_TRADE_PCT")
+    # DEPLOYABLE premium budget for the day — a different question from
+    # TRADING_CAPITAL. Capital answers "how much may I LOSE per trade" (risk
+    # sizing); the fund answers "how many lots can I actually BUY at this
+    # premium" (affordability), and prefills the card's lots so the Kite basket
+    # opens with the right quantity. Runtime-editable from the dashboard
+    # (risk-limits panel); this is only the .env baseline. 0 = feature off.
+    trading_fund: float = Field(default=0.0, ge=0, alias="TRADING_FUND")
     # Risk model
     premium_sl_pct: float = Field(default=0.18, alias="PREMIUM_SL_PCT")
     # EARLY partial-book level, as a fraction above YOUR fill. Reaching it books

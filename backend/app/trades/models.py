@@ -141,6 +141,11 @@ class EnterRequest(BaseModel):
     # the form is confirmed, the backend rejects instead of booking a contract
     # the user never intended to log.
     signal_id: Optional[str] = None
+    # Set after the caller has been shown, and accepted, the rupee risk of a
+    # size above the card's suggestion. The first submit is refused with that
+    # number in the message; this field is the "yes, I know" on the retry.
+    # Advisory only — it gates the WARNING, never the trade.
+    acknowledge_oversize: bool = False
 
 
 class ExitRequest(BaseModel):

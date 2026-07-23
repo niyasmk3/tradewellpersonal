@@ -129,9 +129,65 @@ class TradeStore:
     def create_from_signal(
         self, card: SignalCard, lots: int, entry_premium: float, lot_size: int,
         product: str | None = None, disaster_pct: float | None = None,
-        quick_pct: float | None = None,
+        quick_pct: float | None = None, sl_pct: float | None = None,
+        rr1: float | None = None, rr2: float | None = None,
     ) -> Trade:
+        """Journal a position taken on `card`, with every level re-anchored to
+        the fill.
+
+        THE WHOLE LADDER COMES FROM `entry_premium`, not from the card. The card
+        prices a plan against the premium at issue time; your fill is the only
+        premium you actually own. On 22-Jul a card referenced at 197.45 was
+        filled at 289.70 and inherited the card's stop verbatim — ₹9,847 at risk
+        against a sizing note that said ₹3,845, and a 0.17 reward:risk on a
+        setup advertised at 2.0. `disaster_sl` and `quick_target` were already
+        computed from the fill; stop_loss/target1/target2 were the outliers, and
+        mixing the two anchors is what put quick_target ABOVE target1 twice.
+
+        `sl_pct`/`rr1`/`rr2` come from the mode profile. Without all three the
+        card's own levels are kept (legacy callers and tests), and only the
+        ordering invariant is enforced.
+        """
         now = _now()
+        events = [TradeEvent(ts=now, kind="entered", note=f"Entered {lots} lot(s) @ ₹{entry_premium}")]
+
+        if sl_pct is not None and rr1 is not None and rr2 is not None:
+            from app.signals.risk import price_ladder
+
+            ladder = price_ladder(entry_premium, sl_pct, rr1, rr2, disaster_pct, quick_pct)
+            stop_loss = ladder["premium_sl"]
+            target1, target2 = ladder["target1"], ladder["target2"]
+            disaster_sl, quick_target = ladder["disaster_sl"], ladder["quick_target"]
+            # Only worth a note when the fill actually moved the plan.
+            if abs(stop_loss - card.premium_sl) >= _TICK or abs(target1 - card.target1) >= _TICK:
+                events.append(TradeEvent(
+                    ts=now, kind="repriced",
+                    note=(f"Levels re-priced to your ₹{entry_premium} fill — "
+                          f"SL ₹{stop_loss} (card ₹{card.premium_sl}), "
+                          f"T1 ₹{target1} (card ₹{card.target1})"),
+                ))
+        else:
+            stop_loss, target1, target2 = card.premium_sl, card.target1, card.target2
+            disaster_sl = (_round_tick(entry_premium * (1 - disaster_pct))
+                           if disaster_pct else None)
+            quick_target = (_round_tick(entry_premium * (1 + quick_pct))
+                            if quick_pct else None)
+            # price_ladder drops a T0 that is not actually earlier than T1; the
+            # fallback path has to do the same or the monitor books "early" last.
+            if quick_target is not None and quick_target >= target1:
+                quick_target = None
+
+        # Chasing is legal — you may have good reason — but it must be on the
+        # record, because a fill above the zone is where the plan's arithmetic
+        # stops describing the trade you are in.
+        if card.entry_high and entry_premium > card.entry_high:
+            over = (entry_premium / card.entry_high - 1) * 100
+            events.append(TradeEvent(
+                ts=now, kind="entry_outside_zone",
+                note=(f"Filled ₹{entry_premium}, {over:.1f}% above the ₹{card.entry_low}–"
+                      f"{card.entry_high} zone — the card's edge was priced lower"),
+            ))
+
         with self._lock:
             tid = self._new_id()
             lots = max(1, lots)
@@ -143,22 +199,13 @@ class TradeStore:
                 lots=lots, lot_size=lot_size, quantity=lots * lot_size,
                 initial_quantity=lots * lot_size,
                 product=product,
-                status=TradeStatus.ENTERED, stop_loss=card.premium_sl,
-                target1=card.target1, target2=card.target2, trailing_sl=card.premium_sl,
-                # From YOUR fill, not the card's reference: it is a percentage of
-                # what you actually paid, so entering below the zone does not buy
-                # a disproportionately tight backstop. None here means the
-                # premium stop keeps governing — see monitor.evaluate.
-                disaster_sl=(_round_tick(entry_premium * (1 - disaster_pct))
-                             if disaster_pct else None),
-                # From the FILL as well: a T0 anchored to the card's reference
-                # would sit at the wrong distance whenever the fill differs,
-                # which is exactly how today's trades went wrong.
-                quick_target=(_round_tick(entry_premium * (1 + quick_pct))
-                              if quick_pct else None),
+                status=TradeStatus.ENTERED, stop_loss=stop_loss,
+                target1=target1, target2=target2, trailing_sl=stop_loss,
+                disaster_sl=disaster_sl,
+                quick_target=quick_target,
                 invalidation_level=card.invalidation_level, invalidation_dir=card.invalidation_dir,
                 created_at=now, entered_at=now,
-                events=[TradeEvent(ts=now, kind="entered", note=f"Entered {lots} lot(s) @ ₹{entry_premium}")],
+                events=events,
             )
             self._trades[tid] = trade
             self._save()

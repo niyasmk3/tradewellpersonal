@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ScoreBreakdown, SignalResponse, TradingMode, api } from "@/lib/api";
+import { ApiError, ScoreBreakdown, SignalResponse, TradingMode, api } from "@/lib/api";
 import { fetchKiteBasket, submitKiteBasket } from "@/lib/kiteBasket";
 import { fmt, istToday, parseNum, pctFrom } from "@/lib/format";
 import { RiskVisualizer } from "./RiskVisualizer";
@@ -93,10 +93,17 @@ export function SignalPanel({
   // Bind the form to the card it was opened for: if the active signal changes
   // (bias flip swaps CE→PE), a still-open form must not book the new contract
   // at the old premium. Reset everything whenever the card id changes.
+  //
+  // Lots prefill: the fund-affordable count first (what today's fund buys at
+  // the live premium — the number the Kite basket should open with), then the
+  // risk suggestion, then 1. Prefill happens ONLY here, on a new card: while
+  // the form is open the field belongs to the user, and a poll that reprices
+  // fund_lots must not overwrite what they typed.
   useEffect(() => {
     setEntering(false);
     setEntryPx("");
-    setLots("1");
+    setLots(String(signal?.fund_lots || signal?.suggested_lots || 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal?.id]);
 
   const expired = countdown === "expired" || (signal ? signal.state !== "active" : false);
@@ -191,7 +198,20 @@ export function SignalPanel({
     // (typed > live > signal reference).
     setBusy(true);
     try {
-      await api.enterTrade(symbol, mode, lotsN, premium, signal.id);
+      try {
+        await api.enterTrade(symbol, mode, lotsN, premium, signal.id);
+      } catch (e) {
+        // Size above the card's suggestion is refused ONCE, with the rupee risk
+        // spelled out. It is a speed bump, not a wall: the position is already
+        // open at the broker, and refusing outright would only leave it
+        // untracked. Confirm, and the same request goes back acknowledged.
+        if (e instanceof ApiError && e.code === "oversize_lots") {
+          if (!confirm(`${e.message}\n\nJournal it anyway?`)) return;
+          await api.enterTrade(symbol, mode, lotsN, premium, signal.id, true);
+        } else {
+          throw e;
+        }
+      }
       setEntering(false);
       setEntryPx("");
       onEntered();
@@ -402,6 +422,21 @@ export function SignalPanel({
           onLots={(n) => setLots(String(n))}
           entryOverride={parseNum(entryPx)}
         />
+        {/* Affordability line: what today's fund buys at the live premium.
+            Clickable when the form has drifted from it, so getting back to the
+            prefilled quantity is one tap, not mental division. */}
+        {signal.fund_note && (
+          <button
+            type="button"
+            onClick={() =>
+              signal.fund_lots && signal.fund_lots > 0 && setLots(String(signal.fund_lots))
+            }
+            className="mt-1 block w-full truncate text-left font-mono text-[10px] text-muted hover:text-white"
+            title="Fund-affordable size — click to use it as the lots"
+          >
+            ⛁ {signal.fund_note}
+          </button>
+        )}
       </div>
 
       {/* ---- everything below scrolls ---- */}

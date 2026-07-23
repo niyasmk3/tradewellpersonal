@@ -49,8 +49,9 @@ class LimitSpec:
     example: str
 
 
-# The editable set. Deliberately just the loss/breaker guards — the values a
-# trader reaches for after a bad run, not the ones that reshape a signal.
+# The editable set: the loss/breaker guards, plus the day's deployable fund —
+# the values a trader reaches for daily or after a bad run, not the ones that
+# reshape a signal's scoring.
 SPECS: tuple[LimitSpec, ...] = (
     LimitSpec(
         key="daily_loss_limit", label="Daily loss limit", unit="rupees",
@@ -87,6 +88,19 @@ SPECS: tuple[LimitSpec, ...] = (
             "which is why the rupee limits above matter too."
         ),
         example="2 means the third signal is withheld after two losses back to back.",
+    ),
+    LimitSpec(
+        key="trading_fund", label="Today's trading fund", unit="rupees",
+        min=0, max=100_000_000, step=1000, zero_disables=True,
+        config_attr="trading_fund",
+        description=(
+            "The premium budget you are deploying today. Each signal card then "
+            "prefills how many lots this fund buys at the live premium — "
+            "lots = fund ÷ (premium × lot size) — so the Kite basket opens with "
+            "the right quantity already set. Affordability only: it is not a "
+            "risk suggestion (that is TRADING_CAPITAL's job) and places no order."
+        ),
+        example="₹10,00,000 at a ₹100 premium (lot 65) prefills 153 lots = 9,945 qty.",
     ),
     LimitSpec(
         key="max_open_positions", label="Max open positions", unit="positions",
@@ -187,10 +201,11 @@ class RiskLimitStore:
                 "fields": fields,
                 "updated_at": self._updated_at,
                 "note": (
-                    "These limits HALT SIGNALS — they place, modify, or close no order. "
+                    "The loss limits HALT SIGNALS — they place, modify, or close no order. "
                     "Tradewell puts nothing in the market. They stop the engine offering "
                     "more trades once the day has gone against you; your actual loss is "
-                    "still capped only by the stop you act on yourself."
+                    "still capped only by the stop you act on yourself. The trading fund "
+                    "is different: it only prefills lot quantities on signal cards."
                 ),
             }
 

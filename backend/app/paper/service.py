@@ -28,6 +28,8 @@ import time
 from app.config import Settings
 from app.paper import charges as chg
 from app.signals.models import SignalCard, TradingMode
+from app.signals.modes import ladder_params
+from app.signals.risk_limits import risk_limit_store
 from app.state import MarketState
 from app.trades import monitor
 from app.trades.models import TradeStatus
@@ -96,12 +98,22 @@ class PaperTradingService:
         # entry-zone check below must be retryable: a premium currently outside
         # the zone can come back into it while the card is still valid, and
         # burning the card here would lose a trade the plan would have taken.
-        live = None
-        if card.token is not None:
-            live = self.state.ticks.get(card.token, {}).get("last_price")
-        base = live or card.ref_entry_premium or card.entry_high
+        #
+        # TAPE ONLY — the card's reference is NOT a fallback. On 22-Jul the
+        # 09:15:03 card carried yesterday's close as its reference; no tick had
+        # arrived yet, the fallback "filled" at ₹198.24 while the contract
+        # opened at ₹216, and the book recorded ₹8,261 of profit from an entry
+        # that never traded. A simulation may only buy prices that existed.
+        tick = self.state.ticks.get(card.token, {}) if card.token is not None else {}
+        base = tick.get("last_price")
         if not base or base <= 0:
             return                       # no tick yet — retry next cycle
+        ts = tick.get("ts")
+        max_age = self.cfg.signal_max_premium_age_s
+        if ts and max_age > 0 and int(time.time()) - int(ts) > max_age:
+            log.info("paper: %s tick is %ds old — waiting for a live quote",
+                     card.contract, int(time.time()) - int(ts))
+            return                       # NOT marked seen — the stream may recover
 
         # ENTRY-ZONE FLOOR. Previously only the top was clamped, so the
         # simulator would happily buy a premium that had already collapsed
@@ -116,31 +128,55 @@ class PaperTradingService:
                      card.contract, base, card.entry_low, card.entry_high)
             return                       # NOT marked seen — may re-enter the zone
 
-        self._seen.add(card.id)          # marked even if skipped below: never retried
+        # ENTRY-ZONE CEILING, the mirror image. A real basket LIMITs at
+        # entry_high; a tape trading above it means that order rests unfilled
+        # until price comes back into the zone. The old behaviour "filled" at
+        # entry_high anyway — on 22-Jul it bought ₹143.72 while the market
+        # traded ₹153.90, turning a losing entry into +₹521 of recorded profit.
+        # Waiting (not burning the card) is exactly what the resting LIMIT does.
+        if base > card.entry_high:
+            log.info("paper: %s at Rs%.2f is above the entry zone (Rs%.2f-%.2f) — limit rests",
+                     card.contract, base, card.entry_low, card.entry_high)
+            return                       # NOT marked seen — may pull back into the zone
 
+        # CAPACITY IS TEMPORARY, so it must not burn the card. On 22-Jul the
+        # highest-scoring signal the engine has ever produced (92.9) was offered
+        # while the book was full, marked seen, and never reconsidered — by the
+        # time a slot freed, the card was gone. Anything that can resolve on its
+        # own while the card is still valid returns WITHOUT marking seen.
         open_now = [t for t in self.store.all()
                     if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
-        cap = self.cfg.signal_max_open_positions
+        # The runtime override, not the .env default: the live engine reads the
+        # same overlay, and a simulation gated tighter than the thing it is
+        # meant to model reports fewer trades than the system would have taken.
+        cap = int(risk_limit_store.effective(self.cfg)["max_open_positions"])
         if cap > 0 and len(open_now) >= cap:
-            log.info("paper: skipping %s — %d position(s) already open", card.contract, len(open_now))
-            return
+            log.info("paper: %s deferred — %d/%d position(s) open", card.contract, len(open_now), cap)
+            return                       # NOT marked seen — a slot may free up
 
         lot = card.lot_size or 0
         if lot <= 0:
-            log.info("paper: skipping %s — no lot size", card.contract)
-            return
+            log.info("paper: %s deferred — no lot size yet", card.contract)
+            return                       # NOT marked seen — instrument data may still arrive
+
+        self._seen.add(card.id)          # committed: everything below always enters
 
         # entry_high is what a real basket would LIMIT at, so a fill above it is
         # not achievable; the floor above keeps it inside the zone.
         fill = round(min(base * (1 + self.cfg.paper_slippage_pct), card.entry_high), 2)
 
         lots = max(1, self.cfg.paper_lots or (card.suggested_lots or 1))
+        # Same re-pricing the live journal does, or the simulation would grade a
+        # ladder no real trade of this fill would have carried.
+        params = ladder_params(self.cfg, card.mode)
+        sl_pct, rr1, rr2 = params if params else (None, None, None)
         t = self.store.create_from_signal(
             card, lots, fill, lot, product=None,
             disaster_pct=(self.cfg.premium_disaster_pct
                           if self.cfg.stop_primary == "underlying"
                           and self.cfg.trading_capital > 0 else None),
             quick_pct=self.cfg.quick_target_pct or None,
+            sl_pct=sl_pct, rr1=rr1, rr2=rr2,
         )
         log.info("paper: entered %s %d lot(s) @ Rs%s (signal %s)",
                  card.contract, lots, fill, card.id)

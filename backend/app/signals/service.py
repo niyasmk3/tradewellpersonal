@@ -21,6 +21,7 @@ from app.signals.models import (
     Regime,
     SignalResponse,
 )
+from app.signals.sizing import apply_fund_sizing
 from app.signals.store import RiskState, SignalStore, ThrottleConfig
 from app.signals.risk_limits import risk_limit_store
 from app.state import MarketState
@@ -157,8 +158,12 @@ class SignalService:
         # capital is configured, and "no suggestion" must not mean "no numbers".
         card.lot_size = lot or None
         card.trading_capital = capital or None
-        # Live value, so the card reflects a limit set from the UI this session.
-        card.daily_loss_limit = risk_limit_store.effective(self.cfg)["daily_loss_limit"] or None
+        # Live values, so the card reflects limits set from the UI this session.
+        limits = risk_limit_store.effective(self.cfg)
+        card.daily_loss_limit = limits["daily_loss_limit"] or None
+        # Affordability prefill from the day's fund. Re-run against the live
+        # premium on every poll (routes_signals); this is the issue-time value.
+        apply_fund_sizing(card, limits.get("trading_fund", 0.0))
 
         if capital <= 0:
             card.sizing_note = "Set TRADING_CAPITAL in .env for a size suggestion"

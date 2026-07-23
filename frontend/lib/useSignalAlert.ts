@@ -12,12 +12,38 @@ const MUTE_KEY = "tradewell.alerts.muted";
  * even while you're viewing another symbol or mode).
  */
 export function useSignalAlert(signals: Array<SignalCard | null | undefined>) {
-  const [muted, setMuted] = useState(true); // safe default until localStorage loads
+  // Starts muted only so the first render matches the server's, then resolves
+  // from storage below. It is NOT the preference default — see the effect.
+  const [muted, setMuted] = useState(true);
   const alerted = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    setMuted(localStorage.getItem(MUTE_KEY) === "1" ? true : localStorage.getItem(MUTE_KEY) === "0" ? false : true);
+    // ALERTS ARE ON UNTIL YOU TURN THEM OFF. They used to default to muted, so
+    // an untouched install was silent forever — which is how the 92.9 card on
+    // 22-Jul expired unseen. Only an explicit "1" mutes now.
+    setMuted(localStorage.getItem(MUTE_KEY) === "1");
   }, []);
+
+  // Notification permission can only be requested from a user gesture, so a
+  // default-on alert cannot ask for it at load. Piggyback on the first click or
+  // keypress anywhere in the page — sound still works without it.
+  useEffect(() => {
+    if (muted) return;
+    if (!("Notification" in window) || Notification.permission !== "default") return;
+    const ask = () => {
+      try {
+        Notification.requestPermission();
+      } catch {
+        /* notification API unavailable — sound-only */
+      }
+    };
+    window.addEventListener("pointerdown", ask, { once: true });
+    window.addEventListener("keydown", ask, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", ask);
+      window.removeEventListener("keydown", ask);
+    };
+  }, [muted]);
 
   const toggle = useCallback(() => {
     setMuted((m) => {

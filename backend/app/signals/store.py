@@ -209,6 +209,7 @@ class SignalStore:
         cfg = cfg or ThrottleConfig()
         risk = risk or RiskState()
         key = _key(fresh.symbol, fresh.mode)
+        adopted: SignalCard | None = None     # pushed after the lock is released
         with self._lock:
             active = self._active.get(key)
             dirty = False
@@ -230,6 +231,7 @@ class SignalStore:
                 blocked = self._blocked(key, fresh.signal, now, cfg, risk)
                 if blocked is None:
                     active = fresh.signal
+                    adopted = active
                     self._active[key] = active
                     self._history.setdefault(key, []).insert(0, active)
                     del self._history[key][_HISTORY_MAX:]
@@ -256,7 +258,22 @@ class SignalStore:
             self._latest[key] = final
             if dirty:
                 self._save_locked()  # few writes/day: adopt + retire transitions only
-            return final
+
+        # Outside the lock on purpose: the push dispatches a thread, but even
+        # that much work does not belong under a lock the evaluation loop takes
+        # every few seconds. A failure here is logged and ignored — delivery is
+        # best-effort, the card is already issued either way.
+        if adopted is not None:
+            try:
+                from app.config import get_settings
+                from app.notify import push_signal
+
+                if push_signal(adopted, get_settings()):
+                    log.info("signal pushed (%s): %s score %.1f",
+                             key, adopted.contract, adopted.confidence or 0)
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("signal push failed: %s", exc)
+        return final
 
     @staticmethod
     def _trend_flipped(fresh: SignalResponse, active: SignalCard) -> bool:

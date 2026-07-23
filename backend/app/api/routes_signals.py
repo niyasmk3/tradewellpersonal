@@ -51,10 +51,20 @@ def current_signal(symbol: str, mode: str = Query("intraday")) -> SignalResponse
     # Attach the live premium at request time (not at issue) so it ticks with
     # each poll — latest() already returned a deep copy, so this is safe.
     if latest.signal is not None and latest.signal.token is not None:
+        from app.config import get_settings
+        from app.signals.risk_limits import risk_limit_store
+        from app.signals.sizing import apply_fund_sizing
         from app.state import market_state
 
         ltp = market_state.ticks.get(latest.signal.token, {}).get("last_price")
         latest.signal.live_premium = float(ltp) if ltp and ltp > 0 else None
+        # The affordability prefill must track the SAME premium the user sees:
+        # a card issued at ₹100 whose contract now trades ₹130 buys fewer lots,
+        # and prefilling yesterday's count would oversubmit the Kite basket.
+        apply_fund_sizing(
+            latest.signal,
+            risk_limit_store.effective(get_settings()).get("trading_fund", 0.0),
+        )
     return latest
 
 

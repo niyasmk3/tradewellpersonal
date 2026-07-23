@@ -20,6 +20,7 @@ from app.paper.service import PaperTradingService, summarize
 from app.signals.models import (
     Action, Direction, ScoreBreakdown, SignalCard, SignalState, TradingMode,
 )
+from app.signals.risk_limits import RiskLimitStore
 from app.trades.models import TradeStatus
 from app.trades.store import TradeStore
 
@@ -30,6 +31,23 @@ NOW = 1_700_000_000
 _MIDDAY = (int(time.time()) + 19800) // 86400 * 86400 - 19800 + 12 * 3600
 paper_service.time.time = lambda: float(_MIDDAY)
 REAL_JOURNAL = pathlib.Path(__file__).resolve().parents[1] / ".trades.json"
+
+# The open-position cap now reads the runtime overlay, exactly as the live
+# engine does. Point it at a path-less store so these tests see the .env values
+# they pass in, and not whatever the developer last saved in .risk_limits.json.
+paper_service.risk_limit_store = RiskLimitStore(path=None)
+
+
+def _levels(store):
+    """The open trade's live stop/targets.
+
+    Read rather than hardcoded: the journal re-prices the whole ladder from the
+    actual fill, so a test that pins the CARD's 100/150 is asserting geometry no
+    trade carries. What must hold is the behaviour — it exits at its own stop,
+    at its own target — which stays true whatever the multipliers become.
+    """
+    t = store.all()[0]
+    return t.stop_loss, t.target1
 
 
 def _cfg(**over):
@@ -133,6 +151,40 @@ def test_open_position_cap_is_respected():
     print("  PAPER  -> stopped at the 2-position cap, like the live throttle")
 
 
+def test_capacity_block_does_not_burn_the_card():
+    """A full book DEFERS a signal; it must not consume it.
+
+    On 22-Jul the highest-scoring card the engine has ever produced (92.9) was
+    offered while the book was full, marked seen, and never looked at again —
+    the slot freed minutes later and the card was already gone. Capacity is
+    temporary, so it belongs with the retryable checks, not the terminal ones.
+    """
+    s = _store()
+    svc = PaperTradingService(_cfg(SIGNAL_MAX_OPEN_POSITIONS=1), _State(px=120.0), s)
+    svc.consider(_card(cid="FIRST"))
+    svc.consider(_card(cid="BEST"))                    # blocked: book is full
+    assert len(s.all()) == 1, len(s.all())
+    assert "BEST" not in svc._seen, "the blocked card was burned"
+
+    # Free the slot the way the real thing does, then re-offer the same card.
+    stop, _ = _levels(s)
+    PaperTradingService(_cfg(SIGNAL_MAX_OPEN_POSITIONS=1), _State(px=stop - 1.0), s).run_once()
+    svc.consider(_card(cid="BEST"))
+    assert [t.signal_id for t in s.all() if t.status is TradeStatus.ENTERED] == ["BEST"]
+    print("  PAPER  -> card deferred while full, taken once a slot freed")
+
+
+def test_missing_lot_size_is_retried_when_it_arrives():
+    """Instrument metadata loads asynchronously; a card must survive the gap."""
+    s = _store()
+    svc = PaperTradingService(_cfg(), _State(px=120.0), s)
+    svc.consider(_card(cid="S1", lot=0))
+    assert not s.all() and "S1" not in svc._seen
+    svc.consider(_card(cid="S1", lot=75))
+    assert len(s.all()) == 1, len(s.all())
+    print("  PAPER  -> entered once the lot size resolved")
+
+
 def test_skips_when_lot_size_or_premium_is_unknown():
     s = _store()
     PaperTradingService(_cfg(), _State(px=120.0), s).consider(_card(lot=0))
@@ -147,13 +199,71 @@ def test_skips_when_lot_size_or_premium_is_unknown():
     print("  PAPER  -> refuses to invent a lot size or a premium")
 
 
+def test_card_reference_is_not_a_fill_price():
+    """No tape, no trade — the card's own reference must never become a fill.
+
+    On 22-Jul the 09:15:03 card carried YESTERDAY'S CLOSE as its reference; no
+    tick had arrived, the fallback 'filled' ₹18 below the day's actual range,
+    and the book recorded ₹8,261 of profit from an entry that never traded."""
+    s = _store("/tmp/tw-paper-test-noref.json")
+    svc = PaperTradingService(_cfg(), _State(px=None), s)
+    c = _card()                     # ref_entry_premium 120-ish, entry_high 124
+    c.ref_entry_premium = 120.0
+    svc.consider(c)
+    assert not s.all(), "entered a paper trade with no live tick"
+    # The card is NOT burned: the first real tick can still take it.
+    svc2 = PaperTradingService(_cfg(), _State(px=120.0), s)
+    svc2._seen = svc._seen
+    svc2.consider(c)
+    assert len(s.all()) == 1
+    print("  PAPER  -> no tick = no fill; first real tick still takes the card")
+
+
+def test_above_zone_waits_like_a_resting_limit():
+    """A tape above entry_high must WAIT, not fill at entry_high.
+
+    The old cap manufactured fills at prices the market never offered — on
+    22-Jul it bought ₹143.72 while the contract traded ₹153.90, booking +₹521
+    on a trade that actually lost. A real LIMIT rests; so does paper now."""
+    s = _store("/tmp/tw-paper-test-above.json")
+    svc = PaperTradingService(_cfg(), _State(px=130.0), s)   # zone tops at 124
+    svc.consider(_card())
+    assert not s.all(), "filled above the entry zone"
+    # Not burned: a pullback INTO the zone fills at the tape, not the cap.
+    svc2 = PaperTradingService(_cfg(), _State(px=122.0), s)
+    svc2._seen = svc._seen
+    svc2.consider(_card())
+    assert len(s.all()) == 1
+    assert s.all()[0].entry_premium == 122.0, s.all()[0].entry_premium
+    print("  PAPER  -> ₹130 tape rests above the ₹124 zone; fills the ₹122 pullback")
+
+
+def test_stale_tick_defers_entry():
+    """A tick older than the freshness cutoff is yesterday's market — wait."""
+    s = _store("/tmp/tw-paper-test-stale.json")
+    st = _State(px=120.0)
+    st.ticks[999]["ts"] = _MIDDAY - 100_000       # yesterday's stamp
+    svc = PaperTradingService(_cfg(), st, s)
+    svc.consider(_card())
+    assert not s.all(), "entered on a day-old tick"
+    # A fresh stamp on the same premium takes the card.
+    st2 = _State(px=120.0)
+    st2.ticks[999]["ts"] = _MIDDAY - 2
+    svc2 = PaperTradingService(_cfg(), st2, s)
+    svc2._seen = svc._seen
+    svc2.consider(_card())
+    assert len(s.all()) == 1
+    print("  PAPER  -> day-old tick deferred; 2s-old tick fills")
+
+
 # --- exit --------------------------------------------------------------------
 
 def test_exits_on_stop_and_books_net_of_charges():
     s = _store()
     cfg = _cfg()
     PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
-    svc = PaperTradingService(cfg, _State(px=99.0), s)     # stop is 100
+    stop, _ = _levels(s)
+    svc = PaperTradingService(cfg, _State(px=stop - 1.0), s)
     svc.run_once()
     t = s.all()[0]
     assert t.status is TradeStatus.EXITED and t.auto_close_reason == "stop"
@@ -168,7 +278,8 @@ def test_exits_on_target_and_on_invalidation():
     s = _store()
     cfg = _cfg()
     PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
-    PaperTradingService(cfg, _State(px=151.0), s).run_once()      # T1 = 150
+    _, t1 = _levels(s)
+    PaperTradingService(cfg, _State(px=t1 + 1.0), s).run_once()
     assert s.all()[0].auto_close_reason == "target1"
 
     s2 = _store("/tmp/tw-paper-test4.json")
@@ -182,10 +293,12 @@ def test_exit_slippage_reduces_the_fill():
     s = _store()
     cfg = _cfg(PAPER_SLIPPAGE_PCT=0.01)
     PaperTradingService(cfg, _State(px=120.0), s).consider(_card())
-    PaperTradingService(cfg, _State(px=151.0), s).run_once()
+    _, t1 = _levels(s)
+    tape = t1 + 1.0
+    PaperTradingService(cfg, _State(px=tape), s).run_once()
     t = s.all()[0]
-    assert t.exit_premium == round(151.0 * 0.99, 2), t.exit_premium
-    print(f"  PAPER  -> exit filled at Rs{t.exit_premium}, below the Rs151.00 tape")
+    assert t.exit_premium == round(tape * 0.99, 2), t.exit_premium
+    print(f"  PAPER  -> exit filled at Rs{t.exit_premium}, below the Rs{tape:.2f} tape")
 
 
 def test_no_exit_without_a_live_premium():
@@ -224,8 +337,10 @@ def test_restart_does_not_re_enter_open_signals():
 def test_summary_reports_expectancy_and_reasons():
     s = _store()
     cfg = _cfg()
-    for i, px in enumerate((151.0, 99.0)):
+    for i, win in enumerate((True, False)):
         PaperTradingService(cfg, _State(px=120.0), s).consider(_card(cid=f"S{i}"))
+        stop, t1 = _levels(s)
+        px = t1 + 1.0 if win else stop - 1.0
         PaperTradingService(cfg, _State(px=px), s).run_once()
     out = summarize(s)
     assert out["trades"] == 2 and out["wins"] == 1 and out["losses"] == 1

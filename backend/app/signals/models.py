@@ -170,6 +170,17 @@ class SignalCard(BaseModel):
     suggested_lots: Optional[int] = None
     sizing_note: Optional[str] = None
 
+    # AFFORDABILITY sizing, from the runtime-editable trading fund: how many
+    # whole lots the fund buys at the freshest premium available. Recomputed
+    # against live_premium on every poll, so the number the UI prefills tracks
+    # the tape, not the issue-time reference. None when the fund is unset or no
+    # premium/lot size is known. Distinct from suggested_lots on purpose: that
+    # one caps LOSS, this one caps OUTLAY, and conflating them is how a "safe"
+    # size deploys ten times the intended money.
+    fund_lots: Optional[int] = None
+    fund_qty: Optional[int] = None
+    fund_note: Optional[str] = None
+
     # Contract multiplier, so the UI can turn premium levels into rupees BEFORE
     # the trade is placed. 0/None means the instrument dump hasn't loaded a lot
     # size — the UI must then show no rupee figures rather than guess one.
