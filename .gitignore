@@ -36,3 +36,4 @@ yarn-error.log*
 *.swp
 backend/.paper_trades.json
 backend/.risk_limits.json
+logs/
