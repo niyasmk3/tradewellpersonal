@@ -164,6 +164,11 @@ class FeedController:
         market_state.user_id = kite_service.user_id
 
         self.signal_service = SignalService(settings, market_state, signal_store)
+        # Off-desk push: wired HERE, not inside the store, so only the live
+        # feed ever sends — a test or replay that adopts cards stays silent.
+        from app.notify import push_signal
+
+        signal_store.notify = lambda card: push_signal(card, settings)
         self.trade_monitor = TradeMonitorService(market_state, trade_store)
         if settings.paper_trading:
             # Its OWN store file. A paper position must never appear in the

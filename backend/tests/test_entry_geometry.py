@@ -128,9 +128,9 @@ def test_legacy_callers_still_get_the_card_levels():
 
 # --- size guard ---------------------------------------------------------------
 
-def _guard(lots, ack=False, card=None, entry=289.7):
+def _guard(lots, ack=False, card=None, entry=289.7, disaster_pct=None):
     body = EnterRequest(symbol="NIFTY", lots=lots, acknowledge_oversize=ack)
-    _guard_size(body, card or _card(), entry, 65, SL_PCT, RR1, RR2, _cfg())
+    _guard_size(body, card or _card(), entry, 65, SL_PCT, RR1, RR2, disaster_pct, _cfg())
 
 
 def test_size_within_suggestion_passes():
@@ -177,6 +177,23 @@ def test_risk_is_quoted_against_the_repriced_stop():
         assert f"{card_stop_risk:,.0f}" not in exc.detail["message"], exc.detail
         assert "₹237.55" in exc.detail["message"], exc.detail
         print("  SIZE   -> risk quoted against the stop the trade will carry")
+
+
+def test_risk_is_quoted_against_the_disaster_stop_when_it_governs():
+    """With the underlying stop primary, the premium stop is only a backstop —
+    the trade actually ends at the disaster level, and quoting the narrower
+    stop understates the acknowledged rupees ~2.5x. The dialog must show the
+    number the journal will really carry."""
+    try:
+        _guard(lots=10, disaster_pct=0.45)
+    except HTTPException as exc:
+        d = exc.detail
+        # Stop = 289.70 x 0.55 = ₹159.35 → risk (289.70-159.35) x 650 = ₹84,727.50
+        assert d["risk_rupees"] == 84727.5, d
+        assert "₹159.35" in d["message"], d
+        print(f"  SIZE   -> disaster stop governs the quote: {d['risk_rupees']:,.0f}")
+        return
+    raise AssertionError("oversize with disaster stop was not challenged")
 
 
 if __name__ == "__main__":

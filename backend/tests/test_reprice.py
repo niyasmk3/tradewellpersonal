@@ -187,7 +187,12 @@ def _install_endpoint(resp, ltp=30.0):
             self.repriced = ltp; return resp.signal
     fake = _FakeStore()
     store_mod.signal_store = fake
-    state_mod.market_state.ticks = {999: {"last_price": ltp}} if ltp else {}
+    # Fresh exchange stamp: reprice now enforces the same premium-age gate as
+    # issuance, and an unstamped tick is refused as unverifiable.
+    import time as _t
+    state_mod.market_state.ticks = (
+        {999: {"last_price": ltp, "ts": int(_t.time())}} if ltp else {}
+    )
     return rs, fake
 
 
@@ -224,6 +229,33 @@ def test_endpoint_reprices_when_live_score_still_valid():
     assert out.status == "repriced" and out.signal is not None
     assert fake.repriced == 31.5 and fake.closed is None
     print("  ENDPOINT-> bear 80 >= 72 -> RE-PRICED against live 31.5")
+
+
+def test_endpoint_refuses_a_stale_tick():
+    """Reprice exists to REMOVE staleness — and it re-stamps created_at so the
+    Kite hand-off's age guard passes. Accepting a frozen tick here would
+    launder a dead premium into a 'fresh' card with one click, recreating the
+    exact unfillable-zone bug the issue-time gate closed. Same cutoff as
+    issuance; a stale stream must 409, not re-price."""
+    import time as _t
+
+    from fastapi import HTTPException
+
+    from app import state as state_mod
+
+    card = _card(created=BASE)
+    resp = SignalResponse(symbol="NIFTY", mode=TradingMode.POSITIONAL, evaluated_at=BASE,
+                          status=_status(Regime.MODERATE_BEARISH, 20.0, 80.0),
+                          action=Action.BUY_PE, signal=card, no_trade_reason=None, score=None)
+    rs, fake = _install_endpoint(resp, ltp=31.5)
+    state_mod.market_state.ticks[999]["ts"] = int(_t.time()) - 5_400   # 90 min dead
+    try:
+        rs.reprice_signal("NIFTY", "positional")
+        assert False, "stale tick should 409"
+    except HTTPException as e:
+        assert e.status_code == 409 and "fresh premium" in e.detail.lower(), e.detail
+    assert fake.repriced is None and fake.closed is None
+    print("  ENDPOINT-> 90-min-dead tick -> 409, nothing re-priced")
 
 
 def test_endpoint_warmup_neither_closes_nor_reprices():

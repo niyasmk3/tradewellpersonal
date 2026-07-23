@@ -72,8 +72,14 @@ def _store(name="/tmp/tw-paper-test.json"):
 
 
 class _State:
-    def __init__(self, px=None, spot=24400.0):
-        self.ticks = {999: {"last_price": px}} if px is not None else {}
+    # Ticks carry a fresh exchange stamp by default, matching what the live
+    # ticker always attaches: the freshness gate treats an UNSTAMPED tick as
+    # unverifiable-hence-stale, and that case gets its own dedicated test.
+    def __init__(self, px=None, spot=24400.0, ts=None):
+        self.ticks = (
+            {999: {"last_price": px, "ts": ts if ts is not None else _MIDDAY}}
+            if px is not None else {}
+        )
         self._spot = spot
 
     def underlying_snapshot(self, sym):
@@ -241,19 +247,60 @@ def test_above_zone_waits_like_a_resting_limit():
 def test_stale_tick_defers_entry():
     """A tick older than the freshness cutoff is yesterday's market — wait."""
     s = _store("/tmp/tw-paper-test-stale.json")
-    st = _State(px=120.0)
-    st.ticks[999]["ts"] = _MIDDAY - 100_000       # yesterday's stamp
+    st = _State(px=120.0, ts=_MIDDAY - 100_000)   # yesterday's stamp
     svc = PaperTradingService(_cfg(), st, s)
     svc.consider(_card())
     assert not s.all(), "entered on a day-old tick"
     # A fresh stamp on the same premium takes the card.
-    st2 = _State(px=120.0)
-    st2.ticks[999]["ts"] = _MIDDAY - 2
-    svc2 = PaperTradingService(_cfg(), st2, s)
+    svc2 = PaperTradingService(_cfg(), _State(px=120.0, ts=_MIDDAY - 2), s)
     svc2._seen = svc._seen
     svc2.consider(_card())
     assert len(s.all()) == 1
     print("  PAPER  -> day-old tick deferred; 2s-old tick fills")
+
+
+def test_unstamped_tick_is_unverifiable_unless_gate_disabled():
+    """No exchange stamp = age unknown = same as stale (mirrors the engine).
+    SIGNAL_MAX_PREMIUM_AGE_S=0 is the deliberate escape hatch for replays."""
+    s = _store("/tmp/tw-paper-test-unstamped.json")
+    st = _State(px=120.0)
+    del st.ticks[999]["ts"]
+    PaperTradingService(_cfg(), st, s).consider(_card())
+    assert not s.all(), "filled on a tick whose age nothing verified"
+    PaperTradingService(_cfg(SIGNAL_MAX_PREMIUM_AGE_S=0), st, s).consider(_card())
+    assert len(s.all()) == 1
+    print("  PAPER  -> unstamped tick refused; gate=0 accepts it (replay mode)")
+
+
+def test_runtime_position_cap_override_is_honoured():
+    """The paper cap must read the UI override, not the .env default — a
+    simulation gated differently from the live engine measures nothing."""
+    store_obj = paper_service.risk_limit_store        # memory-only (patched above)
+    cfg = _cfg(SIGNAL_MAX_OPEN_POSITIONS=2)
+    store_obj.set_many({"max_open_positions": 1}, cfg)
+    try:
+        s = _store("/tmp/tw-paper-test-capovr.json")
+        svc = PaperTradingService(cfg, _State(px=120.0), s)
+        svc.consider(_card(cid="S1"))
+        svc.consider(_card(cid="S2"))
+        assert len(s.all()) == 1, len(s.all())        # override 1 beats env 2
+    finally:
+        store_obj.set_many({"max_open_positions": 2}, cfg)
+    print("  PAPER  -> UI override (1) outranks .env cap (2), like the live engine")
+
+
+def test_expired_unfilled_cards_are_counted():
+    """A card the simulator was offered but never filled must not vanish
+    silently — each one is a hole in the evidence base."""
+    s = _store("/tmp/tw-paper-test-expiry.json")
+    svc = PaperTradingService(_cfg(), _State(px=130.0), s)   # above the zone
+    c = _card()
+    svc.consider(c)                                   # deferred: limit rests
+    assert not s.all() and svc.expired_unfilled == 0
+    svc.sweep_expired(c.valid_until + 1)              # validity lapses
+    assert svc.expired_unfilled == 1, svc.expired_unfilled
+    assert not svc._deferred
+    print("  PAPER  -> above-zone card expired unfilled: counted, not forgotten")
 
 
 # --- exit --------------------------------------------------------------------

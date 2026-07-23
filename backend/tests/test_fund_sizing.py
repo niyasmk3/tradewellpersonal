@@ -42,18 +42,18 @@ def _card(**over):
 # --- the worked example the feature was specified with ------------------------
 
 def test_fund_buys_the_specified_lot_count():
-    """₹10,00,000 at a ₹100 premium, lot 65 → 153 lots → 9,945 qty."""
-    card = _card()
+    """₹10,00,000 at a ₹100 limit, lot 65 → 153 lots → 9,945 qty."""
+    card = _card(entry_high=100.0)           # the LIMIT the basket sends
     apply_fund_sizing(card, 1_000_000.0)
     assert card.fund_lots == 153, card.fund_lots
     assert card.fund_qty == 9_945, card.fund_qty
     assert "153" in card.fund_note and "9,945" in card.fund_note, card.fund_note
-    print(f"  FUND   -> ₹10,00,000 @ ₹100×65 = {card.fund_lots} lots / {card.fund_qty} qty")
+    print(f"  FUND   -> ₹10,00,000 @ limit ₹100×65 = {card.fund_lots} lots / {card.fund_qty} qty")
 
 
 def test_fund_rounds_down_never_up():
     """The fund is a ceiling: 154 lots costs ₹10,01,000, which we don't have."""
-    card = _card()
+    card = _card(entry_high=100.0)
     apply_fund_sizing(card, 1_000_999.0)     # one rupee short of the next lot
     assert card.fund_lots == 153, card.fund_lots
     apply_fund_sizing(card, 1_001_000.0)     # exactly the next lot
@@ -61,14 +61,19 @@ def test_fund_rounds_down_never_up():
     print("  FUND   -> fractional lots always floor; exact boundary buys the lot")
 
 
-def test_live_premium_outranks_the_issue_reference():
-    """The prefill must track the tape: a premium that ran from 100 to 130
-    buys fewer lots, and prefilling the stale count would oversubmit Kite."""
-    card = _card(live_premium=130.0)
+def test_cost_basis_is_the_limit_not_the_last_trade():
+    """A resting LIMIT at entry_high may legally fill there, so affordability
+    is measured at entry_high even while the tape prints lower — dividing by
+    the live ₹98 would claim 156 lots the worst legal fill cannot pay for."""
+    card = _card(entry_high=102.0, live_premium=98.0)
     apply_fund_sizing(card, 1_000_000.0)
-    assert card.fund_lots == 118, card.fund_lots      # 1,000,000 // (130*65)
-    assert card.fund_qty == 118 * 65
-    print(f"  FUND   -> live ₹130 outranks ref ₹100: {card.fund_lots} lots not 153")
+    assert card.fund_lots == 150, card.fund_lots      # 1,000,000 // (102*65)
+    assert card.fund_qty == 150 * 65
+    # Zoneless card (no entry_high): the tape is all there is.
+    zoneless = _card(entry_high=0.0, live_premium=130.0)
+    apply_fund_sizing(zoneless, 1_000_000.0)
+    assert zoneless.fund_lots == 118, zoneless.fund_lots   # 1,000,000 // (130*65)
+    print("  FUND   -> limit ₹102 outranks live ₹98 (150 lots); zoneless uses the tape")
 
 
 def test_no_fund_or_no_premium_clears_the_fields():
@@ -78,9 +83,10 @@ def test_no_fund_or_no_premium_clears_the_fields():
 
     # A previously-populated card must be CLEARED when inputs vanish — a stale
     # quantity left on the card is exactly the bug this feature must not have.
-    card2 = _card()
+    card2 = _card(entry_high=100.0)
     apply_fund_sizing(card2, 1_000_000.0)
     assert card2.fund_lots == 153
+    card2.entry_high = 0.0
     card2.ref_entry_premium = None
     apply_fund_sizing(card2, 1_000_000.0)
     assert card2.fund_lots is None and card2.fund_note is None
@@ -88,7 +94,7 @@ def test_no_fund_or_no_premium_clears_the_fields():
 
 
 def test_fund_too_small_for_one_lot_says_so():
-    card = _card()
+    card = _card(entry_high=100.0)
     apply_fund_sizing(card, 5_000.0)         # one lot costs ₹6,500
     assert card.fund_lots == 0 and card.fund_qty == 0
     assert "does not cover" in card.fund_note, card.fund_note

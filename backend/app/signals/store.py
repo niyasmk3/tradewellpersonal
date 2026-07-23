@@ -12,6 +12,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from app.signals.models import (
     Action,
@@ -92,6 +93,10 @@ class SignalStore:
         self._latest: dict[str, SignalResponse] = {}
         self._slots: dict[str, _SlotState] = {}
         self._store_path = store_path
+        # Off-desk delivery hook, called with each newly ADOPTED card. Wired by
+        # the live feed only (services.py); None everywhere else so tests and
+        # offline replays adopt cards without any network side effect.
+        self.notify: Callable[[SignalCard], bool] | None = None
         self._load()
 
     # ---- throttle ----------------------------------------------------------
@@ -263,12 +268,15 @@ class SignalStore:
         # that much work does not belong under a lock the evaluation loop takes
         # every few seconds. A failure here is logged and ignored — delivery is
         # best-effort, the card is already issued either way.
-        if adopted is not None:
+        #
+        # INJECTED, never resolved here. An earlier version called
+        # get_settings() + push_signal directly, which read the developer's
+        # real .env inside every test that adopts a card — a webhook configured
+        # there would have made the test suite send live alerts. Only the live
+        # feed (services.py) wires `notify`; everything else adopts silently.
+        if adopted is not None and self.notify is not None:
             try:
-                from app.config import get_settings
-                from app.notify import push_signal
-
-                if push_signal(adopted, get_settings()):
+                if self.notify(adopted):
                     log.info("signal pushed (%s): %s score %.1f",
                              key, adopted.contract, adopted.confidence or 0)
             except Exception as exc:  # pragma: no cover - defensive

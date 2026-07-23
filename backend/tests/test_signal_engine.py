@@ -70,17 +70,26 @@ def make_chain(spot: float, bias: str, symbol: str = "NIFTY", step: int = 50, de
     return OptionChain(symbol=symbol, expiry="2026-07-21", atm_strike=atm, pcr=pcr, rows=rows, updated_at=BASE_TS)
 
 
-def _evaluate(kind: str, bias: str, mode: str = "intraday"):
+NOW_EVAL = BASE_TS + 80 * STEP
+
+
+def _evaluate(kind: str, bias: str, mode: str = "intraday", ticks=None, cfg=None):
     df = make_df(kind)
     spot = float(df["close"].iloc[-1])
-    engine = SignalEngine(_CFG)
+    engine = SignalEngine(cfg or _CFG)
     return engine.evaluate(
         profile=PROFILES[mode],
         symbol="NIFTY", df=df, ind=compute_snapshot(df), chain=make_chain(spot, bias),
         spot_ltp=spot, fut_ltp=spot, prev_close=float(df["close"].iloc[0]),
         day_high=float(df["high"].max()), day_low=float(df["low"].min()),
-        vix_status="Stable", ticks=None, now=BASE_TS + 80 * STEP,
+        vix_status="Stable", ticks=ticks, now=NOW_EVAL,
     )
+
+
+def _all_option_ticks(price: float, ts=None, depth: int = 10) -> dict:
+    """A tick for every chain token (whichever strike gets picked is covered)."""
+    tick = {"last_price": price} if ts is None else {"last_price": price, "ts": ts}
+    return {tok + k: dict(tick) for tok in (1000, 2000) for k in range(-depth, depth + 1)}
 
 
 def test_bullish_generates_ce():
@@ -176,6 +185,50 @@ def test_positional_mode_differs_from_intraday():
           f"R:R 1:{s.risk_reward} valid {(s.valid_until - s.created_at) // 3600}h")
 
 
+# --- premium freshness gate, through the full evaluate() path ----------------
+# The 21/22-Jul incident: 5 of 9 cards priced their zones on premiums 3 min to
+# a DAY stale. These pin the whole pipeline, not just the premium_quote helper.
+
+def test_stale_quote_blocks_issue():
+    r = _evaluate("bear", "bear", ticks=_all_option_ticks(100.0, ts=NOW_EVAL - 3600))
+    assert r.signal is None, r.signal
+    assert r.action is Action.AVOID
+    assert "3600s old" in (r.no_trade_reason or ""), r.no_trade_reason
+    print(f"  GATE -> hour-old quote refused: '{r.no_trade_reason}'")
+
+
+def test_unverifiable_quote_blocks_issue():
+    """No tick at all, and a tick with no exchange stamp, are both refusals —
+    an age nothing can verify is not an age of zero."""
+    for ticks in ({}, _all_option_ticks(100.0, ts=None)):
+        r = _evaluate("bear", "bear", ticks=ticks)
+        assert r.signal is None, r.signal
+        assert "No timestamped quote" in (r.no_trade_reason or ""), r.no_trade_reason
+    print("  GATE -> missing/unstamped quotes refused as unverifiable")
+
+
+def test_fresh_tick_reprices_the_whole_plan():
+    """A fresh tick must not just pass the gate — it must BE the price. The
+    chain says ~₹100 for the picked strike; the tape says ₹91. Zone, and
+    therefore SL and targets, must anchor to ₹91."""
+    r = _evaluate("bear", "bear", ticks=_all_option_ticks(91.0, ts=NOW_EVAL - 5))
+    s = r.signal
+    assert s is not None, r.no_trade_reason
+    assert s.ref_entry_premium == 91.0, s.ref_entry_premium
+    assert s.entry_low <= 91.0 <= s.entry_high, (s.entry_low, s.entry_high)
+    print(f"  GATE -> tick ₹91 repriced the plan: zone {s.entry_low}-{s.entry_high}")
+
+
+def test_gate_disabled_accepts_ancient_ticks():
+    """SIGNAL_MAX_PREMIUM_AGE_S=0 is the offline-replay escape hatch."""
+    cfg = _CFG.model_copy(update={"signal_max_premium_age_s": 0})
+    r = _evaluate("bear", "bear", cfg=cfg,
+                  ticks=_all_option_ticks(91.0, ts=NOW_EVAL - 100_000))
+    assert r.signal is not None, r.no_trade_reason
+    assert r.signal.ref_entry_premium == 91.0     # price override still applies
+    print("  GATE -> disabled gate accepts a day-old tick (replay mode)")
+
+
 def test_store_stabilises_and_cancels():
     store = SignalStore()
     bull = _evaluate("bull", "bull")
@@ -206,6 +259,10 @@ def _main():
         test_empty_and_single_candle_do_not_crash,
         test_service_trim_keeps_last_candle,
         test_positional_mode_differs_from_intraday,
+        test_stale_quote_blocks_issue,
+        test_unverifiable_quote_blocks_issue,
+        test_fresh_tick_reprices_the_whole_plan,
+        test_gate_disabled_accepts_ancient_ticks,
         test_store_stabilises_and_cancels,
     ]
     failed = 0

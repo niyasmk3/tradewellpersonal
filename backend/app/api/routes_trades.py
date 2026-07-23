@@ -101,7 +101,7 @@ def enter(body: EnterRequest) -> Trade:
     params = ladder_params(cfg, card.mode)
     sl_pct, rr1, rr2 = params if params else (None, None, None)
 
-    _guard_size(body, card, float(entry), lot_size, sl_pct, rr1, rr2, cfg)
+    _guard_size(body, card, float(entry), lot_size, sl_pct, rr1, rr2, disaster_pct, cfg)
 
     return trade_store.create_from_signal(
         card, body.lots, float(entry), lot_size, product, disaster_pct=disaster_pct,
@@ -109,7 +109,8 @@ def enter(body: EnterRequest) -> Trade:
 
 
 def _guard_size(body: EnterRequest, card, entry: float, lot_size: int,
-                sl_pct: float | None, rr1: float | None, rr2: float | None, cfg) -> None:
+                sl_pct: float | None, rr1: float | None, rr2: float | None,
+                disaster_pct: float | None, cfg) -> None:
     """Refuse a first attempt to journal more lots than the card suggested.
 
     NOT a hard block: `/trades/enter` records a fill that already happened at the
@@ -125,11 +126,17 @@ def _guard_size(body: EnterRequest, card, entry: float, lot_size: int,
     if body.acknowledge_oversize or suggested <= 0 or body.lots <= suggested:
         return
 
-    # Risk against the RE-PRICED stop — the one this trade will actually carry,
-    # from the same function that builds it, so the warning cannot quote a
-    # different number than the journal ends up holding.
-    stop = (price_ladder(entry, sl_pct, rr1 or 0, rr2 or 0)["premium_sl"]
-            if sl_pct else card.premium_sl)
+    # Risk against the stop that ACTUALLY ends the trade, re-priced from the
+    # fill by the same function the journal uses. With the underlying stop
+    # primary that is the disaster backstop, not the premium stop — sizing off
+    # the narrower one understates the acknowledged rupees ~2.5x, which on a
+    # 10-lot entry is the difference between "₹11,700" and "₹29,250" in the
+    # dialog the trader clicks through.
+    if sl_pct:
+        ladder = price_ladder(entry, sl_pct, rr1 or 0, rr2 or 0, disaster_pct=disaster_pct)
+        stop = ladder["disaster_sl"] or ladder["premium_sl"]
+    else:
+        stop = card.disaster_sl or card.premium_sl
     risk = max(entry - stop, 0.0) * body.lots * lot_size
     limit = risk_limit_store.effective(cfg).get("daily_loss_limit", 0.0)
     share = f", {risk / limit * 100:.0f}% of your ₹{limit:,.0f} daily loss limit" if limit > 0 else ""

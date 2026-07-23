@@ -62,6 +62,14 @@ class PaperTradingService:
         self._seen: set[str] = {
             t.signal_id for t in store.all() if t.signal_id
         }
+        # Cards offered but not (yet) filled: id -> (contract, last reason,
+        # valid_until). A deferral is silent by design (it retries every
+        # cycle); what must NOT be silent is the card EXPIRING un-filled —
+        # each of those is a trade the evidence base quietly lost, and a
+        # simulation that under-reports its own misses overstates its edge.
+        self._deferred: dict[str, tuple[str, str, int]] = {}
+        self.filled = 0
+        self.expired_unfilled = 0
 
     # ---- entry -------------------------------------------------------------
     def scan(self, store) -> None:
@@ -82,6 +90,20 @@ class PaperTradingService:
                     continue
                 if resp is not None and resp.signal is not None:
                     self.consider(resp.signal)
+
+    def _defer(self, card: SignalCard, reason: str) -> None:
+        self._deferred[card.id] = (card.contract, reason, card.valid_until)
+
+    def sweep_expired(self, now: int | None = None) -> None:
+        """Log, once, every offered card that expired without a fill."""
+        now = now or int(time.time())
+        for cid in [c for c, (_, _, vu) in self._deferred.items() if now >= vu]:
+            contract, reason, _ = self._deferred.pop(cid)
+            if cid in self._seen:        # filled later after an early deferral
+                continue
+            self.expired_unfilled += 1
+            log.warning("paper: %s expired UNFILLED (last: %s) — signal %s never simulated",
+                        contract, reason, cid)
 
     def consider(self, card: SignalCard) -> None:
         """Open a simulated position for a currently-valid signal."""
@@ -107,12 +129,19 @@ class PaperTradingService:
         tick = self.state.ticks.get(card.token, {}) if card.token is not None else {}
         base = tick.get("last_price")
         if not base or base <= 0:
+            self._defer(card, "no tick")
             return                       # no tick yet — retry next cycle
         ts = tick.get("ts")
         max_age = self.cfg.signal_max_premium_age_s
-        if ts and max_age > 0 and int(time.time()) - int(ts) > max_age:
-            log.info("paper: %s tick is %ds old — waiting for a live quote",
-                     card.contract, int(time.time()) - int(ts))
+        if max_age > 0 and (not ts or int(time.time()) - int(ts) > max_age):
+            # Same rule as the live engine: a tick with no exchange stamp is
+            # UNVERIFIABLE, which for filling at its price is the same as
+            # stale — the 22-Jul phantom fill was exactly a carried-over price
+            # nothing had aged. Gate off (0) accepts unstamped ticks (tests,
+            # offline replay).
+            age = f"{int(time.time()) - int(ts)}s old" if ts else "unstamped"
+            log.info("paper: %s tick is %s — waiting for a live quote", card.contract, age)
+            self._defer(card, f"tick {age}")
             return                       # NOT marked seen — the stream may recover
 
         # ENTRY-ZONE FLOOR. Previously only the top was clamped, so the
@@ -126,6 +155,7 @@ class PaperTradingService:
         if base < card.entry_low:
             log.info("paper: %s at Rs%.2f is below the entry zone (Rs%.2f-%.2f) — waiting",
                      card.contract, base, card.entry_low, card.entry_high)
+            self._defer(card, f"Rs{base:.2f} below zone")
             return                       # NOT marked seen — may re-enter the zone
 
         # ENTRY-ZONE CEILING, the mirror image. A real basket LIMITs at
@@ -137,6 +167,7 @@ class PaperTradingService:
         if base > card.entry_high:
             log.info("paper: %s at Rs%.2f is above the entry zone (Rs%.2f-%.2f) — limit rests",
                      card.contract, base, card.entry_low, card.entry_high)
+            self._defer(card, f"Rs{base:.2f} above zone")
             return                       # NOT marked seen — may pull back into the zone
 
         # CAPACITY IS TEMPORARY, so it must not burn the card. On 22-Jul the
@@ -152,14 +183,18 @@ class PaperTradingService:
         cap = int(risk_limit_store.effective(self.cfg)["max_open_positions"])
         if cap > 0 and len(open_now) >= cap:
             log.info("paper: %s deferred — %d/%d position(s) open", card.contract, len(open_now), cap)
+            self._defer(card, f"book full ({len(open_now)}/{cap})")
             return                       # NOT marked seen — a slot may free up
 
         lot = card.lot_size or 0
         if lot <= 0:
             log.info("paper: %s deferred — no lot size yet", card.contract)
+            self._defer(card, "no lot size")
             return                       # NOT marked seen — instrument data may still arrive
 
         self._seen.add(card.id)          # committed: everything below always enters
+        self._deferred.pop(card.id, None)
+        self.filled += 1
 
         # entry_high is what a real basket would LIMIT at, so a fill above it is
         # not achievable; the floor above keeps it inside the zone.
@@ -186,6 +221,7 @@ class PaperTradingService:
     def run_once(self) -> None:
         now = int(time.time())
         ist_min, ist_day = _ist_minutes(now), _ist_date(now)
+        self.sweep_expired(now)
 
         def updater(trade) -> None:
             current = None

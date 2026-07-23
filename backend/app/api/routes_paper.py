@@ -22,4 +22,12 @@ def paper_summary() -> dict:
     out = summarize(store)
     out["slippage_pct"] = cfg.paper_slippage_pct
     out["lots"] = cfg.paper_lots
+    # Fill-rate honesty: cards the simulator was OFFERED but never filled
+    # (tape out of zone, stale/absent tick, book full) are trades the evidence
+    # base is missing — a summary that hides them overstates the edge.
+    svc = getattr(feed, "paper", None)
+    if svc is not None:
+        out["cards_filled"] = svc.filled
+        out["cards_expired_unfilled"] = svc.expired_unfilled
+        out["cards_waiting"] = len(svc._deferred)
     return out

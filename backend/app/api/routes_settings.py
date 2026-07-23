@@ -1,8 +1,14 @@
 """Runtime risk-limit settings — read and edit the loss guards from the UI.
 
-Only the four loss/breaker limits are exposed. Everything else in config stays
-.env-only on purpose: pausing the engine after a set loss is a safety valve;
-changing a score threshold or stop percentage mid-session is a footgun.
+Only the SPECS fields (risk_limits.py) are exposed: the loss/breaker limits and
+the day's trading fund. Everything else in config stays .env-only on purpose:
+pausing the engine after a set loss is a safety valve; changing a score
+threshold or stop percentage mid-session is a footgun.
+
+RiskLimitUpdate must mirror SPECS key-for-key. Pydantic silently DROPS unknown
+fields, so a SPECS entry missing here renders as an editable field in the UI
+whose saves never persist — the value snaps back on the next poll with no
+error anywhere. That exact bug shipped once with trading_fund.
 """
 from __future__ import annotations
 
@@ -28,6 +34,7 @@ class RiskLimitUpdate(BaseModel):
     max_open_drawdown: Optional[float] = Field(default=None, ge=0)
     max_consecutive_losses: Optional[int] = Field(default=None, ge=1, le=20)
     max_open_positions: Optional[int] = Field(default=None, ge=0, le=20)
+    trading_fund: Optional[float] = Field(default=None, ge=0, le=100_000_000)
 
 
 @router.get("/risk-limits")

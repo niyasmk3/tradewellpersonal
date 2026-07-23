@@ -55,6 +55,31 @@ def test_override_persists_across_reload():
     print("  RISK   -> overrides survive a backend restart")
 
 
+def test_trading_fund_round_trips_like_the_loss_limits():
+    """The fund is edited from the same UI panel; a SPECS entry that view()
+    renders but set_many/PUT drops is a field whose saves silently vanish —
+    that exact bug shipped once (RiskLimitUpdate missing the key)."""
+    cfg = _cfg(TRADING_FUND=0)
+    s = _store()
+    s.set_many({"trading_fund": 1_000_000.0}, cfg)
+    assert s.effective(cfg)["trading_fund"] == 1_000_000.0
+    reloaded = RiskLimitStore(path=TMP)                 # survives a restart
+    assert reloaded.effective(cfg)["trading_fund"] == 1_000_000.0
+    field = next(f for f in reloaded.view(cfg)["fields"] if f["key"] == "trading_fund")
+    assert field["unit"] == "rupees" and field["source"] == "override"
+    # Over the spec ceiling must be rejected, same as any other limit.
+    try:
+        s.set_many({"trading_fund": 200_000_000.0}, cfg)
+        raise AssertionError("accepted a fund above the spec maximum")
+    except ValueError:
+        pass
+    # The PUT model must accept the key end-to-end (the regression that shipped).
+    from app.api.routes_settings import RiskLimitUpdate
+    body = RiskLimitUpdate(trading_fund=500_000.0)
+    assert body.model_dump()["trading_fund"] == 500_000.0
+    print("  RISK   -> trading_fund: set, persisted, viewed, bounded, PUT-accepted")
+
+
 def test_counts_are_stored_as_whole_numbers():
     cfg = _cfg()
     s = _store()

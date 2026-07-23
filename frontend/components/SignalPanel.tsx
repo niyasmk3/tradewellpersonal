@@ -94,15 +94,24 @@ export function SignalPanel({
   // (bias flip swaps CE→PE), a still-open form must not book the new contract
   // at the old premium. Reset everything whenever the card id changes.
   //
-  // Lots prefill: the fund-affordable count first (what today's fund buys at
-  // the live premium — the number the Kite basket should open with), then the
-  // risk suggestion, then 1. Prefill happens ONLY here, on a new card: while
-  // the form is open the field belongs to the user, and a poll that reprices
-  // fund_lots must not overwrite what they typed.
+  // Lots prefill: the CONSERVATIVE of the two counts. fund_lots caps outlay,
+  // suggested_lots caps loss — and they can differ by 100x (₹10L fund vs a 1%
+  // risk budget). Defaulting to the bigger one would open every Kite basket
+  // at maximum size and fire the oversize-entry warning on every journal
+  // entry, training the exact click-through habit that warning exists to
+  // break. The fund count stays one tap away on the ⛁ line below — sizing up
+  // to the whole fund must be a decision, not a default. Prefill happens ONLY
+  // here, on a new card: while the form is open the field belongs to the
+  // user, and a poll that reprices fund_lots must not overwrite what they
+  // typed.
   useEffect(() => {
     setEntering(false);
     setEntryPx("");
-    setLots(String(signal?.fund_lots || signal?.suggested_lots || 1));
+    const conservative = Math.min(
+      signal?.fund_lots || Infinity,
+      signal?.suggested_lots || Infinity,
+    );
+    setLots(String(Number.isFinite(conservative) && conservative > 0 ? conservative : 1));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal?.id]);
 

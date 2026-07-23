@@ -51,13 +51,16 @@ def current_signal(symbol: str, mode: str = Query("intraday")) -> SignalResponse
     # Attach the live premium at request time (not at issue) so it ticks with
     # each poll — latest() already returned a deep copy, so this is safe.
     if latest.signal is not None and latest.signal.token is not None:
+        import time as _time
+
         from app.config import get_settings
         from app.signals.risk_limits import risk_limit_store
         from app.signals.sizing import apply_fund_sizing
         from app.state import market_state
 
-        ltp = market_state.ticks.get(latest.signal.token, {}).get("last_price")
-        latest.signal.live_premium = float(ltp) if ltp and ltp > 0 else None
+        latest.signal.live_premium = _fresh_ltp(
+            market_state.ticks, latest.signal.token, get_settings(), int(_time.time())
+        )
         # The affordability prefill must track the SAME premium the user sees:
         # a card issued at ₹100 whose contract now trades ₹130 buys fewer lots,
         # and prefilling yesterday's count would oversubmit the Kite basket.
@@ -66,6 +69,27 @@ def current_signal(symbol: str, mode: str = Query("intraday")) -> SignalResponse
             risk_limit_store.effective(get_settings()).get("trading_fund", 0.0),
         )
     return latest
+
+
+def _fresh_ltp(ticks: dict, token: int, cfg, now: int) -> float | None:
+    """The token's live premium, or None when its quote fails the age gate.
+
+    The tick dict is never evicted, so a dead stream leaves last_price frozen
+    at its final trade indefinitely — "live_premium" from it would be a lie
+    with decimals. Same cutoff as issuance (signal_max_premium_age_s); a tick
+    with no exchange stamp is unverifiable and treated as stale. Gate disabled
+    (0) keeps the old behaviour for offline replay.
+    """
+    tick = ticks.get(token) or {}
+    ltp = tick.get("last_price")
+    if not ltp or ltp <= 0:
+        return None
+    max_age = cfg.signal_max_premium_age_s
+    if max_age > 0:
+        ts = tick.get("ts")
+        if not ts or now - int(ts) > max_age:
+            return None
+    return float(ltp)
 
 
 @router.get("/{symbol}/history", response_model=list[SignalCard])
@@ -143,11 +167,16 @@ def reprice_signal(symbol: str, mode: str = Query("intraday")) -> RepriceResult:
                              score_needed=profile.score_valid, reason=reason)
 
     # Still valid → re-price against the live premium of the same strike.
-    ltp = market_state.ticks.get(card.token, {}).get("last_price")
-    if not ltp or ltp <= 0:
+    # SAME freshness rule as issuance. Repricing exists to REMOVE staleness,
+    # and reprice_active re-stamps created_at so the Kite hand-off's age guard
+    # passes — so a stale tick accepted here would be laundered into a
+    # "fresh" card with one click, recreating the exact unfillable-zone bug
+    # the issue-time gate closed. A frozen tick stream must 409, not re-price.
+    ltp = _fresh_ltp(market_state.ticks, card.token, cfg, now)
+    if not ltp:
         raise HTTPException(
             status_code=409,
-            detail="No live premium for this strike right now — cannot re-price",
+            detail="No fresh premium for this strike right now — cannot re-price",
         )
     disaster_pct = (cfg.premium_disaster_pct
                     if cfg.stop_primary == "underlying" and cfg.trading_capital > 0 else None)
