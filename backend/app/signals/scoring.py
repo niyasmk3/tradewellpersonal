@@ -143,13 +143,34 @@ def _options(oi: OiAnalysis, bullish: bool, spot: float | None) -> ScoreComponen
     return ScoreComponent(name="Options & OI", points=round(pts, 1), max=20, reasons=reasons)
 
 
-def _volatility(ind: IndicatorSnapshot, vix_status: str | None) -> ScoreComponent:
+def _volatility(
+    ind: IndicatorSnapshot, vix_status: str | None, vix_percentile: float | None = None
+) -> ScoreComponent:
     mapping = {"Calm": 8, "Stable": 8, "Elevated": 5, "High": 2}
     pts = float(mapping.get(vix_status, 6))
     reasons = [f"VIX {vix_status}"] if vix_status else ["VIX n/a"]
+    # Volatility PRICE, not just level. This engine only BUYS premium, and
+    # premium bought at the rich end of VIX's own year loses to IV crush even
+    # when the direction is right — the 23-Jul cards bought ~₹120 tops that an
+    # absolute "Stable" reading happily blessed. Percentile is the IV-rank idea
+    # applied at the index level until per-strike IV exists. None (history not
+    # seeded) keeps the original level-only behaviour.
+    if vix_percentile is not None:
+        if vix_percentile >= 80:
+            pts -= 3
+            reasons.append(f"VIX pctl {vix_percentile:.0f} — premium rich vs its year")
+        elif vix_percentile >= 60:
+            pts -= 1
+            reasons.append(f"VIX pctl {vix_percentile:.0f} — premium above median")
+        elif vix_percentile <= 25:
+            pts += 1
+            reasons.append(f"VIX pctl {vix_percentile:.0f} — premium cheap vs its year")
+        else:
+            reasons.append(f"VIX pctl {vix_percentile:.0f}")
     if ind.atr is not None:
         pts += 2
-    return ScoreComponent(name="Volatility condition", points=min(pts, 10), max=10, reasons=reasons)
+    return ScoreComponent(name="Volatility condition",
+                          points=max(0.0, min(pts, 10)), max=10, reasons=reasons)
 
 
 def _news(sent: NewsSentiment | None, bullish: bool) -> ScoreComponent:
@@ -179,6 +200,7 @@ def score(
     day_low: float | None = None,
     spot: float | None = None,
     news: NewsSentiment | None = None,
+    vix_percentile: float | None = None,
 ) -> ScoreBreakdown:
     bullish = direction is Direction.CE
     components = [
@@ -186,7 +208,7 @@ def score(
         _trend(ind, bullish),
         _volume(df, bullish),
         _options(oi, bullish, spot),
-        _volatility(ind, vix_status),
+        _volatility(ind, vix_status, vix_percentile),
         _news(news, bullish),
     ]
     total = round(sum(c.points for c in components), 1)

@@ -732,3 +732,85 @@ def test_quick_target_dropped_when_it_would_exceed_target1():
 
 if __name__ == "__main__":
     _main()
+
+
+# --- thesis-stall time stop (the missing fourth exit type, 24-Jul) -----------
+
+def _aged(minutes: int, **over):
+    """A trade entered `minutes` ago (entered_at is what the stall clock reads)."""
+    import time as _t
+    return make_trade(entered_at=int(_t.time()) - minutes * 60, **over)
+
+
+def test_stall_fires_after_the_allotted_minutes():
+    t = _aged(50, quick_target=134.4)
+    monitor.evaluate(t, current_premium=118.0, spot=24360.0, ist_minutes=600,
+                     stall_minutes=45)
+    assert t.recommendation is TradeAction.STALL, t.recommendation
+    assert "No follow-through" in t.recommendation_note
+    assert any(e.kind == "stall_exit" for e in t.events), "first stall must be journaled"
+    print("  MONITOR-> 50m without quick target: STALL recommended and journaled")
+
+
+def test_stall_respects_the_clock_and_the_disable():
+    young = _aged(30, quick_target=134.4)
+    monitor.evaluate(young, 118.0, 24360.0, 600, stall_minutes=45)
+    assert young.recommendation is TradeAction.HOLD, young.recommendation
+    disabled = _aged(500, quick_target=134.4)
+    monitor.evaluate(disabled, 118.0, 24360.0, 600, stall_minutes=0)
+    assert disabled.recommendation is TradeAction.HOLD
+    legacy = _aged(500, quick_target=134.4)
+    monitor.evaluate(legacy, 118.0, 24360.0, 600)   # callers not passing it: unchanged
+    assert legacy.recommendation is TradeAction.HOLD
+    print("  MONITOR-> under the clock / disabled / legacy call: HOLD, no stall")
+
+
+def test_stall_never_fires_once_progress_was_made():
+    """Reaching the quick target latches t0 — the thesis followed through, so
+    the stall rule must stay out of the way for the rest of the trade."""
+    t = _aged(120, quick_target=134.4)
+    monitor.evaluate(t, 135.0, 24380.0, 600, stall_minutes=45)   # T0 touched
+    monitor.evaluate(t, 125.0, 24370.0, 600, stall_minutes=45)   # faded after
+    assert t.recommendation is not TradeAction.STALL, t.recommendation
+    print("  MONITOR-> after T0, an aged trade is managed by stops, not stalled out")
+
+
+def test_stall_is_intraday_only():
+    t = _aged(500, mode=TradingMode.POSITIONAL, quick_target=134.4)
+    monitor.evaluate(t, 118.0, 24360.0, 600, stall_minutes=45)
+    assert t.recommendation is TradeAction.HOLD, t.recommendation
+    print("  MONITOR-> positional thesis is entitled to take days: no stall")
+
+
+def test_stall_outranked_by_real_exits_and_close():
+    """Stop, invalidation, targets and the session close all say something
+    stronger than 'stalled' — stall must be the weakest exit voice."""
+    stopped = _aged(120, quick_target=134.4)
+    monitor.evaluate(stopped, 99.0, 24340.0, 600, stall_minutes=45)
+    assert stopped.recommendation is TradeAction.STOPLOSS
+    closing = _aged(120, quick_target=134.4)
+    monitor.evaluate(closing, 118.0, 24360.0, 15 * 60 + 12, stall_minutes=45)
+    assert closing.recommendation is TradeAction.TIME_EXIT
+    print("  MONITOR-> stop and session close outrank the stall")
+
+
+def test_stall_auto_close_trigger_gated_by_name():
+    t = _aged(50, quick_target=134.4)
+    monitor.evaluate(t, 118.0, 24360.0, 600, stall_minutes=45)
+    assert monitor.auto_close_trigger(t, {"stall"}) == "stall"
+    assert monitor.auto_close_trigger(t, {"stop", "invalidation"}) is None
+    print("  MONITOR-> stall closes only for callers that opted in (paper does)")
+
+
+def test_stall_never_closes_a_profitable_trade_without_a_bar():
+    """Review finding: with no quick_target there is no objective bar, so the
+    clock alone must not stall out a WINNER — only a flat-or-worse position."""
+    winner = _aged(120, quick_target=None)
+    monitor.evaluate(winner, 138.0, 24380.0, 600, stall_minutes=45)   # +15%
+    assert winner.recommendation is not TradeAction.STALL, winner.recommendation
+    flat = _aged(120, quick_target=None)
+    monitor.evaluate(flat, 121.0, 24360.0, 600, stall_minutes=45)     # +0.8%
+    assert flat.recommendation is TradeAction.STALL
+    assert "no early-target level set" in flat.recommendation_note
+    assert "quick target" not in flat.recommendation_note, "must not fabricate a level"
+    print("  MONITOR-> no quick target: winners never stalled; flat stalls honestly")

@@ -206,6 +206,21 @@ export function MarketStatusBar({
               {wsStatus === "open" ? "live" : wsStatus}
             </span>
           )}
+          {/* Observed fact from the backend: armed = this feed start actually
+              pushed through the webhook. Not-armed while connected means a new
+              signal will NOT reach the phone — say it, don't assume it. */}
+          {wsStatus === "open" && snapshot && (
+            <span
+              className={`tag ${snapshot.alerts_armed ? "bg-accent/15 text-accent" : "bg-yellow-500/15 text-yellow-400"}`}
+              title={
+                snapshot.alerts_armed
+                  ? "Verified this session: the feed pushed a test alert through your webhook at startup"
+                  : "No alert webhook verified this session — signal cards will NOT reach your phone. Set ALERT_WEBHOOK_URL in backend/.env and restart."
+              }
+            >
+              {snapshot.alerts_armed ? "alerts armed" : "alerts unarmed"}
+            </span>
+          )}
         </div>
       </div>
     </header>

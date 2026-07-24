@@ -67,6 +67,9 @@ class MarketState:
         self.option_chains: dict[str, OptionChain] = {}    # "SYMBOL:expiry" -> chain
         self.oi_prev: dict[int, float] = {}                # option token -> last OI (for delta)
         self.vix_token: int | None = None
+        # ~1 year of India VIX daily closes (oldest first), seeded at feed
+        # start. Empty = percentile unavailable; the score degrades gracefully.
+        self.vix_daily_closes: list[float] = []
 
         # Status
         self.ticker_connected: bool = False
@@ -140,6 +143,26 @@ class MarketState:
         with self._lock:
             meta = self.underlyings.get(symbol.upper())
             return self._snapshot_for(meta) if meta else None
+
+    def vix_percentile(self, current: float | None = None) -> float | None:
+        """Where today's VIX sits in its ~1-year daily history, 0-100.
+
+        The documents' IV-rank idea, applied at the index level until per-strike
+        IV exists: 80 means VIX closed lower than today on 80% of the past
+        year's sessions — premium is rich against its own history. None until
+        the history is seeded (min 60 sessions: a percentile against a few
+        weeks would be noise wearing a number).
+        """
+        closes = self.vix_daily_closes
+        if len(closes) < 60:
+            return None
+        if current is None:
+            tick = self.ticks.get(self.vix_token, {}) if self.vix_token else {}
+            current = tick.get("last_price")
+        if not current or current <= 0:
+            return None
+        below = sum(1 for c in closes if c < current)
+        return round(100.0 * below / len(closes), 1)
 
     def vix_snapshot(self) -> VixSnapshot | None:
         if self.vix_token is None:

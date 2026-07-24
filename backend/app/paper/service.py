@@ -39,8 +39,10 @@ log = logging.getLogger("tradewell.paper")
 
 # Every plan trigger closes a paper position — unlike the live journal, where
 # which triggers auto-close is a user setting. A simulation that needs a human
-# to close it is not a simulation.
-_EXIT_TRIGGERS = {"stop", "target1", "target2", "invalidation", "time_exit"}
+# to close it is not a simulation. "stall" is here BEFORE it auto-closes live
+# rows on purpose: the paper book is where the stall rule earns (or loses) the
+# right to touch real positions.
+_EXIT_TRIGGERS = {"stop", "target1", "target2", "invalidation", "time_exit", "stall"}
 
 
 def _ist_minutes(now: int) -> int:
@@ -223,13 +225,22 @@ class PaperTradingService:
         ist_min, ist_day = _ist_minutes(now), _ist_date(now)
         self.sweep_expired(now)
 
+        # Stall is clock-driven, so it alone could "exit" on a price frozen by
+        # a feed blackout — disarm it while ticks are stale (same rule as the
+        # live journal). getattr: unit-test fakes carry only `ticks`.
+        age_fn = getattr(self.state, "last_tick_age", None)
+        age = age_fn() if callable(age_fn) else None
+        fresh = age is not None and age <= max(self.cfg.feed_watchdog_age_s or 150, 60)
+        stall = self.cfg.stall_exit_minutes if fresh else 0
+
         def updater(trade) -> None:
             current = None
             if trade.token is not None:
                 current = self.state.ticks.get(trade.token, {}).get("last_price")
             snap = self.state.underlying_snapshot(trade.symbol)
             spot = snap.ltp if snap else None
-            monitor.evaluate(trade, current, spot, ist_min, ist_day)
+            monitor.evaluate(trade, current, spot, ist_min, ist_day,
+                             stall_minutes=stall)
 
         self.store.apply_monitor(updater)
 

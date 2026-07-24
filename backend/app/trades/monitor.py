@@ -13,7 +13,7 @@ from app.trades.models import Trade, TradeAction, TradeEvent, TradeStatus
 _TRAIL_PCT = 0.12          # once in profit, trail 12% below the live premium
 _INTRADAY_EXIT_MIN = 15 * 60 + 10   # 15:10 IST — start flagging intraday exit
 
-AUTO_CLOSE_NAMES = ("stop", "target1", "target2", "invalidation", "time_exit")
+AUTO_CLOSE_NAMES = ("stop", "target1", "target2", "invalidation", "time_exit", "stall")
 
 
 def auto_close_trigger(trade: Trade, enabled: set[str]) -> str | None:
@@ -43,6 +43,8 @@ def auto_close_trigger(trade: Trade, enabled: set[str]) -> str | None:
         return "invalidation"
     if "time_exit" in enabled and trade.recommendation is TradeAction.TIME_EXIT:
         return "time_exit"
+    if "stall" in enabled and trade.recommendation is TradeAction.STALL:
+        return "stall"
     if "target2" in enabled and px >= trade.target2:
         return "target2"
     if "target1" in enabled and px >= trade.target1:
@@ -56,7 +58,8 @@ def _event(trade: Trade, kind: str, note: str) -> None:
 
 # Advisory transitions worth a journal entry — the moment the monitor FIRST
 # tells the user to act is exactly what a review of the trade needs later.
-_EVENTFUL = {TradeAction.STOPLOSS, TradeAction.INVALIDATED, TradeAction.TARGET2, TradeAction.TIME_EXIT}
+_EVENTFUL = {TradeAction.STOPLOSS, TradeAction.INVALIDATED, TradeAction.TARGET2,
+             TradeAction.TIME_EXIT, TradeAction.STALL}
 
 
 def _set_reco(trade: Trade, rec: TradeAction, note: str) -> None:
@@ -82,6 +85,7 @@ def evaluate(
     spot: float | None,
     ist_minutes: int | None,
     ist_date: str | None = None,
+    stall_minutes: int | None = None,
 ) -> None:
     if trade.status not in (TradeStatus.ENTERED, TradeStatus.PARTIAL):
         return
@@ -209,6 +213,26 @@ def evaluate(
                      f"Early target reached — risk-free, SL at entry ₹{entry}")
     elif trade.t1_hit:
         rec, note = TradeAction.TRAIL_SL, f"In profit — trailing SL at ₹{effective_sl}"
+    elif (
+        # THESIS-STALL TIME STOP — the missing fourth exit type. A bought
+        # option that hasn't reached even the quick target after its allotted
+        # minutes is paying theta for a thesis that is merely late; recorded
+        # excursions show these bleed out far more often than they recover.
+        # Intraday only: a positional thesis is entitled to take days.
+        # With no quick target on the row there is no objective bar, so the
+        # fallback demands the position be essentially flat or worse (≤ +2%):
+        # a profitable trade must never be stalled out on the clock alone.
+        stall_minutes
+        and trade.mode.value == "intraday"
+        and (now_ts - trade.entered_at) >= stall_minutes * 60
+        and (trade.quick_target is not None or (trade.pnl_pct or 0.0) <= 2.0)
+    ):
+        mins = (now_ts - trade.entered_at) // 60
+        why = (f"quick target ₹{trade.quick_target} never reached"
+               if trade.quick_target is not None
+               else f"still {trade.pnl_pct:+.1f}% with no early-target level set")
+        rec, note = (TradeAction.STALL,
+                     f"No follow-through in {mins}m ({why}) — theta is winning, consider exiting")
     else:
         rec, note = TradeAction.HOLD, f"Hold — SL ₹{effective_sl}, T1 ₹{trade.target1}"
 

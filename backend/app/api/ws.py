@@ -30,6 +30,8 @@ _STALE_AFTER_S = 15  # market open but no tick for this long => stale
 
 
 def build_snapshot() -> MarketSnapshot:
+    from app.services import feed
+
     open_now = is_market_open()
     age = market_state.last_tick_age()
     return MarketSnapshot(
@@ -39,6 +41,7 @@ def build_snapshot() -> MarketSnapshot:
         vix=market_state.vix_snapshot(),
         last_tick_age=age,
         feed_stale=bool(open_now and (age is None or age > _STALE_AFTER_S)),
+        alerts_armed=bool(getattr(feed, "alerts_armed", False)),
     )
 
 

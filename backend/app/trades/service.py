@@ -39,6 +39,14 @@ class TradeMonitorService:
     def run_once(self) -> None:
         ist_min = _ist_minutes()
         ist_day = _ist_date()
+        cfg = get_settings()
+        # The stall stop is the only trigger that can fire on a FROZEN price —
+        # every other exit needs a level crossing a blackout can't produce. So
+        # it is disarmed whenever the tick stream itself is stale: closing a
+        # 10:45 trade at a premium last seen at 10:05 poisons the evidence.
+        age = self.state.last_tick_age()
+        fresh = age is not None and age <= max(cfg.feed_watchdog_age_s or 150, 60)
+        stall = cfg.stall_exit_minutes if fresh else 0
 
         # Mutate live trades in place under the store lock so a concurrent
         # exit/partial (which runs on FastAPI's threadpool) can't be clobbered.
@@ -48,7 +56,7 @@ class TradeMonitorService:
                 current = self.state.ticks.get(trade.token, {}).get("last_price")
             snap = self.state.underlying_snapshot(trade.symbol)
             spot = snap.ltp if snap else None
-            monitor.evaluate(trade, current, spot, ist_min, ist_day)
+            monitor.evaluate(trade, current, spot, ist_min, ist_day, stall_minutes=stall)
 
         self.store.apply_monitor(updater)
 

@@ -36,32 +36,32 @@ check("cost", e1.cost, 7500);
 check("maxLoss = premium + entry costs", e1.maxLoss, 7526.98);
 check("maxLoss exceeds premium", e1.maxLoss > e1.cost, true);
 
-// STOP (2 legs): sell 75×75 = 5,625 · turnover 13,125
-// brokerage 40 · stt 5.625 · exch 4.5976875 · ipft 0.065625 · sebi 0.013125
-// gst 0.18×44.6764375 = 8.04175875 · stamp 0.225  →  58.57
-// plannedLoss = 1,875 + 58.57 = 1,933.57
-check("plannedLoss", e1.plannedLoss, 1933.57);
+// STOP (2 legs, STT 0.15% w.e.f. 01-Apr-2026): sell 75×75 = 5,625 · turnover 13,125
+// brokerage 40 · stt 8.4375 · exch 4.5976875 · ipft 0.065625 · sebi 0.013125
+// gst 0.18×44.6764375 = 8.04175875 (STT is never GST'd) · stamp 0.225  →  61.38
+// plannedLoss = 1,875 + 61.38 = 1,936.38
+check("plannedLoss", e1.plannedLoss, 1936.38);
 
-// T1 (2 legs): sell 10,312.50 · turnover 17,812.50 → charges 65.23
-// gain = 2,812.50 − 65.23 = 2,747.27
-check("gainT1 net", e1.gainT1, 2747.27);
-// T2: sell 13,125 · turnover 20,625 → charges 69.22
-// gain = 5,625 − 69.22 = 5,555.78
-check("gainT2 net", e1.gainT2, 5555.78);
+// T1 (2 legs): sell 10,312.50 · stt 15.46875 · turnover 17,812.50 → charges 70.38
+// gain = 2,812.50 − 70.38 = 2,742.12
+check("gainT1 net", e1.gainT1, 2742.12);
+// T2: sell 13,125 · stt 19.6875 · turnover 20,625 → charges 75.78
+// gain = 5,625 − 75.78 = 5,549.22
+check("gainT2 net", e1.gainT2, 5549.22);
 
 // Net R:R is WORSE than the card's gross 1:1.5 — costs land on both legs.
-check("net rrT1 (2747.27/1933.57)", e1.rrT1, 1.42);
-check("net rrT2 (5555.78/1933.57)", e1.rrT2, 2.87);
+check("net rrT1 (2742.12/1936.38)", e1.rrT1, 1.42);
+check("net rrT2 (5549.22/1936.38)", e1.rrT2, 2.87);
 
-// 7526.98 / 1933.57 = 3.89
+// 7526.98 / 1936.38 = 3.89
 check("maxLossMultiple", e1.maxLossMultiple, 3.89);
-// 1933.57 / 7526.98 = 25.69%  — the stop covers only a quarter of real exposure
-check("coveragePct", e1.coveragePct, 25.69);
-// 58.57 / 1875 = 3.12%
-check("costDragPct", e1.costDragPct, 3.12);
+// 1936.38 / 7526.98 = 25.73%  — the stop covers only a quarter of real exposure
+check("coveragePct", e1.coveragePct, 25.73);
+// 61.38 / 1875 = 3.27%
+check("costDragPct", e1.costDragPct, 3.27);
 
-// Closed-form breakeven: (100×1.000450434 + 47.2/75) / 0.998579566 = 100.82
-check("breakeven", e1.breakeven, 100.82);
+// Closed-form breakeven: (100×1.000450434 + 47.2/75) / 0.998079566 = 100.87
+check("breakeven", e1.breakeven, 100.87);
 check("breakeven above entry", e1.breakeven > BASE.entry, true);
 
 // THE CRITICAL INVARIANT: for a bought option the true max loss must always
@@ -126,7 +126,7 @@ check("tighter stop LOWERS coverage", tightE.coveragePct < e1.coveragePct, true)
 
 // --- charges: leg count is the thing that must not drift ---
 const rt = estimateCharges(100, 175, 75, 2)!;
-check("round trip total", rt.total, 69.22);
+check("round trip total", rt.total, 75.78);
 const lapse = estimateCharges(100, 0, 75, 1)!;
 check("lapse total (1 leg, no STT)", lapse.total, 26.98);
 check("lapse cheaper than round trip", lapse.total < rt.total, true);

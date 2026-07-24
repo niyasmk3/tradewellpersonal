@@ -98,6 +98,10 @@ class MarketSnapshot(BaseModel):
     # data should be treated as stale (market open but ticks stopped flowing).
     last_tick_age: Optional[int] = None
     feed_stale: bool = False
+    # OBSERVED FACT, not configuration: True only when this feed start actually
+    # dispatched its verification push through the alert webhook. False means
+    # a new signal will NOT reach the phone — the header must say so.
+    alerts_armed: bool = False
 
 
 class AuthStatus(BaseModel):

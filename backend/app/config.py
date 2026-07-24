@@ -93,6 +93,20 @@ class Settings(BaseSettings):
     # 4 cards/day, so filtering further would only re-create the missed-signal
     # problem this exists to solve.
     alert_min_score: float = Field(default=0.0, ge=0, le=100, alias="ALERT_MIN_SCORE")
+    # DEAD-FEED WATCHDOG. Page the phone when no tick has arrived for this many
+    # seconds during market hours. Exists because of 23-Jul: a 77-minute silent
+    # blackout contained the day's entire move, and nothing anywhere said the
+    # engine had gone blind. caffeinate prevents sleep; this catches everything
+    # else (network drops, socket death, token issues). 0 disables.
+    feed_watchdog_age_s: int = Field(default=150, ge=0, alias="FEED_WATCHDOG_AGE_S")
+    # THESIS-STALL TIME STOP (intraday only). If a trade has run this many
+    # minutes without reaching its quick target, theta is winning: the monitor
+    # recommends exit ("a thesis that is merely late still loses money" — the
+    # missing fourth exit type). Recorded excursions back it: T1 almost never
+    # arrives intraday and stalled trades bleed out slowly. 0 disables. The
+    # paper engine auto-closes on it to gather evidence; the live journal only
+    # gets the advisory unless "stall" is added to AUTO_CLOSE_TRIGGERS.
+    stall_exit_minutes: int = Field(default=45, ge=0, alias="STALL_EXIT_MINUTES")
 
     # --- Journal auto-close (advisory bookkeeping; places NO orders) ---
     # When a plan trigger fires, close the journal row so P&L, the daily loss
@@ -100,7 +114,10 @@ class Settings(BaseSettings):
     # for a manual click. Tradewell cannot observe your real fill, so the row
     # is flagged `auto_closed` and can be reopened.
     auto_close_journal: bool = Field(default=True, alias="AUTO_CLOSE_JOURNAL")
-    # Comma-separated subset of: stop, target1, target2, invalidation, time_exit
+    # Comma-separated subset of: stop, target1, target2, invalidation,
+    # time_exit, stall. "stall" is deliberately NOT in the default — the paper
+    # book auto-closes on it to gather evidence first; opt the live journal in
+    # only once that evidence supports it.
     auto_close_triggers: str = Field(
         default="stop,target1,invalidation", alias="AUTO_CLOSE_TRIGGERS"
     )

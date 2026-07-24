@@ -75,7 +75,7 @@ def test_push_carries_everything_needed_to_act():
     try:
         assert notify.push_signal(_card(), _cfg()) is True
         _drain()
-        url, payload, headers = SENT[0]
+        url, payload, headers = SENT[0][:3]
         body = payload.decode()
         assert url == "https://ntfy.example/tw"
         assert "BUY PE NIFTY 23950 PE" in body and "score 93" in body
@@ -107,7 +107,7 @@ def test_json_format_posts_structured_body():
     try:
         notify.push_signal(_card(), _cfg(ALERT_WEBHOOK_FORMAT="json"))
         _drain()
-        _, payload, headers = SENT[0]
+        _, payload, headers = SENT[0][:3]
         data = json.loads(payload.decode())
         assert headers["Content-Type"] == "application/json"
         assert data["signal_id"] == "S1" and data["score"] == 92.9
@@ -144,3 +144,50 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
     print("\nAll notify tests passed.")
+
+
+def test_push_text_uses_the_same_pipe_and_guards():
+    """Watchdog pages and armed confirmations ride the signal-alert transport:
+    same webhook, same never-raise, same no-op without configuration."""
+    real = _capture()
+    try:
+        assert notify.push_text("TRADEWELL FEED SILENT", "no ticks for 180s", _cfg()) is True
+        assert len(SENT) == 1
+        url, payload, headers = SENT[0][:3]
+        assert url == "https://ntfy.example/tw"
+        assert headers["Title"] == "TRADEWELL FEED SILENT"
+        assert b"180s" in payload
+        # Unconfigured -> silent no-op, never an exception.
+        assert notify.push_text("x", "y", _cfg(ALERT_WEBHOOK_URL="")) is False
+        assert notify.push_text("x", "y", _cfg(ALERT_WEBHOOK_URL="file:///etc/passwd")) is False
+        assert len(SENT) == 1
+    finally:
+        notify.threading.Thread = real
+    print("  NOTIFY -> push_text: same transport, scheme-guarded, no-op unconfigured")
+
+
+def test_post_reports_delivery_not_dispatch():
+    """`on_result` must reflect the HTTP outcome — armed means DELIVERED (2xx),
+    because 'dispatched' once wore the armed chip while a dead URL ate alerts."""
+    results = []
+
+    class _Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    real = notify.urllib.request.urlopen
+    try:
+        notify.urllib.request.urlopen = lambda req, timeout=None: _Resp()
+        notify._post("https://x.example/t", b"b", {}, on_result=results.append)
+        def _boom(req, timeout=None): raise OSError("dns failure")
+        notify.urllib.request.urlopen = _boom
+        notify._post("https://x.example/t", b"b", {}, on_result=results.append)
+        class _Bad(_Resp):
+            status = 404
+        notify.urllib.request.urlopen = lambda req, timeout=None: _Bad()
+        notify._post("https://x.example/t", b"b", {}, on_result=results.append)
+    finally:
+        notify.urllib.request.urlopen = real
+    assert results == [True, False, False], results
+    print("  NOTIFY -> on_result: 2xx True; DNS failure and 404 both False")

@@ -17,10 +17,12 @@ const REC_LABEL: Record<TradeAction, string> = {
   stop_loss_hit: "Stop-loss hit · exit",
   invalidated: "Invalidated · exit",
   time_exit: "Time exit · close position",
+  stall_exit: "Stalled · no follow-through — consider exit",
 };
 
 function recTone(a: TradeAction): string {
   if (["stop_loss_hit", "invalidated", "exit", "time_exit"].includes(a)) return "bg-bear/15 text-bear";
+  if (a === "stall_exit") return "bg-yellow-500/15 text-yellow-400";
   if (["target1_reached", "target2_reached", "book_partial"].includes(a)) return "bg-bull/15 text-bull";
   if (a === "trail_sl") return "bg-accent/15 text-accent";
   return "bg-panel2 text-muted";
@@ -257,6 +259,7 @@ const EXIT_LABEL: Record<string, string> = {
   target2: "target 2 reached",
   invalidation: "underlying invalidation",
   time_exit: "time exit",
+  stall: "stalled — no follow-through",
   "broker flat": "closed at broker",
 };
 
@@ -276,12 +279,13 @@ function exitReason(t: Trade): { text: string; tone: string; detail: string } | 
   // Manual exit: the last advisory event before it is the honest explanation.
   const advisory = [...t.events]
     .reverse()
-    .find((e) => e.kind in EXIT_LABEL || ["stop_loss_hit", "invalidated", "target1", "target2_reached", "time_exit"].includes(e.kind));
+    .find((e) => e.kind in EXIT_LABEL || ["stop_loss_hit", "invalidated", "target1", "target2_reached", "time_exit", "stall_exit"].includes(e.kind));
   if (advisory) {
     const map: Record<string, [string, string]> = {
       stop_loss_hit: ["stop-loss hit", "bg-bear/15 text-bear"],
       invalidated: ["underlying invalidation", "bg-bear/15 text-bear"],
       time_exit: ["time exit", "bg-panel2 text-muted"],
+      stall_exit: ["stalled — no follow-through", "bg-yellow-500/15 text-yellow-400"],
       target1: ["target 1 reached", "bg-bull/15 text-bull"],
       target2_reached: ["target 2 reached", "bg-bull/15 text-bull"],
     };

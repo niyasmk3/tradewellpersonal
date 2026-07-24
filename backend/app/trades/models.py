@@ -32,6 +32,11 @@ class TradeAction(str, Enum):
     STOPLOSS = "stop_loss_hit"
     INVALIDATED = "invalidated"
     TIME_EXIT = "time_exit"
+    # Thesis-stall time stop: the trade ran its allotted minutes without ever
+    # reaching the quick target — the thesis may merely be late, but in a
+    # bought option "late" is a losing position wearing a hopeful face. Distinct
+    # from TIME_EXIT (session close) so exit-type analytics can tell them apart.
+    STALL = "stall_exit"
 
 
 class TradeEvent(BaseModel):

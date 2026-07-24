@@ -62,6 +62,8 @@ export interface MarketSnapshot {
   vix: VixSnapshot | null;
   last_tick_age: number | null;
   feed_stale: boolean;
+  /** True only when this feed start verified the alert webhook with a real push. */
+  alerts_armed: boolean;
 }
 
 export interface OptionRow {
@@ -284,7 +286,8 @@ export interface AuthStatus {
 export type TradeStatus = "entered" | "partial" | "exited" | "ignored";
 export type TradeAction =
   | "hold" | "book_partial" | "move_sl_entry" | "trail_sl" | "exit"
-  | "target1_reached" | "target2_reached" | "stop_loss_hit" | "invalidated" | "time_exit";
+  | "target1_reached" | "target2_reached" | "stop_loss_hit" | "invalidated" | "time_exit"
+  | "stall_exit";
 
 export interface TradeEvent {
   ts: number;

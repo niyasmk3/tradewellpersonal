@@ -108,10 +108,15 @@ def _card(cid="S1", token=999, lot=75):
 
 def test_charges_match_the_frontend_model():
     """These are the same worked numbers frontend/tests/tradeMath.test.ts pins.
-    If the two ever disagree, one of them is lying to the trader."""
-    assert chg.charges(100.0, 175.0, 75, 2) == 69.22, chg.charges(100.0, 175.0, 75, 2)
+    If the two ever disagree, one of them is lying to the trader.
+
+    Worked by hand at the 01-Apr-2026 STT rate (0.15% of sell premium):
+    round trip 100→175 ×75: brokerage 40 + stt 19.6875 + exch 7.2249375
+    + ipft 0.103125 + sebi 0.020625 + gst 8.52276375 + stamp 0.225 = 75.78.
+    Lapse has no sell leg, so no STT — unchanged at 26.98."""
+    assert chg.charges(100.0, 175.0, 75, 2) == 75.78, chg.charges(100.0, 175.0, 75, 2)
     assert chg.charges(100.0, 0.0, 75, 1) == 26.98, chg.charges(100.0, 0.0, 75, 1)
-    print("  CHARGES-> round trip Rs69.22 / lapse Rs26.98 — matches tradeMath.ts")
+    print("  CHARGES-> round trip Rs75.78 / lapse Rs26.98 — matches tradeMath.ts")
 
 
 def test_net_pnl_is_below_gross():

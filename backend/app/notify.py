@@ -59,16 +59,64 @@ def _body(card: SignalCard) -> str:
     return "\n".join(lines)
 
 
-def _post(url: str, data: bytes, headers: dict[str, str]) -> None:
+def _post(url: str, data: bytes, headers: dict[str, str], on_result=None) -> None:
+    """POST from the daemon thread; report the DELIVERY outcome to on_result.
+
+    on_result(True) means the endpoint answered 2xx — the push actually landed
+    at the webhook. Anything else (non-2xx, DNS, refused, timeout) is False.
+    The distinction exists because "dispatched" once masqueraded as "armed"
+    while a typo'd URL swallowed every alert.
+    """
+    ok = False
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
-            if resp.status >= 300:
+            ok = resp.status < 300
+            if not ok:
                 log.warning("alert webhook returned %s", resp.status)
     except urllib.error.HTTPError as exc:
         log.warning("alert webhook HTTP %s: %s", exc.code, exc.reason)
     except Exception as exc:  # network down, DNS, timeout — never propagate
         log.warning("alert webhook failed: %s", exc)
+    if on_result is not None:
+        try:
+            on_result(ok)
+        except Exception:  # pragma: no cover - a callback bug must not kill the thread
+            log.debug("alert on_result callback failed", exc_info=True)
+
+
+def _webhook_url(cfg: Settings) -> str | None:
+    url = (cfg.alert_webhook_url or "").strip()
+    if not url:
+        return None
+    if urllib.parse.urlparse(url).scheme.lower() not in _ALLOWED_SCHEMES:
+        log.warning("alert webhook ignored: %s is not an http(s) URL", url)
+        return None
+    return url
+
+
+def push_text(title: str, body: str, cfg: Settings, on_result=None) -> bool:
+    """Fire-and-forget plain push — watchdog pages, armed confirmations, and
+    anything else that must reach the phone without being a signal card.
+
+    Same transport and same non-negotiables as push_signal: never raises,
+    never blocks, silently a no-op when no webhook is configured. Returns True
+    when a send was DISPATCHED; pass `on_result` to learn (from the posting
+    thread) whether the endpoint actually answered 2xx.
+    """
+    url = _webhook_url(cfg)
+    if url is None:
+        return False
+    if cfg.alert_webhook_format == "json":
+        payload = json.dumps({"title": title, "text": f"{title}\n{body}",
+                              "message": f"{title}\n{body}"}).encode()
+        headers = {"Content-Type": "application/json"}
+    else:
+        payload = body.encode()
+        headers = {"Content-Type": "text/plain; charset=utf-8", "Title": title}
+    threading.Thread(target=_post, args=(url, payload, headers, on_result),
+                     daemon=True, name="tradewell-alert").start()
+    return True
 
 
 def push_signal(card: SignalCard, cfg: Settings) -> bool:
@@ -77,11 +125,8 @@ def push_signal(card: SignalCard, cfg: Settings) -> bool:
     Returns True when a send was dispatched, False when it was suppressed —
     the caller uses this only for logging, never for control flow.
     """
-    url = (cfg.alert_webhook_url or "").strip()
-    if not url:
-        return False
-    if urllib.parse.urlparse(url).scheme.lower() not in _ALLOWED_SCHEMES:
-        log.warning("alert webhook ignored: %s is not an http(s) URL", url)
+    url = _webhook_url(cfg)
+    if url is None:
         return False
     if cfg.alert_min_score > 0 and (card.confidence or 0) < cfg.alert_min_score:
         log.debug("alert suppressed: score %.1f below %.1f",

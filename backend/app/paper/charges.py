@@ -7,12 +7,12 @@ costs a real fill would.
 
 The rates here MUST stay identical to CHARGE_RATES in frontend/lib/tradeMath.ts.
 tests/test_paper.py pins the same worked example the TypeScript suite pins
-(Rs 69.22 round trip, Rs 26.98 lapse), so the two cannot drift apart silently.
+(Rs 75.78 round trip, Rs 26.98 lapse), so the two cannot drift apart silently.
 """
 from __future__ import annotations
 
 BROKERAGE_PER_ORDER = 20.0      # flat, per executed order
-STT_SELL_PCT = 0.001            # 0.10% of SELL premium turnover (w.e.f. 01-Oct-2024)
+STT_SELL_PCT = 0.0015           # 0.15% of SELL premium turnover (w.e.f. 01-Apr-2026)
 EXCHANGE_TXN_PCT = 0.0003503    # NSE options, premium turnover, both sides
 IPFT_PCT = 0.000005             # NSE investor protection fund, Rs 50/crore
 SEBI_PCT = 0.000001             # Rs 10 per crore

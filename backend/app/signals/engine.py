@@ -101,6 +101,7 @@ class SignalEngine:
         ticks: dict | None,
         now: int,
         news: NewsSentiment | None = None,
+        vix_percentile: float | None = None,
     ) -> SignalResponse:
         tf = profile.timeframe
         price_fut = float(df["close"].iloc[-1]) if df is not None and len(df) else (fut_ltp or spot_ltp or 0.0)
@@ -114,8 +115,10 @@ class SignalEngine:
         oi = oi_analysis(chain, spot_ltp)
         reg = regime_mod.classify(df, ind, prev_close=pc, vix_status=vix_status, min_candles=profile.min_candles)
 
-        bull = scoring.score(Direction.CE, df, ind, oi, vix_status, dh, dl, spot=spot_ltp, news=news)
-        bear = scoring.score(Direction.PE, df, ind, oi, vix_status, dh, dl, spot=spot_ltp, news=news)
+        bull = scoring.score(Direction.CE, df, ind, oi, vix_status, dh, dl,
+                             spot=spot_ltp, news=news, vix_percentile=vix_percentile)
+        bear = scoring.score(Direction.PE, df, ind, oi, vix_status, dh, dl,
+                             spot=spot_ltp, news=news, vix_percentile=vix_percentile)
 
         status = MarketStatus(
             symbol=symbol,

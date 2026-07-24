@@ -235,6 +235,7 @@ class SignalService:
             ticks=self.state.ticks,
             now=now,
             news=news_store.sentiment(symbol),
+            vix_percentile=self.state.vix_percentile(vix.ltp if vix else None),
         )
         self._apply_sizing(fresh, symbol)
         # Score trend, recorded from the PRE-throttle evaluation: the throttle

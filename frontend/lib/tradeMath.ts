@@ -144,7 +144,7 @@ export function axisPositions(i: Pick<EconomicsInput, "entry" | "stop" | "target
  */
 export const CHARGE_RATES = {
   brokeragePerOrder: 20,      // flat, per executed order
-  sttSellPct: 0.001,          // 0.10% of SELL premium turnover (w.e.f. 01-Oct-2024)
+  sttSellPct: 0.0015,         // 0.15% of SELL premium turnover (w.e.f. 01-Apr-2026)
   exchangeTxnPct: 0.0003503,  // NSE options, premium turnover, both sides
   ipftPct: 0.000005,          // NSE investor protection fund, ₹50/crore
   sebiPct: 0.000001,          // ₹10 per crore

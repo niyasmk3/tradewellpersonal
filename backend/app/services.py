@@ -29,6 +29,22 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 _TF_TO_KITE = {"1m": "minute", "3m": "3minute", "5m": "5minute", "15m": "15minute"}
 
 
+def _seed_vix_history(kite, vix_token) -> list[float]:
+    """~1 year of India VIX daily closes, oldest first, for percentile context.
+
+    The score needs to know whether today's VIX is rich or cheap AGAINST ITS
+    OWN HISTORY — the level alone ("13.6, Stable") says nothing about whether
+    the premium being bought is expensive. One request, daily bars, non-fatal.
+    """
+    if not vix_token:
+        return []
+    from datetime import datetime, timedelta
+
+    to_dt = datetime.now()
+    rows = kite.historical_data(vix_token, to_dt - timedelta(days=370), to_dt, "day")
+    return [float(r["close"]) for r in rows if r.get("close")]
+
+
 def _seed_candles(kite, state) -> int:
     """Preload every futures CandleEngine with the latest session's candles from
     the Kite historical API (requires the Historical Data add-on; best-effort).
@@ -100,6 +116,10 @@ class FeedController:
         # IST day the feed started on — a running feed that crosses midnight has
         # stale expiries/ATM windows and must be re-resolved for the new day.
         self._started_day: str | None = None
+        # True once the armed-verification push was dispatched this feed start.
+        # Surfaced in the WS snapshot so the header can show armed/not-armed as
+        # an observed fact instead of an assumption.
+        self.alerts_armed: bool = False
 
     async def start(self) -> None:
         async with self._lifecycle:
@@ -129,6 +149,12 @@ class FeedController:
         if not kite_service.is_authenticated:
             raise RuntimeError("Kite session not established")
 
+        # Re-read .env on every feed start. The lru_cached settings burned us on
+        # 23-Jul: the webhook was added to .env at 13:53 but every process that
+        # issued cards that day had cached its settings earlier — all three
+        # signals fired unpushed while everyone believed alerts were "armed".
+        # A feed (re)start is the natural moment config becomes truth again.
+        get_settings.cache_clear()
         settings = get_settings()
         try:
             # instruments() is a blocking network call -> run off the event loop.
@@ -152,6 +178,18 @@ class FeedController:
         except Exception as exc:  # pragma: no cover
             log.warning("Candle seeding failed (continuing live-only): %s", exc)
 
+        # India VIX daily history, for the volatility-PRICE percentile in the
+        # score. Non-fatal: without it the volatility component simply scores
+        # from the VIX level alone, as it always did.
+        try:
+            closes = await asyncio.to_thread(
+                _seed_vix_history, kite_service.kite, market_state.vix_token)
+            if closes:
+                market_state.vix_daily_closes = closes
+                log.info("Seeded %d India VIX daily closes for percentile context", len(closes))
+        except Exception as exc:  # pragma: no cover
+            log.warning("VIX history seeding failed (percentile unavailable): %s", exc)
+
         # Open journal trades must keep receiving premiums even if their strike
         # has drifted outside the re-centred ATM window (e.g. after a gap).
         open_tokens = [t.token for t in trade_store.all()
@@ -166,9 +204,38 @@ class FeedController:
         self.signal_service = SignalService(settings, market_state, signal_store)
         # Off-desk push: wired HERE, not inside the store, so only the live
         # feed ever sends — a test or replay that adopts cards stays silent.
-        from app.notify import push_signal
+        # get_settings() is resolved AT PUSH TIME (not captured): combined with
+        # the cache_clear above, a webhook edited into .env is live from the
+        # next feed restart, never silently stale again.
+        from app.notify import push_signal, push_text
 
-        signal_store.notify = lambda card: push_signal(card, settings)
+        signal_store.notify = lambda card: push_signal(card, get_settings())
+
+        # MACHINE-VERIFIED ARMING. "The webhook is configured" was an assumption
+        # three times on 23-Jul and wrong every time. The feed proves it on
+        # every start by pushing through the exact same pipe a signal would use
+        # — and `alerts_armed` flips True only when the endpoint answers 2xx
+        # (a typo'd/unreachable URL must show UNARMED, not a green chip).
+        self.alerts_armed = False
+
+        def _armed(ok: bool) -> None:
+            self.alerts_armed = ok
+            if ok:
+                log.info("Alert channel armed — verification push DELIVERED (2xx)")
+            else:
+                log.warning("Alert channel verification FAILED — webhook did not answer 2xx; "
+                            "signal pushes will not reach the phone")
+
+        dispatched = push_text(
+            "Tradewell armed",
+            f"Feed starting for {settings.track_underlyings} · "
+            f"paper {'on' if settings.paper_trading else 'off'} · "
+            f"signal alerts will use this channel.",
+            settings,
+            on_result=_armed,
+        )
+        if not dispatched:
+            log.warning("Alert channel NOT armed — no ALERT_WEBHOOK_URL in .env")
         self.trade_monitor = TradeMonitorService(market_state, trade_store)
         if settings.paper_trading:
             # Its OWN store file. A paper position must never appear in the
@@ -322,14 +389,6 @@ class FeedController:
                 log.warning("trade loop error: %s", exc)
             await asyncio.sleep(interval)
 
-    @staticmethod
-    def _news_hours() -> bool:
-        """Trading days 07:00–17:00 IST (holiday-aware via the shared calendar).
-        The sentiment window is 6h, so off-session headlines can't affect a
-        signal anyway — no reason to bill Claude for them."""
-        from app.market import calendar as mcal
-        return mcal.in_news_hours()
-
     async def _news_loop(self, interval: float) -> None:
         while True:
             try:
@@ -361,6 +420,9 @@ class FeedController:
         self.news_service = None
         self._token_in_use = None
         self.running = False
+        # A stopped feed cannot deliver alerts; the chip must not keep a stale
+        # green from the previous start (finding: failed restart wore it for hours).
+        self.alerts_armed = False
 
 
 feed = FeedController()

@@ -40,6 +40,12 @@ log = logging.getLogger("tradewell")
 async def lifespan(app: FastAPI):
     broadcaster = asyncio.create_task(broadcaster_loop())
     supervisor = asyncio.create_task(feed.supervisor())
+    # App-lifetime, NOT feed-lifetime: the watchdog's whole job is to page when
+    # the feed is dead — a version that died with the feed paged exactly once
+    # per blackout and then went silent alongside it.
+    from app.watchdog import watchdog_loop
+
+    watchdog = asyncio.create_task(watchdog_loop())
 
     # If a valid access token was supplied via .env, start the feed immediately.
     if kite_service.is_authenticated:
@@ -54,6 +60,7 @@ async def lifespan(app: FastAPI):
 
     broadcaster.cancel()
     supervisor.cancel()
+    watchdog.cancel()
     await feed.stop()
 
 
