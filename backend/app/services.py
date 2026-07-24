@@ -375,8 +375,11 @@ class FeedController:
         while True:
             try:
                 if self.paper is not None:
-                    from app.signals.store import signal_store
+                    from app.signals.store import hollow_store, signal_store
                     self.paper.scan(signal_store)
+                    # The shadow store: cards the participation floor vetoed.
+                    # Paper fills them tagged, so the floor stays auditable.
+                    self.paper.scan(hollow_store)
                     self.paper.run_once()
             except Exception as exc:  # pragma: no cover
                 log.warning("paper loop error: %s", exc)

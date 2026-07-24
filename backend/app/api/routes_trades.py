@@ -45,11 +45,14 @@ def excursion(source: str = "live") -> dict:
     from app.trades import excursion as exc
 
     if source == "paper":
+        from app.paper.service import is_hollow_row
         from app.services import feed
         store = getattr(feed, "paper_store", None)
         if store is None:
             raise HTTPException(status_code=409, detail="Paper trading is off")
-        return exc.target_curve(store.all())
+        # Counterfactual (hollow) fills out: the target evidence must describe
+        # trades the system would actually offer.
+        return exc.target_curve([t for t in store.all() if not is_hollow_row(t)])
     return exc.target_curve(trade_store.all())
 
 
@@ -68,12 +71,16 @@ def analytics(source: str = "live") -> dict:
 
     if source == "paper":
         from app.paper import charges as chg
-        from app.paper.service import HONEST_FILLS_FROM
+        from app.paper.service import HONEST_FILLS_FROM, is_hollow_row
         from app.services import feed
         store = getattr(feed, "paper_store", None)
         if store is None:
             raise HTTPException(status_code=409, detail="Paper trading is off")
-        rows = [t for t in store.all() if t.entered_at >= HONEST_FILLS_FROM]
+        # Honest era only, counterfactual (hollow) fills out — this endpoint
+        # grades the system's own decisions; the floor's verdict lives in
+        # /paper/summary's "hollow" block.
+        rows = [t for t in store.all()
+                if t.entered_at >= HONEST_FILLS_FROM and not is_hollow_row(t)]
         return ana.summarize(
             rows,
             # legs=1 on a missing exit premium mirrors charges.py's lapse rule.

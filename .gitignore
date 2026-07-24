@@ -18,6 +18,7 @@ venv/
 .trades.json
 .trades.json.corrupt
 .signals.json
+.hollow_signals.json
 .news_seen.json
 .instruments_cache.json
 

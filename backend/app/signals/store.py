@@ -399,3 +399,11 @@ class SignalStore:
 
 
 signal_store = SignalStore(store_path=_STORE_PATH)
+
+# SHADOW STORE for hollow cards — setups the volume/OI participation floor
+# vetoed from the live feed. They get the same stabilisation (one active per
+# slot, throttle, day-scoped persistence) so the paper book can fill them as
+# tagged counterfactuals, but they are never served to the dashboard, never
+# pushed, and never enterable. Its slot counters are its own: a hollow card
+# must not consume the real feed's daily quota, and vice versa.
+hollow_store = SignalStore(store_path=_STORE_PATH.with_name(".hollow_signals.json"))

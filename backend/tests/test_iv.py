@@ -87,7 +87,13 @@ def test_chain_fills_iv_near_atm_only():
     strikes = {}
     token = 100
     spot = 24000.0
-    t_years = 5 / 365
+    # Price the synthetic quotes with the SAME clock the chain builder uses —
+    # a hardcoded 5/365 here drifts against the 15:30-IST settlement anchor as
+    # wall-clock time moves, and the recovered IV walks away from 15.0 by up
+    # to a vol point depending on when the suite runs (it failed at 1.0 exactly
+    # on a Saturday-noon run after passing Friday evening).
+    expiry = (datetime.fromtimestamp(time.time(), tz=_IST) + timedelta(days=5)).date()
+    t_years = years_to_expiry(expiry)
     for k in range(23400, 24650, 50):
         ce_t, pe_t = token, token + 1
         token += 2
@@ -97,7 +103,6 @@ def test_chain_fills_iv_near_atm_only():
         state.ticks[pe_t] = {"last_price": round(bs_price(spot, float(k), t_years, 0.15, False), 2)}
     state.ticks[1] = {"last_price": spot}
 
-    expiry = (datetime.fromtimestamp(time.time(), tz=_IST) + timedelta(days=5)).date()
     uni = OptionUniverse(symbol="NIFTY", expiry=expiry, step=50, strikes=strikes)
     chain = OptionChainBuilder(state, {"NIFTY:nearest": uni}).build("NIFTY:nearest")
     assert chain is not None and chain.atm_strike == 24000.0

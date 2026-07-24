@@ -199,6 +199,12 @@ class SignalCard(BaseModel):
     # documented conservative default before RBI/Budget/CPI/Fed windows.
     event_note: Optional[str] = None
 
+    # Set when the volume/OI component floor vetoed this card from the LIVE
+    # feed. Such a card exists only in the shadow store, where the paper book
+    # fills it as a tagged counterfactual — the evidence that will prove (or
+    # refute) the floor. A card with this set must never be offered to trade.
+    hollow_reason: Optional[str] = None
+
     # Contract multiplier, so the UI can turn premium levels into rupees BEFORE
     # the trade is placed. 0/None means the instrument dump hasn't loaded a lot
     # size — the UI must then show no rupee figures rather than guess one.

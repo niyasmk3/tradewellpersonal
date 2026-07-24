@@ -73,6 +73,18 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* The participation floor's own scoreboard: what the vetoed cards would
+          have made. Negative = the floor is earning its keep. */}
+      {data.hollow && (
+        <div className="mt-2 rounded bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300">
+          Vetoed-card counterfactual: {data.hollow.trades} fill{data.hollow.trades === 1 ? "" : "s"},
+          net ₹{signed(data.hollow.net_pnl, 0)} (₹{signed(data.hollow.expectancy, 0)}/trade,
+          {" "}{data.hollow.win_rate}% wins). {data.hollow.expectancy < 0
+            ? "The volume/OI floor is earning its keep."
+            : "If this stays positive over 30+ fills, lower the floors."}
+        </div>
+      )}
+
       <div className="mt-2 space-y-1">
         {data.rows
           .slice()
@@ -85,6 +97,14 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                 </span>
                 <span className="truncate font-mono text-muted">{r.contract}</span>
                 <span className="tag bg-panel text-[9px] text-muted">{r.reason}</span>
+                {r.hollow && (
+                  <span
+                    className="tag bg-purple-500/15 text-[9px] text-purple-300"
+                    title="Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
+                  >
+                    hollow
+                  </span>
+                )}
                 {r.era?.startsWith("inflated") && (
                   <span
                     className="tag bg-yellow-500/15 text-[9px] text-yellow-400"

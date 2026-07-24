@@ -28,7 +28,7 @@ _cache: dict = {"at": 0.0, "value": None}
 
 
 def _p75_mfe_pct(trades) -> float | None:
-    from app.paper.service import HONEST_FILLS_FROM
+    from app.paper.service import HONEST_FILLS_FROM, is_hollow_row
 
     samples = []
     for t in trades:
@@ -39,6 +39,10 @@ def _p75_mfe_pct(trades) -> float | None:
         # Pre-honest-fill entries were booked at prices the tape never printed,
         # so MFE% measured against them is fiction — same cutoff as summarize().
         if t.entered_at < HONEST_FILLS_FROM:
+            continue
+        # Hollow rows are fills of VETOED cards — the counterfactual sample.
+        # T1 must calibrate to trades the system would actually offer.
+        if is_hollow_row(t):
             continue
         if t.excursion_from is None or t.entered_at is None:
             continue

@@ -24,7 +24,7 @@ from app.signals.models import (
 from app.signals import calibration
 from app.signals.score_history import score_history
 from app.signals.sizing import apply_fund_sizing
-from app.signals.store import RiskState, SignalStore, ThrottleConfig
+from app.signals.store import RiskState, SignalStore, ThrottleConfig, hollow_store
 from app.signals.risk_limits import risk_limit_store
 from app.state import MarketState
 from app.trades.store import trade_store
@@ -250,6 +250,36 @@ class SignalService:
             log.debug("scalp friction check failed", exc_info=True)
         return None
 
+    def _hollow_veto(self, card) -> str | None:
+        """Participation floor: volume and OI must each clear a minimum.
+
+        These two components are the only ones that measure whether anyone is
+        actually IN the move — the other four describe the chart, and a chart
+        can look perfect on air. The 100-point total lets strong shape outvote
+        a dead tape (24-Jul: every big paper loser carried volume 2-6/15 under
+        a 25/25 price action; 23-Jul: same with OI). Below either floor the
+        card is withheld with the reason spoken; the caller routes it to the
+        shadow store so the paper book keeps grading the road not taken.
+        """
+        try:
+            if card.score is None:
+                return None
+            floors = (("Volume", self.cfg.signal_min_volume_score),
+                      ("Options", self.cfg.signal_min_oi_score))
+            for prefix, floor in floors:
+                if floor <= 0:
+                    continue
+                comp = next((c for c in card.score.components
+                             if c.name.startswith(prefix)), None)
+                if comp is not None and comp.points < floor:
+                    return (f"{comp.name} {comp.points:.0f}/{comp.max:.0f} is below the "
+                            f"{floor:.0f}-point floor — price is moving without "
+                            "participation, and that is how exhaustion tails score. "
+                            "Paper will still take it, tagged, as counter-evidence.")
+        except Exception:  # a floor bug must never stop the engine
+            log.debug("hollow veto failed", exc_info=True)
+        return None
+
     def _leadership_note(self, symbol: str) -> str | None:
         """BANKNIFTY-vs-NIFTY relative strength, as a displayed note only."""
         if symbol.upper() != "NIFTY":
@@ -340,6 +370,21 @@ class SignalService:
         # stays live, only the offer is withheld.
         if fresh.signal is not None:
             veto = self._context_veto(fresh, df, now) or self._scalp_friction_veto(fresh.signal)
+            if veto is None:
+                # Participation floor LAST, so the shadow book isolates the
+                # floor's own effect — a card the context vetoes would have
+                # killed anyway must not pollute the counterfactual sample.
+                veto = self._hollow_veto(fresh.signal)
+                if veto:
+                    try:
+                        shadow = fresh.model_copy(deep=True)
+                        shadow.signal.hollow_reason = veto
+                        # Same throttle so the shadow slot stabilises one card
+                        # per window; DEFAULT RiskState on purpose — the live
+                        # breakers must not starve the evidence stream.
+                        hollow_store.reconcile(shadow, now, self._throttle())
+                    except Exception:
+                        log.debug("hollow shadow reconcile failed", exc_info=True)
             if veto:
                 fresh.signal = None
                 fresh.action = Action.WAIT

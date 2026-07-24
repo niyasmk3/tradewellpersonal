@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     # Quiet period after a tick-feed gap ends: the first evaluations after a
     # blackout score a tape the engine never watched form. 0 = off.
     signal_post_gap_quiet_s: int = Field(default=600, ge=0, alias="SIGNAL_POST_GAP_QUIET_S")
+    # --- Participation floors (25-Jul). Volume and OI are the only components
+    # that measure whether anyone is IN the move; the other four describe the
+    # chart, and a chart can look perfect on air. The weighted total lets 45
+    # points of chart-shape outvote a dead tape — on 24-Jul every big paper
+    # loser scored volume 2-6/15 under a full price-action 25/25, and 23-Jul's
+    # weak card did the same with OI. A card below either floor is withheld
+    # (reason shown) and paper-filled as a tagged "hollow" counterfactual, so
+    # the ledger, not opinion, decides whether the floor stays. 0 = off. ---
+    signal_min_volume_score: float = Field(default=7.0, ge=0, le=15, alias="SIGNAL_MIN_VOLUME_SCORE")
+    signal_min_oi_score: float = Field(default=8.0, ge=0, le=20, alias="SIGNAL_MIN_OI_SCORE")
     # Scalp mode is PAPER-ONLY until flipped: journaling a scalp card live or
     # handing one to Kite is refused while false. The gate to flip it is
     # evidence, not enthusiasm — 50+ honest-fill paper scalps whose expectancy

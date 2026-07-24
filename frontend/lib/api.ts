@@ -369,6 +369,8 @@ export interface PaperRow {
   return_pct: number;
   /** "honest" or "inflated (pre-honest-fill)" — pre-23-Jul fills were fictional. */
   era?: string;
+  /** Fill of a card the volume/OI floor vetoed — counterfactual, not evidence. */
+  hollow?: boolean;
 }
 
 export interface PaperSummary {
@@ -385,6 +387,8 @@ export interface PaperSummary {
   expectancy: number;
   by_reason: Record<string, number>;
   note: string;
+  /** Net verdict on the cards the volume/OI floor vetoed; null until one fills. */
+  hollow?: { trades: number; net_pnl: number; expectancy: number; win_rate: number } | null;
   rows: PaperRow[];
   slippage_pct: number;
   lots: number;

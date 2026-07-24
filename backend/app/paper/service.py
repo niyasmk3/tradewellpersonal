@@ -53,6 +53,18 @@ from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 HONEST_FILLS_FROM = int(_dt(2026, 7, 23, tzinfo=_tz(_td(hours=5, minutes=30))).timestamp())
 
 
+def is_hollow_row(t) -> bool:
+    """A paper fill of a card the volume/OI participation floor vetoed.
+
+    Tagged via the notes field at fill time. These rows are the COUNTERFACTUAL
+    — the road not taken — so every consumer that grades the system's own
+    decisions (summary aggregates, T1 calibration, exit analytics, excursion
+    evidence) must exclude them; their own bucket in summarize() is where the
+    floor itself gets judged.
+    """
+    return bool(getattr(t, "notes", None) and t.notes.startswith("hollow:"))
+
+
 def _ist_minutes(now: int) -> int:
     return (now + 19800) % 86400 // 60
 
@@ -193,9 +205,13 @@ class PaperTradingService:
         # and a 10-minute scalp hold outlives an intraday card's 480s validity
         # — each mode's sample would be thinned, and selection-biased toward
         # quiet tape, by the OTHER modes' holding times.
+        # Hollowness must match too: the counterfactual book and the clean
+        # book each get their own per-mode slots — a hollow fill occupying the
+        # clean cap would let the vetoed feed starve the primary evidence.
+        card_hollow = bool(getattr(card, "hollow_reason", None))
         open_now = [t for t in self.store.all()
                     if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)
-                    and t.mode == card.mode]
+                    and t.mode == card.mode and is_hollow_row(t) == card_hollow]
         # The runtime override, not the .env default: the live engine reads the
         # same overlay, and a simulation gated tighter than the thing it is
         # meant to model reports fewer trades than the system would have taken.
@@ -233,8 +249,12 @@ class PaperTradingService:
             quick_pct=self.cfg.quick_target_pct or None,
             sl_pct=sl_pct, rr1=rr1, rr2=rr2,
         )
-        log.info("paper: entered %s %d lot(s) @ Rs%s (signal %s)",
-                 card.contract, lots, fill, card.id)
+        if card_hollow:
+            # The tag rides the notes field so it survives restarts and shows
+            # in the UI; is_hollow_row() is the single reader of this format.
+            self.store.update(t.id, notes=f"hollow: {card.hollow_reason}")
+        log.info("paper: entered %s%s %d lot(s) @ Rs%s (signal %s)",
+                 "HOLLOW " if card_hollow else "", card.contract, lots, fill, card.id)
         return t
 
     # ---- exit --------------------------------------------------------------
@@ -307,11 +327,13 @@ def summarize(store: TradeStore) -> dict:
     closed = [t for t in store.all() if t.status is TradeStatus.EXITED and t.exit_premium]
     rows = []
     inflated = []
+    hollow_rows = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
         net = chg.net_pnl(t.entry_premium, t.exit_premium, qty)
         deployed = t.entry_premium * qty
         honest = t.entered_at >= HONEST_FILLS_FROM
+        hollow = is_hollow_row(t)
         row = {
             "id": t.id, "contract": t.contract, "direction": t.direction.value,
             "entered_at": t.entered_at, "exited_at": t.exited_at,
@@ -322,8 +344,12 @@ def summarize(store: TradeStore) -> dict:
             "net_pnl": net,
             "return_pct": round(net / deployed * 100, 2) if deployed else 0.0,
             "era": "honest" if honest else "inflated (pre-honest-fill)",
+            "hollow": hollow,
         }
-        (rows if honest else inflated).append(row)
+        # Three books: the system's own decisions (aggregated), the vetoed
+        # counterfactual (its own verdict block below), and pre-honest-era
+        # history (flagged, counted nowhere).
+        (hollow_rows if (honest and hollow) else rows if honest else inflated).append(row)
     wins = [r for r in rows if r["net_pnl"] > 0]
     losses = [r for r in rows if r["net_pnl"] < 0]
     net_total = round(sum(r["net_pnl"] for r in rows), 2)
@@ -352,6 +378,17 @@ def summarize(store: TradeStore) -> dict:
                     "from every aggregate: their fills were inflated."
                     if inflated else "")),
         "inflated_trades": len(inflated),
-        # Inflated rows LAST, visibly flagged — history, not evidence.
-        "rows": rows + inflated,
+        # THE FLOOR'S OWN VERDICT: net expectancy of the fills the volume/OI
+        # participation floor vetoed. Negative and staying negative = the floor
+        # is earning its keep; positive over a real sample = lower the floors,
+        # with this ledger as the evidence. None until the first hollow fill.
+        "hollow": {
+            "trades": len(hollow_rows),
+            "net_pnl": round(sum(r["net_pnl"] for r in hollow_rows), 2),
+            "expectancy": round(sum(r["net_pnl"] for r in hollow_rows) / len(hollow_rows), 2),
+            "win_rate": round(100 * sum(1 for r in hollow_rows if r["net_pnl"] > 0)
+                              / len(hollow_rows), 1),
+        } if hollow_rows else None,
+        # Hollow and inflated rows LAST, visibly flagged — context, not evidence.
+        "rows": rows + hollow_rows + inflated,
     }
