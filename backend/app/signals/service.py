@@ -21,6 +21,7 @@ from app.signals.models import (
     Regime,
     SignalResponse,
 )
+from app.signals import calibration
 from app.signals.score_history import score_history
 from app.signals.sizing import apply_fund_sizing
 from app.signals.store import RiskState, SignalStore, ThrottleConfig
@@ -166,6 +167,19 @@ class SignalService:
         # premium on every poll (routes_signals); this is the issue-time value.
         apply_fund_sizing(card, limits.get("trading_fund", 0.0))
 
+        # Scheduled-event caution: known macro windows halve the suggestion —
+        # the documented conservative default. Zero score impact; the news
+        # component handles the aftermath, this handles the calendar.
+        import time as _time
+
+        from app.market import events as _events
+
+        # Window sized to the position's LIFETIME: an intraday MIS position is
+        # squared off ~15:20 and can't reach an evening print (3h look-ahead);
+        # a positional hold rides through anything on the calendar today (12h).
+        window_h = 12.0 if card.mode.value == "positional" else 3.0
+        card.event_note = _events.upcoming(int(_time.time()), window_h=window_h)
+
         if capital <= 0:
             card.sizing_note = "Set TRADING_CAPITAL in .env for a size suggestion"
             return
@@ -174,11 +188,56 @@ class SignalService:
         budget = capital * (self.cfg.risk_per_trade_pct / 100.0)
         per_lot_risk = per_unit_risk * lot
         lots = int(budget // per_lot_risk)
+        halved = bool(card.event_note and lots > 1)
+        if halved:
+            lots = lots // 2
         card.suggested_lots = max(0, lots)
         card.sizing_note = (
             f"{lots} lot(s) risks ≈₹{lots * per_lot_risk:,.0f} "
             f"({self.cfg.risk_per_trade_pct:.1f}% of ₹{capital:,.0f}) if the stop is hit"
+            + (f" · HALVED for {card.event_note}" if halved else "")
         )
+
+    def _context_veto(self, fresh: SignalResponse, df, now: int) -> str | None:
+        """State-aware reasons an otherwise-issuable card must wait.
+
+        1. CURRENT-SESSION FRAME: the last closed candle must belong to
+           today's session. The 22-Jul 09:15 card was scored 46/75 on
+           YESTERDAY's candles through a seeding/pre-open window — a card must
+           never describe a market from a previous day.
+        2. POST-GAP QUIET: for a window after a tick-feed gap ends, the frame
+           contains candles the engine never watched form (or a hole). The
+           23-Jul reawakening minted a score-87 card 14s after a 77-minute
+           blackout, five minutes after the top.
+        """
+        if len(df):
+            last_day = (int(df["ts"].iloc[-1]) + 19800) // 86400
+            if last_day != (now + 19800) // 86400:
+                return "Waiting for today's first closed candle — refusing to score yesterday's tape"
+        quiet = self.cfg.signal_post_gap_quiet_s
+        gap_end = getattr(self.state, "gap_ended_at", None)
+        if quiet > 0 and gap_end is not None and now - gap_end < quiet:
+            mins = int((quiet - (now - gap_end)) // 60) + 1
+            return (f"Tick feed resumed after a gap — holding new cards ~{mins}m "
+                    "while the tape re-establishes")
+        return None
+
+    def _leadership_note(self, symbol: str) -> str | None:
+        """BANKNIFTY-vs-NIFTY relative strength, as a displayed note only."""
+        if symbol.upper() != "NIFTY":
+            return None
+        try:
+            nifty = self.state.underlying_snapshot("NIFTY")
+            bank = self.state.underlying_snapshot("BANKNIFTY")
+            if not nifty or not bank or nifty.change_pct is None or bank.change_pct is None:
+                return None
+            gap = round(bank.change_pct - nifty.change_pct, 2)
+            if abs(gap) < 0.35:
+                return None
+            side = "leading" if gap > 0 else "lagging"
+            return f"BANKNIFTY {side} by {abs(gap):.2f}% — sector participation context"
+        except Exception:  # display-only; never block an evaluation
+            return None
 
     def evaluate_symbol(self, symbol: str, profile: ModeProfile) -> SignalResponse | None:
         engine = self.state.engine_for_symbol(symbol)
@@ -236,7 +295,26 @@ class SignalService:
             now=now,
             news=news_store.sentiment(symbol),
             vix_percentile=self.state.vix_percentile(vix.ltp if vix else None),
+            rr1_override=calibration.intraday_rr1(profile, self.cfg),
         )
+
+        # Context vetoes that need STATE the pure engine doesn't hold. Both
+        # convert an issued card into a WAIT with the reason shown — the score
+        # panel stays live, only the offer is withheld.
+        if fresh.signal is not None:
+            veto = self._context_veto(fresh, df, now)
+            if veto:
+                fresh.signal = None
+                fresh.action = Action.WAIT
+                fresh.no_trade_reason = veto
+
+        # Cross-index leadership, surfaced as CONTEXT (zero score weight until
+        # the paper book proves it deserves any): a CE thesis with BANKNIFTY
+        # underperforming, or a PE with banks holding up, is worth an eyebrow.
+        lead = self._leadership_note(symbol)
+        if lead and fresh.status is not None:
+            fresh.status.notes = [*fresh.status.notes, lead][:6]
+
         self._apply_sizing(fresh, symbol)
         # Score trend, recorded from the PRE-throttle evaluation: the throttle
         # shapes what is OFFERED, not what the market scored. record() swallows

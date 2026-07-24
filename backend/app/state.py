@@ -70,6 +70,12 @@ class MarketState:
         # ~1 year of India VIX daily closes (oldest first), seeded at feed
         # start. Empty = percentile unavailable; the score degrades gracefully.
         self.vix_daily_closes: list[float] = []
+        # Post-blackout context: wall time the last tick GAP (>150s of silence)
+        # ended, and the previous tick's wall time that detects it. The signal
+        # service holds issuance quiet for a window after a gap — the first
+        # evaluations after a blackout score a tape the engine never watched.
+        self.gap_ended_at: float | None = None
+        self._last_tick_wall: float | None = None
 
         # Status
         self.ticker_connected: bool = False
@@ -98,6 +104,25 @@ class MarketState:
         token = tick.get("instrument_token")
         if token is None:
             return
+        # Gap detection for the post-blackout quiet period: the first tick
+        # after a long silence marks the moment the engine can SEE again — but
+        # not yet the moment it should trust what it sees. Only an IN-SESSION
+        # gap counts: the overnight silence ends at every 09:15 open, and
+        # flagging that would impose the quiet period on every single morning.
+        import time as _t
+
+        wall = _t.time()
+        if self._last_tick_wall is not None and wall - self._last_tick_wall > 150:
+            prev_ist = _t.gmtime(int(self._last_tick_wall) + 19800)
+            prev_day = (int(self._last_tick_wall) + 19800) // 86400
+            today = (int(wall) + 19800) // 86400
+            prev_in_session = (
+                prev_day == today
+                and (prev_ist.tm_hour, prev_ist.tm_min) >= (9, 15)
+            )
+            if prev_in_session:
+                self.gap_ended_at = wall
+        self._last_tick_wall = wall
         with self._lock:
             self.ticks[token] = tick
 

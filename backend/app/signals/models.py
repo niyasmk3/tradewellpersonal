@@ -189,6 +189,11 @@ class SignalCard(BaseModel):
     fund_qty: Optional[int] = None
     fund_note: Optional[str] = None
 
+    # Scheduled-event caution (from the user-maintained .events.json): set when
+    # a known macro event is near. Sizing is halved while it is set — the
+    # documented conservative default before RBI/Budget/CPI/Fed windows.
+    event_note: Optional[str] = None
+
     # Contract multiplier, so the UI can turn premium levels into rupees BEFORE
     # the trade is placed. 0/None means the instrument dump hasn't loaded a lot
     # size — the UI must then show no rupee figures rather than guess one.

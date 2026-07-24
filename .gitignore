@@ -37,3 +37,4 @@ yarn-error.log*
 backend/.paper_trades.json
 backend/.risk_limits.json
 logs/
+backend/.events.json

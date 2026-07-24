@@ -119,14 +119,20 @@ def _options(oi: OiAnalysis, bullish: bool, spot: float | None) -> ScoreComponen
         reasons.extend(oi.notes[:1])
     elif oi.bias == "neutral":
         pts += 4
-    # PCR alignment
+    # PCR alignment — but NOT when the bias itself came from PCR: that pays
+    # one reading twice (up to +5 phantom points; the 22-Jul 09:15 card
+    # carried "PCR 0.82" as both bias and alignment). Halved instead of
+    # skipped when the bias was neutral-by-PCR-midzone: the reading still
+    # carries some independent information about crowding.
     if oi.pcr is not None:
-        if bullish and oi.pcr >= 1.1:
-            pts += 5; reasons.append(f"PCR {oi.pcr}")
-        elif not bullish and oi.pcr <= 0.9:
-            pts += 5; reasons.append(f"PCR {oi.pcr}")
-        elif 0.9 < oi.pcr < 1.1:
-            pts += 3
+        double_counted = oi.bias_source == "pcr" and oi.bias == want
+        if not double_counted:
+            if bullish and oi.pcr >= 1.1:
+                pts += 5; reasons.append(f"PCR {oi.pcr}")
+            elif not bullish and oi.pcr <= 0.9:
+                pts += 5; reasons.append(f"PCR {oi.pcr}")
+            elif 0.9 < oi.pcr < 1.1:
+                pts += 3
     # Wall context — direction-aware: reward only when the S/R walls are
     # positioned to favour the trade (support below + resistance overhead for a
     # CE; mirror for a PE), not merely for existing.

@@ -398,6 +398,14 @@ export function SignalPanel({
             0DTE
           </span>
         )}
+        {signal.event_note && (
+          <span
+            className="tag bg-yellow-500/15 text-yellow-400"
+            title={`Scheduled event nearby: ${signal.event_note}. The size suggestion is halved — event windows gap through stops.`}
+          >
+            ⚠ {signal.event_note}
+          </span>
+        )}
         {/* Pricing freshness + one-click re-price, both modes. Available from 2m
             (intraday cards only live 8m, so a 5m gate barely appeared). Amber —
             "worth refreshing" — when the price has drifted out of the entry

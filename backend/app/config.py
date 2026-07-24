@@ -40,6 +40,23 @@ class Settings(BaseSettings):
     # hours (design goal is 1-4/day) and the highest-confidence ones still lost.
     score_valid: int = Field(default=78, alias="SCORE_VALID")
     score_wait: int = Field(default=70, alias="SCORE_WAIT")
+    # --- Exhaustion & context gates (24-Jul: every blackout-day card fired at
+    # the tail of a spent move; freshness of the QUOTE says nothing about
+    # freshness of the MOVE) ---
+    # Refuse a card whose invalidation level sits closer to spot than this many
+    # ATRs: 0.4 points of room against a 19-point ATR died in 3 minutes. 0 = off.
+    signal_min_invalidation_atr: float = Field(default=1.0, ge=0, alias="SIGNAL_MIN_INVALIDATION_ATR")
+    # Refuse a card when the future is stretched more than this many ATRs from
+    # its EMA20 — momentum confirmation at that distance is a chase. 0 = off.
+    signal_max_extension_atr: float = Field(default=3.5, ge=0, alias="SIGNAL_MAX_EXTENSION_ATR")
+    # Quiet period after a tick-feed gap ends: the first evaluations after a
+    # blackout score a tape the engine never watched form. 0 = off.
+    signal_post_gap_quiet_s: int = Field(default=600, ge=0, alias="SIGNAL_POST_GAP_QUIET_S")
+    # Derive intraday Target 1 from the paper book's recorded MFE distribution
+    # (P75, clamped 8-27%) once >=30 clean samples exist; below that the static
+    # RR_TARGET1 ladder stands. The advertised +27% T1 has never been hit
+    # intraday; the +12% quick target is what lands. false = static only.
+    signal_t1_from_excursions: bool = Field(default=True, alias="SIGNAL_T1_FROM_EXCURSIONS")
     # A card may only be issued on a premium quote at most this old. Added after
     # 21/22-Jul, when 5 of 9 cards priced their entry zone off a stale premium —
     # one literally at the previous day's close while the market opened 10%

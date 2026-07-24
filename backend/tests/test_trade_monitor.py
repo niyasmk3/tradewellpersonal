@@ -648,9 +648,12 @@ def test_t0_latches_and_lifts_the_stop_to_entry():
     monitor.evaluate(t, current_premium=29.00, spot=24190.0, ist_minutes=630)
     assert t.t0_hit is True
     assert t.stop_loss == 25.85, t.stop_loss           # lifted to entry
-    assert t.trailing_sl == 25.85, t.trailing_sl
+    # Dead-zone ratchet (24-Jul): the trail locks 55% of the run BEYOND the
+    # quick target — at this cross (0.05 beyond) that is entry + 0.03.
+    assert t.trailing_sl == 25.88, t.trailing_sl
+    assert t.trailing_sl >= 25.85                       # never below entry
     assert any(e.kind == "quick_target" for e in t.events)
-    print(f"  T0     -> reached Rs28.95: SL lifted 24.30 -> {t.stop_loss} (entry)")
+    print(f"  T0     -> reached Rs28.95: SL 24.30 -> {t.trailing_sl} (entry + ratchet)")
 
 
 def test_t0_makes_the_runner_risk_free_not_a_loss():
@@ -662,8 +665,12 @@ def test_t0_makes_the_runner_risk_free_not_a_loss():
     for px in (29.00, 32.30, 33.90, 31.80, 27.90, 25.80):     # the real path
         monitor.evaluate(t, current_premium=px, spot=24190.0, ist_minutes=630)
     assert t.recommendation is TradeAction.STOPLOSS, t.recommendation
-    assert t.trailing_sl == 25.85, t.trailing_sl
-    print(f"  T0     -> same path now stops at entry Rs{t.trailing_sl}, not Rs24.30")
+    # Ratchet (24-Jul): peak 33.90 is 4.95 beyond the 28.95 quick target, so
+    # 55% of that run is locked: 25.85 + 0.55*4.95 = 28.57 — the same path now
+    # banks most of the spike instead of scratching at entry.
+    assert t.trailing_sl == 28.57, t.trailing_sl
+    assert t.trailing_sl > 25.85
+    print(f"  T0     -> same path now stops at Rs{t.trailing_sl}, not entry, not Rs24.30")
 
 
 def test_t0_stop_never_slides_back_down():
@@ -671,9 +678,10 @@ def test_t0_stop_never_slides_back_down():
                    quick_target=28.95, target1=37.65,
                    invalidation_level=24210.4, invalidation_dir="below")
     monitor.evaluate(t, current_premium=29.00, spot=24190.0, ist_minutes=630)
+    floor = t.trailing_sl                              # entry + ratchet at the cross
     monitor.evaluate(t, current_premium=26.50, spot=24190.0, ist_minutes=630)
-    assert t.trailing_sl == 25.85, t.trailing_sl
-    print("  T0     -> floor holds at entry across later cycles")
+    assert t.trailing_sl == floor and floor >= 25.85, (t.trailing_sl, floor)
+    print(f"  T0     -> floor Rs{floor} holds across later cycles, never below entry")
 
 
 def test_t0_retires_the_disaster_backstop():
@@ -824,3 +832,37 @@ def test_stall_never_closes_a_profitable_trade_without_a_bar():
     assert "no early-target level set" in flat.recommendation_note
     assert "quick target" not in flat.recommendation_note, "must not fabricate a level"
     print("  MONITOR-> no quick target: winners never stalled; flat stalls honestly")
+
+
+def test_positional_breakeven_actually_governs_the_exit():
+    """Review catch: the first breakeven changed only the DISPLAYED stop while
+    the disaster level kept governing — the 172 -> 181.65 -> 131.65 round trip
+    still ran. A raised stop must be the operative exit."""
+    t = make_trade(mode=TradingMode.POSITIONAL, entry_premium=172.0,
+                   stop_loss=120.4, trailing_sl=120.4, disaster_sl=94.6,
+                   quick_target=192.75, target1=223.6, target2=275.0,
+                   invalidation_level=23900.0, invalidation_dir="above")
+    monitor.evaluate(t, 181.65, 24000.0, 600)          # MFE > +5% -> breakeven
+    assert t.stop_loss == 172.0
+    assert any(e.kind == "breakeven" for e in t.events)
+    monitor.evaluate(t, 131.65, 24000.0, 600)          # the motivating fall
+    assert t.recommendation is TradeAction.STOPLOSS, t.recommendation
+    assert "172" in t.recommendation_note
+    print("  BE     -> breakeven'd positional STOPS at entry, not at the disaster level")
+
+
+def test_giveback_note_caps_and_reworders_below_entry():
+    """Intraday (no positional breakeven), stop far below: the HOLD note must
+    warn honestly — capped % above entry, 'ENTIRE' (never '518%') below it.
+    On positionals this state is now unreachable: the breakeven stops it first
+    — which is itself the fix working."""
+    t = make_trade(entry_premium=172.0, stop_loss=120.4, trailing_sl=120.4,
+                   quick_target=None, target1=223.6, target2=275.0,
+                   invalidation_level=23900.0, invalidation_dir="above")
+    monitor.evaluate(t, 181.65, 24000.0, 600)          # peak, no de-risk intraday
+    monitor.evaluate(t, 176.0, 24000.0, 600)           # mild give-back, above entry
+    assert "% of peak profit given back" in (t.recommendation_note or "")
+    assert "518" not in (t.recommendation_note or "")
+    monitor.evaluate(t, 165.0, 24000.0, 600)           # below entry now
+    assert "ENTIRE peak profit given back" in (t.recommendation_note or ""), t.recommendation_note
+    print("  GIVE   -> capped wording above entry; honest 'ENTIRE' below entry")

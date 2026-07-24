@@ -216,11 +216,32 @@ def evaluate(
     if trade.t1_hit:
         trailed = round(current_premium * (1 - _TRAIL_PCT), 2)
         trade.trailing_sl = max(trade.trailing_sl, trade.stop_loss, trailed)
+    elif trade.t0_hit:
+        # DEAD-ZONE RATCHET (quick target hit, Target 1 not yet): the old
+        # behaviour parked the stop at entry and waited for a T1 that almost
+        # never comes intraday — both 22-Jul paper winners gave back 40-50% of
+        # their peak between here and T1. Lock 55% of the run BEYOND the quick
+        # target on each new high; anchored so the stop equals entry exactly at
+        # the T0 cross (existing tests and semantics unchanged at that moment).
+        qt = trade.quick_target or entry
+        high = trade.mfe_premium or current_premium
+        locked = round(entry + 0.55 * max(0.0, high - qt), 2)
+        trade.trailing_sl = max(trade.trailing_sl, trade.stop_loss, locked)
     else:
-        # max(), not assignment: once T0 lifted stop_loss to entry the floor
-        # must not slide back down on the next cycle.
-        trade.trailing_sl = max(trade.trailing_sl, trade.stop_loss) if trade.t0_hit \
-            else trade.stop_loss
+        trade.trailing_sl = trade.stop_loss
+        # POSITIONAL BREAKEVEN: a multi-day thesis that has already shown +5%
+        # MFE must not be allowed to round-trip to its full stop (the open
+        # 23-Jul positional rode 172 -> 181.65 -> 131.65 with no de-risking).
+        if (
+            trade.mode.value == "positional"
+            and trade.mfe_premium is not None
+            and trade.mfe_premium >= entry * 1.05
+            and trade.stop_loss < entry
+        ):
+            trade.stop_loss = entry
+            trade.trailing_sl = max(trade.trailing_sl, entry)
+            _event(trade, "breakeven",
+                   f"MFE ₹{trade.mfe_premium} ≥ +5% — SL moved to entry ₹{entry} (positional de-risk)")
 
     invalidated = _invalidated(trade, spot)
 
@@ -239,7 +260,16 @@ def evaluate(
     # wider absolute band, and protecting the gain is the whole point.
     # Once half is banked and the stop is at entry, the wide backstop has done
     # its job — protecting the free runner is what matters now.
-    if trade.disaster_sl and not trade.t1_hit and not trade.t0_hit:
+    # The disaster backstop governs ONLY while the stop still sits below entry.
+    # Once ANY de-risk lifted the stop to entry or above (T0, T1, or the
+    # positional breakeven), the raised stop is the operative exit — the first
+    # breakeven implementation changed only the displayed number while this
+    # selection kept routing exits to the disaster level ₹40 lower (review
+    # catch: protection that exists only in the journal text is not protection).
+    if (
+        trade.disaster_sl and not trade.t1_hit and not trade.t0_hit
+        and trade.stop_loss < entry
+    ):
         exit_level, exit_label = trade.disaster_sl, "Disaster stop"
     else:
         exit_level, exit_label = trade.trailing_sl, "Stop-loss"
@@ -273,10 +303,10 @@ def evaluate(
             rec, note = TradeAction.TRAIL_SL, f"Target 1 reached — trailing SL at ₹{effective_sl}"
     elif trade.t0_hit and trade.status == TradeStatus.ENTERED and trade.lots > 1:
         rec, note = (TradeAction.BOOK_PARTIAL,
-                     f"Early target ₹{trade.quick_target} reached — book half, SL at entry ₹{entry}")
+                     f"Early target ₹{trade.quick_target} reached — book half, SL ratcheted to ₹{effective_sl}")
     elif trade.t0_hit:
         rec, note = (TradeAction.TRAIL_SL,
-                     f"Early target reached — risk-free, SL at entry ₹{entry}")
+                     f"Early target reached — risk-free, SL ratcheted to ₹{effective_sl}")
     elif trade.t1_hit:
         rec, note = TradeAction.TRAIL_SL, f"In profit — trailing SL at ₹{effective_sl}"
     elif (
@@ -315,6 +345,21 @@ def evaluate(
         rec = TradeAction.INVALIDATED
         note = (f"Invalidation fired {mins_ago}m ago and is UNACKNOWLEDGED{inside} — "
                 "exit, or acknowledge to keep holding by choice")
+
+    # GIVE-BACK WARNING: more than half of a meaningful peak profit has been
+    # returned. Not an exit by itself — but a hold that has quietly become a
+    # round trip must say so out loud.
+    if (
+        rec in (TradeAction.HOLD, TradeAction.TRAIL_SL)
+        and trade.mfe_premium is not None
+        and trade.mfe_premium >= entry * 1.05
+        and (current_premium - entry) < 0.5 * (trade.mfe_premium - entry)
+    ):
+        if current_premium < entry:
+            note += f" · ⚠ ENTIRE peak profit given back (peak ₹{trade.mfe_premium}, now below entry)"
+        else:
+            gave = min(100.0, (1 - (current_premium - entry) / (trade.mfe_premium - entry)) * 100)
+            note += f" · ⚠ {gave:.0f}% of peak profit given back (peak ₹{trade.mfe_premium})"
 
     # Expiry-day theta warning for passive advice — on the contract's last day
     # time decay accelerates sharply; don't let "Hold" read as safe.

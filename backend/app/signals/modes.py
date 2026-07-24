@@ -89,7 +89,11 @@ def _build_all(cfg: Settings) -> dict[str, ModeProfile]:
             timeframe="15m",
             expiry_key="monthly",
             validity_seconds=6 * 3600,                # entry window good for the session
-            score_valid=72,                           # slightly stricter → fewer, higher-conviction
+            # NOTE: LOWER than intraday's 78, not stricter (an earlier comment
+            # here claimed otherwise). Positional cards have issued at 72-77
+            # with mixed results; the gate is under review with paper evidence
+            # — raise it there, not by folklore.
+            score_valid=72,
             score_wait=62,
             premium_sl_pct=0.30,                      # wider premium stop for multi-day swings
             rr_target1=2.0,

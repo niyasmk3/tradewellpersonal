@@ -102,6 +102,7 @@ class SignalEngine:
         now: int,
         news: NewsSentiment | None = None,
         vix_percentile: float | None = None,
+        rr1_override: float | None = None,
     ) -> SignalResponse:
         tf = profile.timeframe
         price_fut = float(df["close"].iloc[-1]) if df is not None and len(df) else (fut_ltp or spot_ltp or 0.0)
@@ -160,6 +161,22 @@ class SignalEngine:
         if chosen.total < profile.score_valid:
             return resp(Action.WAIT, reason=f"Setup forming — score {chosen.total:.0f} (needs {profile.score_valid})", score=chosen)
 
+        # MOVE EXHAUSTION: a fresh quote on a spent move is still a chase.
+        # The future stretched several ATRs beyond EMA20 is momentum that has
+        # already happened — trend confirmation there buys the tail (every
+        # 23-Jul card fired at one).
+        max_ext = self.cfg.signal_max_extension_atr
+        if (
+            max_ext > 0 and ind.atr and ind.ema20 and price_fut
+            and abs(price_fut - ind.ema20) / ind.atr > max_ext
+        ):
+            ext = abs(price_fut - ind.ema20) / ind.atr
+            return resp(
+                Action.WAIT, score=chosen,
+                reason=(f"Tape extended {ext:.1f} ATR from EMA20 (limit {max_ext:g}) — "
+                        "move looks spent, wait for a pullback or consolidation"),
+            )
+
         # --- tradeable signal ---
         strong = reg.regime in (Regime.STRONG_BULLISH, Regime.STRONG_BEARISH) and chosen.total >= 80
         pick = strike_mod.select(
@@ -196,10 +213,28 @@ class SignalEngine:
 
         plan = risk_mod.build(
             direction, entry_px, df, ind, price_fut, symbol, tf,
-            profile.premium_sl_pct, profile.rr_target1, profile.rr_target2, basis,
+            profile.premium_sl_pct, rr1_override or profile.rr_target1,
+            profile.rr_target2, basis,
             disaster_pct=self._disaster_pct(),
             quick_pct=self.cfg.quick_target_pct or None,
         )
+
+        # INVALIDATION ROOM: the structural stop must be a real distance away.
+        # A card whose invalidation sits inside one ATR of spot is priced to
+        # die on noise — 23-Jul's first card had 0.4 points of room against a
+        # 19-point ATR and its paper twin lasted 3 minutes.
+        min_room_atr = self.cfg.signal_min_invalidation_atr
+        if (
+            min_room_atr > 0 and ind.atr and spot_ltp
+            and plan.invalidation_level is not None
+        ):
+            room = abs(spot_ltp - plan.invalidation_level)
+            if room < ind.atr * min_room_atr:
+                return resp(
+                    Action.WAIT, score=chosen,
+                    reason=(f"Invalidation only {room:.0f} pts away (< {min_room_atr:g} "
+                            f"ATR of {ind.atr:.0f}) — no room for the thesis to breathe"),
+                )
 
         reasons: list[str] = []
         for c in chosen.components:

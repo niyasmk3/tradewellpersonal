@@ -257,8 +257,13 @@ def reprice_signal(symbol: str, mode: str = Query("intraday")) -> RepriceResult:
         )
     disaster_pct = (cfg.premium_disaster_pct
                     if cfg.stop_primary == "underlying" and cfg.trading_capital > 0 else None)
+    # The SAME calibrated rr1 the card was issued with — a refresh must not
+    # silently revert an excursion-derived T1 back to the static +27%.
+    from app.signals import calibration
+
+    rr1 = calibration.intraday_rr1(profile, cfg) or profile.rr_target1
     ladder = risk_mod.price_ladder(
-        float(ltp), profile.premium_sl_pct, profile.rr_target1, profile.rr_target2,
+        float(ltp), profile.premium_sl_pct, rr1, profile.rr_target2,
         disaster_pct=disaster_pct, quick_pct=cfg.quick_target_pct or None,
     )
     # Best-effort: refreshing ref_spot fixes the stale-spot mismatch that

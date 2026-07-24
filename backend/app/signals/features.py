@@ -85,6 +85,10 @@ class OiAnalysis:
     call_writing: float               # sum CE OI-build at/above ATM (bearish)
     bias: str                         # "bullish" / "bearish" / "neutral"
     notes: list[str]
+    # What produced `bias`: "oi" (intraday OI build), "pcr" (fallback), or
+    # "none". The scorer must not pay the PCR-alignment bonus on top of a
+    # bias that already IS the PCR.
+    bias_source: str = "none"
 
 
 def oi_analysis(chain: OptionChain | None, spot: float | None) -> OiAnalysis:
@@ -106,20 +110,28 @@ def oi_analysis(chain: OptionChain | None, spot: float | None) -> OiAnalysis:
 
     notes: list[str] = []
     bias = "neutral"
+    bias_source = "none"
     pcr = chain.pcr
     # OI-build bias takes priority; fall back to PCR when there's no intraday delta.
+    # `bias_source` exists for the scorer: when the bias itself came from PCR,
+    # awarding a separate PCR-alignment bonus counts one reading twice (up to
+    # +5 phantom points — confirmed on the 22-Jul 09:15 card).
     if put_writing > call_writing * 1.3 and put_writing > 0:
         bias = "bullish"
+        bias_source = "oi"
         notes.append("Net put writing (support building)")
     elif call_writing > put_writing * 1.3 and call_writing > 0:
         bias = "bearish"
+        bias_source = "oi"
         notes.append("Net call writing (resistance building)")
     elif pcr is not None:
         if pcr >= 1.15:
             bias = "bullish"
+            bias_source = "pcr"
             notes.append(f"PCR {pcr} (put-heavy)")
         elif pcr <= 0.85:
             bias = "bearish"
+            bias_source = "pcr"
             notes.append(f"PCR {pcr} (call-heavy)")
 
     if max_pe:
@@ -135,4 +147,5 @@ def oi_analysis(chain: OptionChain | None, spot: float | None) -> OiAnalysis:
         call_writing=call_writing,
         bias=bias,
         notes=notes,
+        bias_source=bias_source,
     )

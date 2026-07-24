@@ -219,6 +219,8 @@ export interface SignalCard {
   fund_lots: number | null;
   fund_qty: number | null;
   fund_note: string | null;
+  /** Scheduled macro event nearby (from .events.json); sizing is halved while set. */
+  event_note: string | null;
   /** Contract multiplier — required to turn premium levels into rupees. */
   lot_size: number | null;
   trading_capital: number | null;

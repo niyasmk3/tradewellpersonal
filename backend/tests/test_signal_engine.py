@@ -27,7 +27,13 @@ STEP = 180
 # (bullish tape -> CE card), not the production threshold — which is deliberately
 # retuned over time (raised to 78/70 on 2026-07-20). Pin the gate here so
 # recalibrating the live engine never silently breaks these.
-_CFG = get_settings().model_copy(update={"score_valid": 70, "score_wait": 60})
+# Gates pinned OFF for the logic fixtures: the synthetic tapes are relentless
+# 80-bar trends that the exhaustion gates rightly refuse (they get their own
+# dedicated tests below); thresholds pinned so live retuning can't break these.
+_CFG = get_settings().model_copy(update={
+    "score_valid": 70, "score_wait": 60,
+    "signal_max_extension_atr": 0.0, "signal_min_invalidation_atr": 0.0,
+})
 PROFILES = build_profiles(_CFG)
 
 
@@ -229,6 +235,33 @@ def test_gate_disabled_accepts_ancient_ticks():
     print("  GATE -> disabled gate accepts a day-old tick (replay mode)")
 
 
+# --- exhaustion gates (24-Jul): a fresh quote on a spent move is a chase ----
+
+def test_extension_gate_refuses_a_stretched_tape():
+    """The relentless synthetic trend ends far beyond EMA20 in ATR terms —
+    with the gate armed it must WAIT with the distance in the reason."""
+    cfg = _CFG.model_copy(update={"signal_max_extension_atr": 3.5})
+    r = _evaluate("bull", "bull", cfg=cfg)
+    assert r.signal is None, r.signal
+    assert r.action is Action.WAIT
+    assert "ATR from EMA20" in (r.no_trade_reason or ""), r.no_trade_reason
+    print(f"  GATE -> extended tape refused: '{r.no_trade_reason}'")
+
+
+def test_invalidation_room_gate_refuses_a_hair_trigger():
+    """A huge min-room requirement forces the veto on any card — proving the
+    gate reads real ATR/level distances (23-Jul: 0.4 pts of room vs 19-pt ATR)."""
+    cfg = _CFG.model_copy(update={"signal_min_invalidation_atr": 50.0})
+    r = _evaluate("bear", "bear", cfg=cfg,
+                  ticks=_all_option_ticks(91.0, ts=NOW_EVAL - 5))
+    assert r.signal is None, r.signal
+    assert "Invalidation only" in (r.no_trade_reason or ""), r.no_trade_reason
+    r2 = _evaluate("bear", "bear", cfg=_CFG.model_copy(update={"signal_min_invalidation_atr": 0.001}),
+                   ticks=_all_option_ticks(91.0, ts=NOW_EVAL - 5))
+    assert r2.signal is not None, r2.no_trade_reason
+    print("  GATE -> hair-trigger invalidation refused; roomy one issues")
+
+
 def test_store_stabilises_and_cancels():
     store = SignalStore()
     bull = _evaluate("bull", "bull")
@@ -263,6 +296,8 @@ def _main():
         test_unverifiable_quote_blocks_issue,
         test_fresh_tick_reprices_the_whole_plan,
         test_gate_disabled_accepts_ancient_ticks,
+        test_extension_gate_refuses_a_stretched_tape,
+        test_invalidation_room_gate_refuses_a_hair_trigger,
         test_store_stabilises_and_cancels,
     ]
     failed = 0
