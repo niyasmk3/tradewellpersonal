@@ -381,18 +381,28 @@ def _seed(store, **over):
 
 
 def test_reconcile_confirms_then_closes_at_the_real_fill():
+    from app.trades.service import _FLAT_CONFIRMS
+
     s = _store()
     t = _seed(s)
     # 1. Broker shows the position -> confirmed, nothing closed.
-    _svc(s, _FakeKite(net=[_pos(qty=75)])).reconcile_once()
+    svc = _svc(s, _FakeKite(net=[_pos(qty=75)]))
+    svc.reconcile_once()
     assert s.get(t.id).broker_qty == 75 and s.get(t.id).status is TradeStatus.ENTERED
-    # 2. Broker now flat, reporting the actual sell price -> close at THAT price.
-    _svc(s, _FakeKite(net=[_pos(qty=0, sell_price=131.25, sell_qty=75)])).reconcile_once()
+    # 2. Broker now flat with the actual sell price. DEBOUNCED: the same
+    #    service must see it flat _FLAT_CONFIRMS times (one flap of the
+    #    positions API produced two false closes on 23-Jul).
+    import app.kite.client as kc
+    kc.kite_service.kite = _FakeKite(net=[_pos(qty=0, sell_price=131.25, sell_qty=75)])
+    for i in range(_FLAT_CONFIRMS):
+        assert s.get(t.id).status is TradeStatus.ENTERED, f"closed after only {i} sighting(s)"
+        svc.reconcile_once()
     after = s.get(t.id)
     assert after.status is TradeStatus.EXITED and after.auto_closed
     assert after.exit_premium == 131.25, after.exit_premium
     assert after.realized_pnl == round((131.25 - 120.0) * 75, 2), after.realized_pnl
-    print(f"  BROKER -> closed at Kite's own fill Rs131.25, P&L Rs{after.realized_pnl}")
+    assert "Kite day-average sell" in after.events[-1].note
+    print(f"  BROKER -> {_FLAT_CONFIRMS} confirms, then closed at Kite's fill Rs131.25")
 
 
 def test_unconfirmed_row_is_never_closed_by_absence():

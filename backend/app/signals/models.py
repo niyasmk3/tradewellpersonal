@@ -159,6 +159,14 @@ class SignalCard(BaseModel):
     # reference values captured at creation (used by Phase 3 monitoring)
     ref_spot: Optional[float] = None
     ref_entry_premium: Optional[float] = None
+    # TRUTHFUL PROVENANCE. created_at is the card's immutable birth time; a
+    # refresh stamps repriced_at instead. The old re-stamp produced trades
+    # timestamped before their own card and displayed scores under the wrong
+    # market state. Freshness guards read (repriced_at or created_at).
+    repriced_at: Optional[int] = None
+    # Pre-reprice ladder snapshots, oldest first — the audit trail of what the
+    # user was actually looking at before each refresh. Capped small.
+    reprice_history: list[dict] = []
     # Live LTP of THIS card's option, attached fresh at request time (not
     # persisted) so the UI can show what the contract is trading at right now
     # against the entry zone. None when there is no live tick for the token.

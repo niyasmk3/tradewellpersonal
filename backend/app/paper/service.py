@@ -269,7 +269,7 @@ class PaperTradingService:
                 continue
             # Slippage against us on the way out too.
             fill = round(max(0.05, px * (1 - self.cfg.paper_slippage_pct)), 2)
-            closed = self.store.auto_close(trade.id, fill, reason)
+            closed = self.store.auto_close(trade.id, fill, reason, price_source="simulated")
             if closed is not None:
                 net = chg.net_pnl(trade.entry_premium, fill, trade.quantity)
                 log.info("paper: exited %s on %s @ Rs%s — net Rs%s",

@@ -81,15 +81,24 @@ def test_reprice_restamps_freshness_but_keeps_identity():
     s = _store_with_active(old)
     now = BASE + 3 * 3600
     span = old.valid_until - old.created_at
+    # The store re-prices the SAME object `old` references — capture the
+    # pre-refresh levels now, or the assertions compare new against new.
+    orig_sl, orig_t1 = old.premium_sl, old.target1
     ladder = risk_mod.price_ladder(30.0, 0.18, 2.0, 3.5)
     out = s.reprice_active("NIFTY", TradingMode.POSITIONAL, 30.0, ladder, now)
 
     assert out.id == old.id                             # same trade
     assert out.strike == old.strike and out.direction == old.direction
     assert out.invalidation_level == old.invalidation_level  # index level untouched
-    assert out.created_at == now                        # re-stamped
+    # TRUTHFUL PROVENANCE (24-Jul): birth time never moves; freshness lives in
+    # repriced_at, and the pre-refresh ladder survives in the audit trail.
+    assert out.created_at == old.created_at             # immutable birth
+    assert out.repriced_at == now                       # freshness moved here
     assert out.valid_until == now + span                # window from now
-    print(f"  REPRICE-> same id/strike/invalidation; created_at re-stamped to now")
+    assert out.reprice_history, "pre-reprice ladder must be snapshotted"
+    snap = out.reprice_history[-1]
+    assert snap["premium_sl"] == orig_sl and snap["target1"] == orig_t1
+    print("  REPRICE-> identity & birth kept; repriced_at fresh; old ladder archived")
 
 
 def test_reprice_does_not_consume_the_daily_signal_budget():
@@ -183,7 +192,7 @@ def _install_endpoint(resp, ltp=30.0):
         def __init__(self): self.closed = None; self.repriced = None
         def latest(self, sym, mode): return resp
         def close_active(self, sym, mode, now, reason): self.closed = reason; return True
-        def reprice_active(self, sym, mode, ltp, ladder, now):
+        def reprice_active(self, sym, mode, ltp, ladder, now, spot=None):
             self.repriced = ltp; return resp.signal
     fake = _FakeStore()
     store_mod.signal_store = fake

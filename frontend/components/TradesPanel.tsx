@@ -155,6 +155,36 @@ function TradeCard({ t, onChange }: { t: Trade; onChange: () => void }) {
         {t.recommendation_note ? ` — ${t.recommendation_note}` : ""}
       </div>
 
+      {/* Sticky invalidation: the thesis broke and nobody has owned the
+          decision to keep holding. The banner (and the phone nag) persist
+          until an explicit acknowledgment — silence must not read as consent. */}
+      {t.invalidation_fired_at != null &&
+        (t.invalidation_ack_at == null || t.invalidation_ack_at <= t.invalidation_fired_at) && (
+          <div className="mt-1.5 flex items-center gap-2 rounded border border-bear/50 bg-bear/10 px-2 py-1.5 text-[11px] text-bear">
+            <span className="min-w-0 flex-1">
+              Thesis broke at {istTime(t.invalidation_fired_at)} — exit, or hold by explicit choice.
+            </span>
+            <button
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await api.ackInvalidation(t.id);
+                  onChange();
+                } catch (e) {
+                  alert(e instanceof Error ? e.message : "could not acknowledge");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              className="shrink-0 rounded border border-bear/60 bg-panel2 px-2 py-0.5 text-[10px] text-white hover:border-bear disabled:opacity-50"
+              title="Keep holding against the broken thesis — recorded in the journal, stops the re-alerts"
+            >
+              acknowledge &amp; hold
+            </button>
+          </div>
+        )}
+
       {/* The stop only caps a loss if it exists as a real order in the market.
           Tradewell places none, so this hands the SL to Kite pre-filled — one
           click, at the moment the position is actually held. */}
@@ -338,11 +368,19 @@ function JournalRow({ t, dayKey, onChange }: { t: Trade; dayKey: number; onChang
         )}
       </div>
 
-      {/* An auto-close is Tradewell's inference, not a fill you reported: no
-          order was placed, so the price is the live premium at detection. */}
+      {/* An auto-close is Tradewell's bookkeeping, not a fill you reported —
+          but WHERE the price came from matters: a broker-book close is your
+          real fill, and calling it "estimated" taught distrust of true P&L. */}
       {t.auto_closed && (
         <div className="mt-1 flex items-center gap-1.5 rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-400">
-          <span>auto-closed on {t.auto_close_reason} · price estimated, no order was placed</span>
+          <span>
+            auto-closed on {t.auto_close_reason} ·{" "}
+            {t.exit_price_source === "broker"
+              ? "priced from Kite's day-average sell — your real fill"
+              : t.exit_price_source === "simulated"
+                ? "simulated fill"
+                : "price estimated, no order was placed"}
+          </span>
           <button
             onClick={async () => {
               if (!window.confirm("Reopen this position? Use it if you are still holding in Kite.")) return;

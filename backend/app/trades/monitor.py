@@ -69,6 +69,64 @@ def _set_reco(trade: Trade, rec: TradeAction, note: str) -> None:
     trade.recommendation_note = note
 
 
+def invalidation_unacked(trade: Trade) -> bool:
+    """A break was latched and no acknowledgment is STRICTLY newer than it.
+
+    A tie (re-break in the same second as an ack) counts as unacknowledged —
+    when in doubt, nag.
+    """
+    return (
+        trade.invalidation_fired_at is not None
+        and (trade.invalidation_ack_at is None
+             or trade.invalidation_ack_at <= trade.invalidation_fired_at)
+    )
+
+
+def track_reversible(trade: Trade, current_premium: float | None) -> None:
+    """Observation-only tracking for an auto-closed (reversible) row.
+
+    Deliberately writes post_close_* fields, NOT mfe/mae: the excursion
+    evidence base assumes trade-life bounds, and contaminating it with
+    post-exit extremes corrupts the target curve. If the close turns out to be
+    FALSE, `reopen` folds these back into the real excursions — the trade was
+    open the whole time; if it was real, the observation stays clearly
+    separated from the trade's own record.
+    """
+    if current_premium is None or current_premium <= 0:
+        return
+    now_ts = int(time.time())
+    trade.current_premium = current_premium
+    if trade.post_close_mfe is None or current_premium > trade.post_close_mfe:
+        trade.post_close_mfe, trade.post_close_mfe_at = current_premium, now_ts
+    if trade.post_close_mae is None or current_premium < trade.post_close_mae:
+        trade.post_close_mae, trade.post_close_mae_at = current_premium, now_ts
+
+
+def latch_invalidation(trade: Trade, invalidated: bool, now_ts: int) -> None:
+    """Edge-triggered break latch — the fix for the ack-nullifying loop.
+
+    A latch fires only for a NEW episode: the first break ever, or a break
+    after spot was OBSERVED back inside since the acknowledgment. While a
+    breach persists, an ack covers all of it — level-triggered re-stamping
+    made each ack worth one monitor cycle.
+    """
+    if not invalidated:
+        trade.invalidation_clear_at = now_ts
+        return
+    if invalidation_unacked(trade):
+        return                                   # episode already latched
+    first_break = trade.invalidation_fired_at is None
+    # `>=`: at 1-second stamps, a recovery observed in the ack's own second
+    # counts as after it — a tie re-arms the latch (when in doubt, nag).
+    new_episode = (
+        trade.invalidation_ack_at is not None
+        and trade.invalidation_clear_at is not None
+        and trade.invalidation_clear_at >= trade.invalidation_ack_at
+    )
+    if first_break or new_episode:
+        trade.invalidation_fired_at = now_ts
+
+
 def _invalidated(trade: Trade, spot: float | None) -> bool:
     if trade.invalidation_level is None or spot is None:
         return False
@@ -100,6 +158,10 @@ def evaluate(
         # No live premium (unsubscribed strike after a gap, restart, off-window).
         # Spot-based checks still work — a blind monitor must not miss an
         # invalidation, and must not clobber a persisted advisory with HOLD.
+        # The latch also needs the CLEAR observation (spot back inside) here,
+        # or a blind stretch could hide the recovery that arms the next episode.
+        if spot is not None:
+            latch_invalidation(trade, _invalidated(trade, spot), int(time.time()))
         if _invalidated(trade, spot):
             _set_reco(trade, TradeAction.INVALIDATED,
                       f"{trade.symbol} broke invalidation {trade.invalidation_level:.0f} — exit (premium stale)")
@@ -183,6 +245,10 @@ def evaluate(
         exit_level, exit_label = trade.trailing_sl, "Stop-loss"
     effective_sl = trade.trailing_sl        # what the UI and Kite hand-off show
 
+    # Edge-triggered break latch: a new episode fires only after spot was seen
+    # back inside; an ack silences the whole continuous breach it covers.
+    latch_invalidation(trade, invalidated, now_ts)
+
     # --- recommendation (priority order) ---
     # Invalidation is tested FIRST: it is the structural thesis, and letting a
     # noisy premium level pre-empt it is what this whole change exists to stop.
@@ -235,6 +301,20 @@ def evaluate(
                      f"No follow-through in {mins}m ({why}) — theta is winning, consider exiting")
     else:
         rec, note = TradeAction.HOLD, f"Hold — SL ₹{effective_sl}, T1 ₹{trade.target1}"
+
+    # STICKY INVALIDATION. A break that fired stays the recommendation until
+    # explicitly acknowledged — spot wandering back inside must not quietly
+    # restore "Hold" (23-Jul: two ignored alerts, advice self-reverted, the
+    # hold survived on luck). Real exits (stop/T2/close/stall) still outrank.
+    if (
+        invalidation_unacked(trade)
+        and rec in (TradeAction.HOLD, TradeAction.TRAIL_SL, TradeAction.BOOK_PARTIAL)
+    ):
+        mins_ago = max(0, (now_ts - (trade.invalidation_fired_at or now_ts)) // 60)
+        inside = "" if invalidated else " (spot back inside, but the thesis DID break)"
+        rec = TradeAction.INVALIDATED
+        note = (f"Invalidation fired {mins_ago}m ago and is UNACKNOWLEDGED{inside} — "
+                "exit, or acknowledge to keep holding by choice")
 
     # Expiry-day theta warning for passive advice — on the contract's last day
     # time decay accelerates sharply; don't let "Hold" read as safe.

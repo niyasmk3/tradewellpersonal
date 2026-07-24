@@ -261,7 +261,16 @@ def reprice_signal(symbol: str, mode: str = Query("intraday")) -> RepriceResult:
         float(ltp), profile.premium_sl_pct, profile.rr_target1, profile.rr_target2,
         disaster_pct=disaster_pct, quick_pct=cfg.quick_target_pct or None,
     )
-    refreshed = signal_store.reprice_active(symbol, tmode, float(ltp), ladder, now)
+    # Best-effort: refreshing ref_spot fixes the stale-spot mismatch that
+    # caused a hair-trigger invalidation, but its absence must never fail the
+    # premium re-price itself.
+    try:
+        snap = market_state.underlying_snapshot(symbol)
+        spot = snap.ltp if snap else None
+    except Exception:
+        spot = None
+    refreshed = signal_store.reprice_active(
+        symbol, tmode, float(ltp), ladder, now, spot=spot)
     if refreshed is None:
         raise HTTPException(status_code=409, detail="No active signal to refresh")
     return RepriceResult(status="repriced", signal=refreshed,

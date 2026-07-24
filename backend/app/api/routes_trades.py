@@ -208,6 +208,20 @@ def reopen(tid: str) -> Trade:
     return t
 
 
+@router.post("/{tid}/ack-invalidation", response_model=Trade)
+def ack_invalidation(tid: str) -> Trade:
+    """Acknowledge a broken thesis and keep holding by explicit choice.
+
+    Until this is called, an invalidated open row's recommendation stays
+    INVALIDATED (even if spot recovers) and the phone re-alerts every 10
+    minutes. The ack covers THIS break; a later re-break re-latches.
+    """
+    updated = trade_store.ack_invalidation(tid)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Trade not found or no invalidation to acknowledge")
+    return updated
+
+
 @router.post("/{tid}/ignore", response_model=Trade)
 def ignore_trade(tid: str) -> Trade:
     updated = trade_store.ignore(tid)

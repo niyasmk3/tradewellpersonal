@@ -142,7 +142,9 @@ def basket(
     now = int(time.time())
     if now >= card.valid_until:
         raise HTTPException(status_code=409, detail="Signal expired — entry window closed")
-    if now - card.created_at > _MAX_CARD_AGE_S:
+    # Freshness = when the card was last PRICED (a refresh counts); created_at
+    # is the immutable birth time and deliberately never moves.
+    if now - (card.repriced_at or card.created_at) > _MAX_CARD_AGE_S:
         raise HTTPException(status_code=409, detail="Signal too old to one-click — re-check the premium first")
 
     profile = build_profiles(cfg).get(mode.value)

@@ -86,6 +86,31 @@ class Trade(BaseModel):
     t0_hit: bool = False
     invalidation_level: Optional[float] = None
     invalidation_dir: Optional[str] = None
+    # STICKY INVALIDATION. When the underlying first breaks the level, the
+    # moment is latched here and the recommendation stays INVALIDATED — even if
+    # spot pops back inside — until the user explicitly acknowledges. On 23-Jul
+    # a live row's advice silently reverted to "hold" after two invalidation
+    # alerts, which legitimized ignoring them; the hold survived on luck.
+    # `ack` newer than `fired` = acknowledged; a later re-break re-latches.
+    invalidation_fired_at: Optional[int] = None
+    invalidation_ack_at: Optional[int] = None
+    # When spot was last OBSERVED back inside the level. The latch is
+    # edge-triggered on this: an acknowledgment covers the whole continuous
+    # breach (level-triggered re-latching nullified the ack within one monitor
+    # cycle — each click bought ~5 seconds of silence); only a recovery
+    # followed by a NEW break re-fires.
+    invalidation_clear_at: Optional[int] = None
+    # Post-close observation window (reversible auto-closes only). Kept OUT of
+    # mfe/mae so the excursion evidence stays bounded by the trade's life; a
+    # reopen folds these back in, because the trade turned out to be open the
+    # whole time.
+    post_close_mfe: Optional[float] = None
+    post_close_mfe_at: Optional[int] = None
+    post_close_mae: Optional[float] = None
+    post_close_mae_at: Optional[int] = None
+    # Where the exit price came from: "estimated" | "broker" | "simulated".
+    # The UI banner must not claim "no order was placed" about a real fill.
+    exit_price_source: Optional[str] = None
 
     # --- excursion, recorded by the monitor while the position is OPEN ---
     # MFE = best premium seen, MAE = worst. Because they stop updating when the

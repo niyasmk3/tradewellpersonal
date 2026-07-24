@@ -191,7 +191,11 @@ export function SignalPanel({
     return () => clearInterval(id);
   }, []);
   const [repricing, setRepricing] = useState(false);
-  const pricedAgoMin = signal ? Math.max(0, Math.floor((nowSec - signal.created_at) / 60)) : 0;
+  // Age since last PRICED, not since birth: created_at is immutable now, and a
+  // freshly refreshed card must not wear a stale warning (nor the reverse).
+  const pricedAgoMin = signal
+    ? Math.max(0, Math.floor((nowSec - (signal.repriced_at ?? signal.created_at)) / 60))
+    : 0;
   const STALE_MIN = 15; // must match _MAX_CARD_AGE_S on the backend
 
   const reprice = async () => {

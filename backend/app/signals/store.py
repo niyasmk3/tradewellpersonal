@@ -319,6 +319,7 @@ class SignalStore:
 
     def reprice_active(
         self, symbol: str, mode: TradingMode, new_entry: float, ladder: dict, now: int,
+        spot: float | None = None,
     ) -> SignalCard | None:
         """Re-price the ACTIVE card's premium levels against `new_entry`.
 
@@ -337,6 +338,14 @@ class SignalStore:
             card = self._active.get(key)
             if card is None:
                 return None
+            # Audit trail BEFORE overwriting: the ladder the user was looking
+            # at (and may have executed against) must survive the refresh.
+            card.reprice_history = (card.reprice_history or [])[-9:] + [{
+                "at": now, "ref": card.ref_entry_premium, "ref_spot": card.ref_spot,
+                "premium_sl": card.premium_sl, "target1": card.target1,
+                "target2": card.target2, "entry_low": card.entry_low,
+                "entry_high": card.entry_high,
+            }]
             card.entry_low = ladder["entry_low"]
             card.entry_high = ladder["entry_high"]
             card.premium_sl = ladder["premium_sl"]
@@ -347,10 +356,16 @@ class SignalStore:
             card.trailing_sl_rule = ladder["trailing_sl_rule"]
             card.risk_reward = ladder["risk_reward"]
             card.ref_entry_premium = new_entry
-            # Re-stamp so the Kite hand-off's freshness guard passes, and extend
-            # the entry window from now rather than the original issue time.
-            span = card.valid_until - card.created_at
-            card.created_at = now
+            if spot is not None and spot > 0:
+                # A refresh that keeps a stale ref_spot re-prices the premium
+                # against one market and the invalidation against another —
+                # that mismatch produced a 3-minute hair-trigger exit on 23-Jul.
+                card.ref_spot = spot
+            # created_at is the card's BIRTH and never moves; freshness guards
+            # (Kite hand-off, UI age) read repriced_at instead. The entry
+            # window still extends from now — the re-priced zone is fresh.
+            span = card.valid_until - max(card.repriced_at or card.created_at, card.created_at)
+            card.repriced_at = now
             card.valid_until = now + max(span, 0)
             # The _latest response references this same object, but refresh its
             # evaluated_at so the UI shows the card as just-updated.

@@ -204,6 +204,8 @@ export interface SignalCard {
   score: ScoreBreakdown;
   ref_spot: number | null;
   ref_entry_premium: number | null;
+  /** When the ladder was last re-priced; null = never. Freshness reads this over created_at. */
+  repriced_at: number | null;
   /** Live LTP of this card's option, fresh at request time; null if no tick. */
   live_premium: number | null;
   /** Lots implied by TRADING_CAPITAL × RISK_PER_TRADE_PCT; null when unconfigured. */
@@ -320,6 +322,9 @@ export interface Trade {
   t0_hit: boolean;
   invalidation_level: number | null;
   invalidation_dir: string | null;
+  /** Sticky invalidation: fired latches the break; ack newer than fired = acknowledged. */
+  invalidation_fired_at: number | null;
+  invalidation_ack_at: number | null;
   current_premium: number | null;
   pnl: number | null;
   pnl_pct: number | null;
@@ -334,6 +339,8 @@ export interface Trade {
   /** Tradewell closed this row on a plan trigger — not a fill you reported. */
   auto_closed: boolean;
   auto_close_reason: string | null;
+  /** "estimated" | "broker" | "simulated" — what the exit price actually is. */
+  exit_price_source: string | null;
   /** Quantity Zerodha's position book last reported; null = never confirmed. */
   broker_qty: number | null;
   broker_checked_at: number | null;
@@ -498,6 +505,7 @@ export const api = {
   restartFeed: () => postJSON<AuthStatus>("/auth/feed/restart", {}),
   paperSummary: () => getJSON<PaperSummary>("/paper/summary"),
   reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),
+  ackInvalidation: (tid: string) => postJSON<Trade>(`/trades/${tid}/ack-invalidation`, {}),
   repriceSignal: (symbol: string, mode: TradingMode) =>
     postJSON<RepriceResult>(`/signals/${symbol}/reprice?mode=${mode}`, {}),
   scoreHistory: (symbol: string, mode: TradingMode, minutes = 120) =>

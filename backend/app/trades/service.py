@@ -21,10 +21,30 @@ def _ist_date() -> str:
     return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}"
 
 
+# Consecutive flat observations of the position book required before a
+# broker-flat close. One flap of Kite's positions API produced two false
+# closes and a lying P&L header on 23-Jul; at the ~15s reconcile cadence,
+# three observations ≈ 30-45s of confirmed flatness.
+_FLAT_CONFIRMS = 3
+
+
 class TradeMonitorService:
     def __init__(self, state: MarketState, store: TradeStore) -> None:
         self.state = state
         self.store = store
+        # Wired by the live feed only (same pattern as signal_store.notify):
+        # tests constructing this service must never send phone pushes.
+        self.notify = None
+        self._flat_streak: dict[str, int] = {}
+        self._qty_flagged: dict[str, int] = {}      # trade id -> last flagged broker qty
+        self._inval_pushed: dict[str, tuple[int, float]] = {}  # id -> (fired_at, last push)
+
+    def _push(self, title: str, body: str) -> None:
+        if self.notify is not None:
+            try:
+                self.notify(title, body)
+            except Exception:  # pragma: no cover - alerting must not break monitoring
+                log.debug("trade notify failed", exc_info=True)
 
     def _auto_close_set(self) -> set[str]:
         cfg = get_settings()
@@ -50,15 +70,22 @@ class TradeMonitorService:
 
         # Mutate live trades in place under the store lock so a concurrent
         # exit/partial (which runs on FastAPI's threadpool) can't be clobbered.
+        # Same-day auto-closed rows keep excursion-only tracking: a reversible
+        # close must not blind the record (23-Jul: an unobserved stop breach
+        # during a false-close window).
         def updater(trade) -> None:
             current = None
             if trade.token is not None:
                 current = self.state.ticks.get(trade.token, {}).get("last_price")
+            if trade.status.value not in ("entered", "partial"):
+                monitor.track_reversible(trade, current)
+                return
             snap = self.state.underlying_snapshot(trade.symbol)
             spot = snap.ltp if snap else None
             monitor.evaluate(trade, current, spot, ist_min, ist_day, stall_minutes=stall)
 
-        self.store.apply_monitor(updater)
+        self.store.apply_monitor(updater, include_reversible=True)
+        self._push_unacked_invalidations()
 
         # Auto-close runs AFTER the monitor pass and outside the updater, not
         # inside it: apply_monitor holds the store lock while iterating the live
@@ -83,6 +110,37 @@ class TradeMonitorService:
                 log.info("auto-closed %s (%s) @ ₹%s — advisory only, no order placed",
                          trade.contract, reason, px)
 
+    def _push_unacked_invalidations(self) -> None:
+        """Phone the broken thesis, and keep phoning every 10 minutes until the
+        user exits or acknowledges. One silent banner was ignorable; the 23-Jul
+        hold went 93 minutes through two alerts nobody had to look at."""
+        import time as _t
+
+        now = _t.time()
+        for t in self.store.all():
+            if t.status.value not in ("entered", "partial"):
+                self._inval_pushed.pop(t.id, None)
+                continue
+            if not monitor.invalidation_unacked(t):
+                self._inval_pushed.pop(t.id, None)
+                continue
+            fired = t.invalidation_fired_at or 0
+            prev = self._inval_pushed.get(t.id)
+            if prev is None and now - fired > 60:
+                # Fresh service instance (feed restarts rebuild it daily) seeing
+                # an OLD unacked break: the pre-restart instance already paged
+                # it. Seed the map silently so the restart itself doesn't
+                # duplicate the nag; the 10-minute cadence resumes from here.
+                self._inval_pushed[t.id] = (fired, now)
+                continue
+            if prev is None or prev[0] != fired or now - prev[1] >= 600:
+                self._push(
+                    "TRADEWELL INVALIDATION",
+                    f"{t.contract}: thesis broke ({t.symbol} vs {t.invalidation_level:.0f}) "
+                    "and is unacknowledged — exit, or acknowledge in the journal to hold.",
+                )
+                self._inval_pushed[t.id] = (fired, now)
+
     def reconcile_once(self) -> bool:
         """Mirror Zerodha's position book into the journal. READ-ONLY.
 
@@ -99,26 +157,85 @@ class TradeMonitorService:
         if positions is None:
             return False
 
-        for trade in self.store.all():
+        all_rows = self.store.all()
+        open_rows = [t for t in all_rows if t.status.value in ("entered", "partial")]
+        # Which open rows share one broker instrument: needed both for the
+        # quantity cross-check and for closing OLDEST-FIRST — the Jul-21 bug
+        # closed two rows against one position in the same second, inventing
+        # one of the P&Ls. Token-only on purpose: reconcile.match treats a
+        # missing product as a wildcard, so a legacy product-None row and an
+        # MIS row on the same token CAN both match one broker position — they
+        # must be siblings here too, or they double-close in one pass.
+        def _sibling_key(t):
+            return t.token or t.contract
+
+        def _older_sibling_exists(trade, siblings):
+            # Total order: entered_at ties (1s resolution, double-click
+            # entries) broken by id — strict '<' alone let both rows close in
+            # the same pass at the same price, rebuilding the Jul-21 incident.
+            me = (trade.entered_at, trade.id)
+            return any((x.entered_at, x.id) < me for x in siblings if x.id != trade.id)
+
+        for trade in all_rows:
             pos = reconcile.match(trade, positions)
             held = pos.quantity if pos is not None else 0
             open_row = trade.status.value in ("entered", "partial")
 
             if open_row:
                 if held:
+                    self._flat_streak.pop(trade.id, None)
                     self.store.note_broker_qty(trade.id, held)
+                    # Quantity truth: the broker's number disagreeing with the
+                    # journal is not an error, but it must never be silent.
+                    # Siblings legitimately split one position, so the check
+                    # compares the broker against their SUM — the Jul-21
+                    # incident (two rows, one position) is by definition the
+                    # multi-row case, and a sole-row-only check was blind
+                    # exactly there. Flagged on the oldest sibling, deduped
+                    # against the persisted journal so feed restarts (which
+                    # rebuild this service daily) don't re-append the event.
+                    siblings = [x for x in open_rows if _sibling_key(x) == _sibling_key(trade)]
+                    total = sum(x.quantity for x in siblings)
+                    if held != total and not _older_sibling_exists(trade, siblings):
+                        already = any(
+                            e.kind == "qty_mismatch" and f"Broker shows {held} qty" in e.note
+                            for e in trade.events
+                        )
+                        if not already and self._qty_flagged.get(trade.id) != held:
+                            self.store.note_qty_mismatch(trade.id, held, total)
+                            self._qty_flagged[trade.id] = held
                     continue
                 # Absent or flat. Only meaningful once we have SEEN it there:
                 # otherwise a trade marked entered before the buy actually fills
                 # would be closed instantly.
                 if trade.broker_qty:
+                    # DEBOUNCED: one flap of the positions API must not close a
+                    # row. Require _FLAT_CONFIRMS consecutive flat sightings.
+                    streak = self._flat_streak.get(trade.id, 0) + 1
+                    self._flat_streak[trade.id] = streak
+                    if streak < _FLAT_CONFIRMS:
+                        log.info("broker flat for %s (%d/%d) — awaiting confirmation",
+                                 trade.contract, streak, _FLAT_CONFIRMS)
+                        continue
+
+
+                    # Oldest first, one per pass: sibling rows on the same
+                    # instrument must not all book the same exit in one second.
+                    siblings = [x for x in open_rows if _sibling_key(x) == _sibling_key(trade)]
+                    if _older_sibling_exists(trade, siblings):
+                        continue
                     # Kite's own average sell price is the real fill — far
                     # better than the live premium we would otherwise guess.
-                    px = (pos.sell_price if pos and pos.sell_price else None) or trade.current_premium
+                    sell_px = pos.sell_price if pos and pos.sell_price else None
+                    px = sell_px or trade.current_premium
                     if px:
-                        self.store.auto_close(trade.id, float(px), "broker flat")
+                        self.store.auto_close(
+                            trade.id, float(px), "broker flat",
+                            price_source="broker" if sell_px else "estimated")
                         self.store.note_broker_qty(trade.id, 0)
+                        self._flat_streak.pop(trade.id, None)
                         log.info("journal closed from broker book: %s @ ₹%s", trade.contract, px)
+                        self._warn_resting_stop(trade)
             elif trade.auto_closed and held:
                 # We closed this on price, but Kite says you are still in it.
                 # The broker wins.
@@ -126,3 +243,21 @@ class TradeMonitorService:
                     self.store.note_broker_qty(trade.id, held)
                     log.warning("reopened %s — broker still shows %s qty", trade.contract, held)
         return True
+
+    def _warn_resting_stop(self, trade) -> None:
+        """A broker-flat close after a Kite stop hand-off leaves a live SELL
+        order Tradewell cannot see or cancel. If it triggers with no long
+        behind it, it opens a naked SHORT — the one accidental-short path
+        still open. Journal it and phone it."""
+        handoffs = [e for e in trade.events if e.kind == "stop_handoff"]
+        if not handoffs:
+            return
+        note = (f"Position closed at the broker, but a Kite SL SELL was handed off earlier "
+                f"({handoffs[-1].note}). If that order is still resting, CANCEL IT in Kite — "
+                "triggering with no long behind it opens a short.")
+        def fn(t) -> None:
+            from app.trades.models import TradeEvent
+            import time as _t
+            t.events.append(TradeEvent(ts=int(_t.time()), kind="resting_stop_warning", note=note))
+        self.store._apply(trade.id, fn)
+        self._push("TRADEWELL: CANCEL RESTING STOP", f"{trade.contract} — {note}")

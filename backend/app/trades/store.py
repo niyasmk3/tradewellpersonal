@@ -227,11 +227,28 @@ class TradeStore:
             return [t.model_copy(deep=True) for t in active_first]
 
     # ---- monitoring (mutates live trades under the lock) ----
-    def apply_monitor(self, updater: Callable[[Trade], None]) -> None:
+    def apply_monitor(
+        self, updater: Callable[[Trade], None], include_reversible: bool = False
+    ) -> None:
+        """Run `updater` over live rows; optionally also over same-day
+        auto-closed rows. The reversible window exists because an auto-close is
+        an INFERENCE that reopen can reverse — on 23-Jul a falsely-closed row
+        went blind for 82 minutes and missed its own stop being breached at
+        the tape low. Tracking through that window keeps the excursion record
+        honest whichever way the close resolves.
+        """
+        def _reversible_today(t: Trade) -> bool:
+            return (
+                t.status is TradeStatus.EXITED
+                and t.auto_closed
+                and t.exited_at is not None
+                and (t.exited_at + 19800) // 86400 == (_now() + 19800) // 86400
+            )
+
         with self._lock:
             changed = False
             for t in self._trades.values():
-                if t.status in _OPEN:
+                if t.status in _OPEN or (include_reversible and _reversible_today(t)):
                     # Persist only on actual change — off-hours the monitor is a
                     # no-op and rewriting the journal every cycle (~4,600 disk
                     # writes/day) buys nothing.
@@ -313,14 +330,25 @@ class TradeStore:
 
         return self._apply(tid, fn)
 
-    def auto_close(self, tid: str, exit_premium: float, reason: str) -> Trade | None:
+    def auto_close(
+        self, tid: str, exit_premium: float, reason: str,
+        price_source: str = "estimated",
+    ) -> Trade | None:
         """Close a row on a plan trigger, flagged as Tradewell's own doing.
 
         Distinct from `exit_trade` on purpose. That records a fill YOU report;
-        this records what the plan says should have happened, at the live
-        premium seen at detection. No order was placed, so the price is an
-        estimate of your exit and the row stays reversible via `reopen`.
+        this records what the plan (or the broker's book) says happened. The
+        note states WHERE the price came from — the old template stamped
+        "(estimated) · no order was placed" on every close, including
+        broker-flat closes priced from Kite's own average sell fill, which
+        taught the user to distrust numbers that were in fact real.
+        `price_source`: "estimated" | "broker" | "simulated".
         """
+        source_note = {
+            "broker": "Kite day-average sell — your real fill",
+            "simulated": "simulated fill, slippage applied",
+        }.get(price_source, "estimated from the live premium — no order was placed by Tradewell")
+
         def fn(t: Trade) -> None:
             if t.status not in _OPEN:
                 return
@@ -332,13 +360,52 @@ class TradeStore:
             t.exited_at = _now()
             t.auto_closed = True
             t.auto_close_reason = reason
+            t.exit_price_source = price_source
             t.events.append(TradeEvent(
                 ts=_now(), kind="auto_closed",
-                note=(f"Auto-closed on {reason} @ ₹{exit_premium} (estimated) · "
-                      f"P&L ₹{t.realized_pnl} — no order was placed"),
+                note=(f"Auto-closed on {reason} @ ₹{exit_premium} ({source_note}) · "
+                      f"P&L ₹{t.realized_pnl}"),
             ))
 
         return self._apply(tid, fn)
+
+    def ack_invalidation(self, tid: str) -> Trade | None:
+        """The user has seen the broken thesis and is holding by choice.
+
+        Clears the sticky INVALIDATED recommendation (monitor treats ack newer
+        than fired as acknowledged). A later re-break re-latches — the ack
+        covers THIS break, not the concept of invalidation.
+        """
+        def fn(t: Trade) -> None:
+            if t.invalidation_fired_at is None:
+                return
+            t.invalidation_ack_at = _now()
+            t.events.append(TradeEvent(
+                ts=_now(), kind="invalidation_ack",
+                note="Invalidation acknowledged — holding against the thesis by explicit choice",
+            ))
+
+        return self._apply(tid, fn)
+
+    def note_qty_mismatch(self, tid: str, held: int, journal_total: int | None = None) -> None:
+        """Journal that the broker's quantity disagrees with the journal.
+
+        The Jul-21 incident: two rows closed against one broker position with
+        an invented P&L, unflagged, feeding the risk breakers. A mismatch is
+        not automatically an error (partial manual exit, a second tranche
+        outside Tradewell) — but it must be VISIBLE, not silent.
+        `journal_total` is the summed quantity across sibling rows on the same
+        instrument; the broker is compared against that, not one row.
+        """
+        def fn(t: Trade) -> None:
+            total = journal_total if journal_total is not None else t.quantity
+            t.events.append(TradeEvent(
+                ts=_now(), kind="qty_mismatch",
+                note=(f"Broker shows {held} qty against the journal's {total} for this "
+                      "instrument — verify which position(s) the journal is describing"),
+            ))
+
+        self._apply(tid, fn)
 
     def reopen(self, tid: str, exit_premium: float | None = None) -> Trade | None:
         """Undo an auto-close: you are still holding, or filled elsewhere.
@@ -360,7 +427,21 @@ class TradeStore:
             t.exit_premium = None
             t.auto_closed = False
             t.auto_close_reason = None
+            t.exit_price_source = None
             t.pnl = None
+            # The close was FALSE, so the position was open the whole time —
+            # the extremes observed during the reversible window belong to the
+            # trade's real excursion record. Fold and clear.
+            if t.post_close_mfe is not None and (
+                t.mfe_premium is None or t.post_close_mfe > t.mfe_premium
+            ):
+                t.mfe_premium, t.mfe_at = t.post_close_mfe, t.post_close_mfe_at
+            if t.post_close_mae is not None and (
+                t.mae_premium is None or t.post_close_mae < t.mae_premium
+            ):
+                t.mae_premium, t.mae_at = t.post_close_mae, t.post_close_mae_at
+            t.post_close_mfe = t.post_close_mfe_at = None
+            t.post_close_mae = t.post_close_mae_at = None
             t.events.append(TradeEvent(ts=_now(), kind="reopened",
                                        note="Auto-close reversed — position still held"))
 

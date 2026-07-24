@@ -237,6 +237,9 @@ class FeedController:
         if not dispatched:
             log.warning("Alert channel NOT armed — no ALERT_WEBHOOK_URL in .env")
         self.trade_monitor = TradeMonitorService(market_state, trade_store)
+        # Same live-only wiring as signal pushes: invalidation nags and
+        # resting-stop warnings reach the phone only from the real feed.
+        self.trade_monitor.notify = lambda title, body: push_text(title, body, get_settings())
         if settings.paper_trading:
             # Its OWN store file. A paper position must never appear in the
             # real journal, the realised P&L, or the circuit breakers — and
