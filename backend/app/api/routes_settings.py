@@ -1,9 +1,10 @@
-"""Runtime risk-limit settings — read and edit the loss guards from the UI.
+"""Runtime trading settings — read and edit the fund and paper cap from the UI.
 
-Only the SPECS fields (risk_limits.py) are exposed: the loss/breaker limits and
-the day's trading fund. Everything else in config stays .env-only on purpose:
-pausing the engine after a set loss is a safety valve; changing a score
-threshold or stop percentage mid-session is a footgun.
+Only the SPECS fields (risk_limits.py) are exposed: the day's trading fund and
+the paper simulator's position cap. The live loss/streak circuit breakers that
+used to live here were removed 25-Jul at the user's request. Everything else in
+config stays .env-only on purpose: changing a score threshold or stop
+percentage mid-session is a footgun.
 
 RiskLimitUpdate must mirror SPECS key-for-key. Pydantic silently DROPS unknown
 fields, so a SPECS entry missing here renders as an editable field in the UI
@@ -30,9 +31,8 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 class RiskLimitUpdate(BaseModel):
     # Every field optional: the UI PUTs only what changed. A model keeps the
     # keys constrained so an arbitrary config field can't be written here.
-    daily_loss_limit: Optional[float] = Field(default=None, ge=0)
-    max_open_drawdown: Optional[float] = Field(default=None, ge=0)
-    max_consecutive_losses: Optional[int] = Field(default=None, ge=1, le=20)
+    # Mirrors SPECS: the loss/streak breakers were removed 25-Jul, so only the
+    # trading fund and the paper-simulator cap remain editable.
     max_open_positions: Optional[int] = Field(default=None, ge=0, le=20)
     trading_fund: Optional[float] = Field(default=None, ge=0, le=100_000_000)
 

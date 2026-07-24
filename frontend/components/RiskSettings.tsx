@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { API_BASE } from "@/lib/api";
 
 /**
- * The loss guards, editable live. These HALT SIGNALS — they place, modify or
- * close no order. That line is repeated on the panel itself, not just here,
- * because "I set a loss limit" must never be misread as "I set a stop-loss".
+ * Trading settings, editable live: the day's fund and the paper simulator's
+ * position cap. The live loss/streak circuit breakers that used to live here
+ * were removed 25-Jul at the user's request — neither remaining field halts a
+ * signal or places an order.
  */
 interface Field {
   key: string;
@@ -93,17 +94,18 @@ export function RiskSettings({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-edge px-4 py-2.5">
-          <h2 className="text-sm font-semibold">Risk limits</h2>
+          <h2 className="text-sm font-semibold">Trading settings</h2>
           <button onClick={onClose} className="text-muted hover:text-white" aria-label="close">
             ✕
           </button>
         </div>
 
-        {/* The load-bearing caveat, first thing on the panel. */}
-        <div className="border-b border-bear/30 bg-bear/10 px-4 py-2 text-[11px] text-bear/90">
-          These <b>halt new signals</b> — Tradewell places, moves or closes no order. They
-          stop the engine offering more trades once the day turns against you; your actual
-          loss is still capped only by the stop you act on yourself.
+        {/* Neutral note: neither remaining setting is a breaker or an order. */}
+        <div className="border-b border-edge bg-panel2 px-4 py-2 text-[11px] text-muted">
+          These are <b>trading settings</b>, not order controls — Tradewell places, moves or
+          closes nothing. The fund only prefills lot quantities on signal cards; the paper cap
+          only bounds the background simulator. The old loss/streak circuit breakers were removed,
+          so the engine keeps issuing signals through a bad run.
         </div>
 
         {err && <div className="bg-bear/15 px-4 py-1.5 text-[11px] text-bear">{err}</div>}

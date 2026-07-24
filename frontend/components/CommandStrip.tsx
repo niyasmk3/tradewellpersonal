@@ -162,10 +162,10 @@ export function CommandStrip({
         {onRiskSettings && (
           <button
             onClick={onRiskSettings}
-            title="Risk limits — daily loss, open drawdown, streak and position caps"
+            title="Trading settings — today's fund and the paper-simulator position cap"
             className="rounded-md border border-edge bg-panel px-2 py-0.5 text-xs text-muted transition hover:text-white"
           >
-            🛡
+            ⚙
           </button>
         )}
       </span>

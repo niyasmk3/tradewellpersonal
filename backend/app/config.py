@@ -96,17 +96,18 @@ class Settings(BaseSettings):
     # six PE cards followed by five CE cards is the engine whipsawing, not an edge.
     signal_flip_guard_s: int = Field(default=1800, ge=0, alias="SIGNAL_FLIP_GUARD_S")
 
-    # --- Circuit breakers (stop issuing entirely) ---
-    signal_max_consecutive_losses: int = Field(default=2, ge=1, alias="SIGNAL_MAX_CONSECUTIVE_LOSSES")
-    # Rupee loss (positive number) that halts signals for the day. 0 = disabled.
-    # Counts UNREALISED loss on open positions as well as booked loss.
+    # --- Former circuit breakers (removed 25-Jul at the user's request) ---
+    # The live loss/streak/open-position/drawdown breakers that halted signals
+    # after a bad run are gone. Two of the four values survive with NARROWER,
+    # non-breaker roles; the other two (consecutive-losses, open-drawdown) are
+    # deleted outright. A stale SIGNAL_MAX_CONSECUTIVE_LOSSES/…_DRAWDOWN left in
+    # .env is simply ignored (extra="ignore").
+    #   * No longer halts signals — only supplies the "% of your daily limit"
+    #     context in the oversize-journal warning and on the card. 0 = no context.
     signal_daily_loss_limit: float = Field(default=0.0, ge=0, alias="SIGNAL_DAILY_LOSS_LIMIT")
-    # Concurrent open positions after which no new signal is issued. Defaults ON
-    # (unlike the rupee limits, which need capital context to set) because
-    # stacking correlated bets needs no configuration to hurt you.
+    #   * No longer gates live signals — now caps ONLY the paper simulator's
+    #     concurrent positions per mode (the evidence engine). 0 = uncapped.
     signal_max_open_positions: int = Field(default=2, ge=0, alias="SIGNAL_MAX_OPEN_POSITIONS")
-    # Unrealised drawdown across open positions that halts signals. 0 = disabled.
-    signal_max_open_drawdown: float = Field(default=0.0, ge=0, alias="SIGNAL_MAX_OPEN_DRAWDOWN")
     # How far BELOW the trigger a protective stop's limit price sits. SL-M is
     # blocked for index options, so a stop is an SL (limit) order; too tight a
     # limit rests unfilled while the premium keeps falling, too wide invites a

@@ -9,7 +9,6 @@ from app.config import get_settings
 from app.signals.models import TradingMode
 from app.signals.modes import ladder_params
 from app.signals.risk import price_ladder
-from app.signals.risk_limits import risk_limit_store
 from app.signals.store import signal_store
 from app.state import market_state
 from app.trades.models import (
@@ -200,7 +199,9 @@ def _guard_size(body: EnterRequest, card, entry: float, lot_size: int,
     else:
         stop = card.disaster_sl or card.premium_sl
     risk = max(entry - stop, 0.0) * body.lots * lot_size
-    limit = risk_limit_store.effective(cfg).get("daily_loss_limit", 0.0)
+    # Context only (the daily-loss breaker was removed 25-Jul): if a rupee limit
+    # is still set in .env, show what share of it this one trade risks.
+    limit = cfg.signal_daily_loss_limit
     share = f", {risk / limit * 100:.0f}% of your ₹{limit:,.0f} daily loss limit" if limit > 0 else ""
     # A structured detail so the UI can offer "journal it anyway" instead of
     # showing a dead-end error — the point is a speed bump, not a wall.

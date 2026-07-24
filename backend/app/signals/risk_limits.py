@@ -1,22 +1,22 @@
-"""Runtime-editable risk limits — the loss guards, settable from the UI.
+"""Runtime-editable trading settings — the day's fund and the paper simulator's
+position cap, settable from the UI without a restart.
 
-WHY THIS EXISTS SEPARATELY FROM config.py: the loss limits matter most on a bad
-day, and a bad day is exactly when editing a .env file and restarting the
-backend is the wrong amount of friction. These four values can therefore be set
-live from the dashboard and take effect on the next evaluation cycle.
+These were once the live "loss guards": daily-loss, open-drawdown, losing-streak
+and open-position circuit breakers that halted signals after a bad run. Those
+breakers were removed 25-Jul at the user's instruction — this is a personal
+advisory tool that places no orders, and the trader chose to keep the engine
+issuing signals through a bad day rather than have it fall silent. What remains
+here are two settings that were never breakers:
 
-Everything else in config.py stays .env-only on purpose — changing a score
-threshold or the stop percentage mid-session is a footgun, but pausing the
-engine after you are down a set number of rupees is a safety valve.
+  * trading_fund — the day's deployable premium budget; prefills the lot
+    quantity on each signal card so the Kite basket opens ready.
+  * max_open_positions — bounds the PAPER simulator's concurrent positions only.
+    It no longer gates live signals; it shapes how many trades the paper book
+    (the evidence engine) holds at once.
 
-The persisted overlay (.risk_limits.json) wins over the .env defaults. A field
-absent from the overlay falls back to config, so unsetting is possible and the
-.env values remain the baseline.
-
-CRITICAL, and surfaced in every description: these HALT SIGNALS. They do not
-place, modify, or close any order. Tradewell puts nothing in the market. A loss
-limit stops the engine tempting you into more trades once the day has gone bad;
-it cannot stop a position you already hold from losing more.
+The persisted overlay (.risk_limits.json) wins over the .env defaults; a field
+absent from the overlay falls back to config. Nothing here places, modifies, or
+closes any order — Tradewell puts nothing in the market.
 """
 from __future__ import annotations
 
@@ -49,46 +49,10 @@ class LimitSpec:
     example: str
 
 
-# The editable set: the loss/breaker guards, plus the day's deployable fund —
-# the values a trader reaches for daily or after a bad run, not the ones that
-# reshape a signal's scoring.
+# The editable set: the day's deployable fund and the paper simulator's
+# position cap. The live loss/streak breakers were removed 25-Jul (see the
+# module docstring); these two were never breakers.
 SPECS: tuple[LimitSpec, ...] = (
-    LimitSpec(
-        key="daily_loss_limit", label="Daily loss limit", unit="rupees",
-        min=0, max=10_000_000, step=500, zero_disables=True,
-        config_attr="signal_daily_loss_limit",
-        description=(
-            "Once your loss for the day reaches this, the engine stops issuing new "
-            "signals until tomorrow. Counts money already booked AND the unrealised "
-            "loss on positions you still hold — a loss you are sitting in is not a "
-            "smaller loss than one you have closed. Halts signals only; it places no "
-            "order and cannot close what you already hold."
-        ),
-        example="At 1% risk on your capital, ₹10,000 is about two full stops.",
-    ),
-    LimitSpec(
-        key="max_open_drawdown", label="Open-drawdown halt", unit="rupees",
-        min=0, max=10_000_000, step=500, zero_disables=True,
-        config_attr="signal_max_open_drawdown",
-        description=(
-            "Pauses new signals while the positions you currently hold are collectively "
-            "down this much, even before anything is booked. This is the guard that was "
-            "missing on 20-Jul: the loss was mostly unrealised while more trades kept "
-            "being taken. Halts signals only — no order is placed."
-        ),
-        example="Set below the daily limit so it bites before the day is written off.",
-    ),
-    LimitSpec(
-        key="max_consecutive_losses", label="Losing streak halt", unit="trades",
-        min=1, max=20, step=1, zero_disables=False,
-        config_attr="signal_max_consecutive_losses",
-        description=(
-            "After this many losing trades in a row, signals pause for the day. Counts "
-            "TRADES, not rupees — two small losses trip it the same as two large ones, "
-            "which is why the rupee limits above matter too."
-        ),
-        example="2 means the third signal is withheld after two losses back to back.",
-    ),
     LimitSpec(
         key="trading_fund", label="Today's trading fund", unit="rupees",
         min=0, max=100_000_000, step=1000, zero_disables=True,
@@ -103,15 +67,16 @@ SPECS: tuple[LimitSpec, ...] = (
         example="₹10,00,000 at a ₹100 premium (lot 65) prefills 153 lots = 9,945 qty.",
     ),
     LimitSpec(
-        key="max_open_positions", label="Max open positions", unit="positions",
+        key="max_open_positions", label="Paper: max open positions", unit="positions",
         min=0, max=20, step=1, zero_disables=True,
         config_attr="signal_max_open_positions",
         description=(
-            "No new signal is issued while this many positions are already open. Stops "
-            "the engine stacking correlated bets — six PE cards on one view is the engine "
-            "whipsawing, not six edges."
+            "Bounds the PAPER simulator only — how many positions the paper book "
+            "(the evidence engine behind the scenes) holds at once per mode. It no "
+            "longer gates your live signals; the live circuit breakers were removed. "
+            "Places no order either way."
         ),
-        example="2 blocks a third concurrent position until one is closed.",
+        example="2 means the simulator holds at most two concurrent paper trades per mode.",
     ),
 )
 
@@ -201,11 +166,12 @@ class RiskLimitStore:
                 "fields": fields,
                 "updated_at": self._updated_at,
                 "note": (
-                    "The loss limits HALT SIGNALS — they place, modify, or close no order. "
-                    "Tradewell puts nothing in the market. They stop the engine offering "
-                    "more trades once the day has gone against you; your actual loss is "
-                    "still capped only by the stop you act on yourself. The trading fund "
-                    "is different: it only prefills lot quantities on signal cards."
+                    "Trading settings, not order controls — Tradewell places, modifies, "
+                    "or closes nothing. The trading fund only prefills lot quantities on "
+                    "signal cards; the paper-position cap only bounds the background "
+                    "simulator. The old loss/streak circuit breakers were removed — the "
+                    "engine now keeps issuing signals through a bad run, and your loss is "
+                    "capped only by the stop you act on yourself."
                 ),
             }
 

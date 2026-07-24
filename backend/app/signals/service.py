@@ -24,7 +24,7 @@ from app.signals.models import (
 from app.signals import calibration
 from app.signals.score_history import score_history
 from app.signals.sizing import apply_fund_sizing
-from app.signals.store import RiskState, SignalStore, ThrottleConfig, hollow_store
+from app.signals.store import SignalStore, ThrottleConfig, hollow_store
 from app.signals.risk_limits import risk_limit_store
 from app.state import MarketState
 from app.trades.store import trade_store
@@ -69,68 +69,16 @@ class SignalService:
         self.profiles = build_profiles(cfg)
 
     def _throttle(self) -> ThrottleConfig:
-        """Built FRESH each evaluation, not cached at init.
-
-        The four loss/breaker limits are editable live from the UI, so the
-        throttle must read them at decision time — caching them here would mean
-        a limit set at 11:00 did nothing until the next backend restart. The
-        timing fields (per-day cap, gaps, flip guard) stay .env-only and come
-        straight from config.
+        """Signal CADENCE only. The outcome-based circuit breakers (losing
+        streak, daily loss, open positions, open drawdown) were removed
+        25-Jul at the user's instruction — see ThrottleConfig. All four timing
+        fields are .env-only; changing them mid-session is a footgun.
         """
-        limits = risk_limit_store.effective(self.cfg)
         return ThrottleConfig(
             max_per_day=self.cfg.signal_max_per_day,
             min_gap_s=self.cfg.signal_min_gap_s,
             cooldown_s=self.cfg.signal_cooldown_s,
             flip_guard_s=self.cfg.signal_flip_guard_s,
-            max_consecutive_losses=int(limits["max_consecutive_losses"]),
-            daily_loss_limit=limits["daily_loss_limit"],
-            max_open_positions=int(limits["max_open_positions"]),
-            max_open_drawdown=limits["max_open_drawdown"],
-        )
-
-    def _risk_state(self, now: int) -> RiskState:
-        """Today's outcome, read from the journal — realised AND still open.
-
-        Feeds the circuit breakers: the engine must go quiet after a bad run,
-        not keep talking. Open positions are included because a loss you are
-        still holding is not a smaller loss than one you have booked, and the
-        realised-only view is blind precisely while you sit in a drawdown.
-        """
-        today = (now + 19800) // 86400
-        trades = trade_store.all()
-        closed = [
-            t for t in trades
-            if t.status.value == "exited" and t.exited_at
-            and (t.exited_at + 19800) // 86400 == today
-        ]
-        closed.sort(key=lambda t: t.exited_at or 0)
-        realized = sum(t.realized_pnl or 0.0 for t in closed)
-        streak = 0
-        for t in reversed(closed):                 # most recent backwards
-            if (t.realized_pnl or 0.0) < 0:
-                streak += 1
-            else:
-                break
-
-        # Positional rows carry overnight — that is real money still at risk.
-        # INTRADAY rows must not: Zerodha auto-squares MIS around 15:20 IST, and
-        # nothing here ever closes a trade by itself, so a row the user forgot to
-        # mark exited would otherwise count forever. With max_open_positions
-        # defaulting to 2, two such ghosts would silence the engine permanently.
-        open_trades = [
-            t for t in trades
-            if t.status.value in ("entered", "partial")
-            and not (t.mode.value == "intraday"
-                     and (t.entered_at + 19800) // 86400 < today)
-        ]
-        open_pnl = sum(t.pnl or 0.0 for t in open_trades)
-
-        return RiskState(
-            consecutive_losses=streak,
-            realized_today=realized,
-            open_pnl=open_pnl,
-            open_positions=len(open_trades),
         )
 
     def _apply_sizing(self, resp: SignalResponse, symbol: str) -> None:
@@ -160,11 +108,13 @@ class SignalService:
         # capital is configured, and "no suggestion" must not mean "no numbers".
         card.lot_size = lot or None
         card.trading_capital = capital or None
-        # Live values, so the card reflects limits set from the UI this session.
-        limits = risk_limit_store.effective(self.cfg)
-        card.daily_loss_limit = limits["daily_loss_limit"] or None
+        # daily_loss_limit is context the card carries only to relate a
+        # position's loss to the account; the breaker that once acted on it is
+        # gone (25-Jul), so it comes straight from .env now, not the live overlay.
+        card.daily_loss_limit = self.cfg.signal_daily_loss_limit or None
         # Affordability prefill from the day's fund. Re-run against the live
         # premium on every poll (routes_signals); this is the issue-time value.
+        limits = risk_limit_store.effective(self.cfg)
         apply_fund_sizing(card, limits.get("trading_fund", 0.0))
 
         # Scheduled-event caution: known macro windows halve the suggestion —
@@ -379,9 +329,8 @@ class SignalService:
                     try:
                         shadow = fresh.model_copy(deep=True)
                         shadow.signal.hollow_reason = veto
-                        # Same throttle so the shadow slot stabilises one card
-                        # per window; DEFAULT RiskState on purpose — the live
-                        # breakers must not starve the evidence stream.
+                        # Same cadence throttle so the shadow slot stabilises
+                        # one card per window, just like the live feed.
                         hollow_store.reconcile(shadow, now, self._throttle())
                     except Exception:
                         log.debug("hollow shadow reconcile failed", exc_info=True)
@@ -398,7 +347,7 @@ class SignalService:
             fresh.score.direction.value if fresh.score else None,
             {c.name: c.points for c in fresh.score.components} if fresh.score else None,
         )
-        return self.store.reconcile(fresh, now, self._throttle(), self._risk_state(now))
+        return self.store.reconcile(fresh, now, self._throttle())
 
     def evaluate_all(self) -> None:
         for symbol in self.cfg.signal_symbols:

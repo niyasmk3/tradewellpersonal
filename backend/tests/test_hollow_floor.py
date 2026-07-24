@@ -221,8 +221,7 @@ def test_shadow_store_isolation():
     assert out.signal is not None and out.signal.hollow_reason == "vol floor"
     assert real.latest("NIFTY", TradingMode.INTRADAY) is None
     # The shadow adoption spent a shadow slot, not a real one.
-    blocked = real._blocked("NIFTY:intraday", card, now, cfg, __import__(
-        "app.signals.store", fromlist=["RiskState"]).RiskState())
+    blocked = real._blocked("NIFTY:intraday", card, now, cfg)
     assert blocked is None, blocked
     print("  SHADOW -> hollow adoption spends no real-throttle slot, serves nothing")
 
