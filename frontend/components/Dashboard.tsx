@@ -31,6 +31,8 @@ const PriceChart = dynamic(() => import("./PriceChart").then((m) => m.PriceChart
 const TIMEFRAMES: Timeframe[] = ["1m", "3m", "5m", "15m"];
 const MODES: { key: TradingMode; label: string }[] = [
   { key: "intraday", label: "Intraday" },
+  // Appears only when SIGNAL_MODES includes it; cards are paper-only either way.
+  { key: "scalp", label: "Scalp" },
   { key: "positional", label: "Positional" },
 ];
 
@@ -57,7 +59,14 @@ export function Dashboard() {
   const positionalSig = usePolling(
     () => api.signal("NIFTY", "positional"), 3000, [sigTick], modesOn.includes("positional"),
   );
-  const signalRes = mode === "positional" ? positionalSig : intradaySig;
+  // Scalp cards live 180s — if this poll didn't exist, a scalp card could be
+  // born, pushed to the phone and expire without the dashboard ever showing it
+  // (and the Scalp toggle would silently render the INTRADAY card instead).
+  const scalpSig = usePolling(
+    () => api.signal("NIFTY", "scalp"), 3000, [sigTick], modesOn.includes("scalp"),
+  );
+  const signalRes =
+    mode === "positional" ? positionalSig : mode === "scalp" ? scalpSig : intradaySig;
   const news = usePolling(() => api.news(), 15000, []);
   const mood = usePolling(() => api.marketMood(), 60000, []);
   // Simulated book — polled slowly; it only changes when a signal fires.
@@ -117,7 +126,11 @@ export function Dashboard() {
 
   // Sound + desktop notification when a new tradeable signal appears in EITHER
   // mode — fed from the always-on polls, not the view-scoped one.
-  const alerts = useSignalAlert([intradaySig.data?.signal, positionalSig.data?.signal]);
+  const alerts = useSignalAlert([
+    intradaySig.data?.signal,
+    positionalSig.data?.signal,
+    scalpSig.data?.signal,
+  ]);
   // Tradewell never exits a position — so a stop-loss/target/invalidation hit
   // while the trader is away from the screen must make a noise.
   useTradeAlert(trades.data, alerts.muted);

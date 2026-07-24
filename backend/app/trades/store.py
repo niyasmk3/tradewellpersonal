@@ -387,6 +387,29 @@ class TradeStore:
 
         return self._apply(tid, fn)
 
+    def set_exit_reason(self, tid: str, reason: str) -> Trade | None:
+        """Record WHY a closed trade ended, in the trader's words.
+
+        Only meaningful on exited rows — an open trade has no exit to explain.
+        Overwriting is allowed (second thoughts are data too); each answer is
+        journaled so the history keeps both.
+        """
+        reason = reason.strip()
+        if not reason:
+            return None
+
+        def fn(t: Trade) -> None:
+            if t.status is not TradeStatus.EXITED:
+                return
+            t.exit_reason = reason[:120]
+            t.events.append(TradeEvent(
+                ts=_now(), kind="exit_reason",
+                note=f"Exit reason recorded: {t.exit_reason}",
+            ))
+
+        t = self._apply(tid, fn)
+        return t if t is not None and t.exit_reason == reason[:120] else None
+
     def note_qty_mismatch(self, tid: str, held: int, journal_total: int | None = None) -> None:
         """Journal that the broker's quantity disagrees with the journal.
 
@@ -428,6 +451,7 @@ class TradeStore:
             t.auto_closed = False
             t.auto_close_reason = None
             t.exit_price_source = None
+            t.exit_reason = None         # the exit it explained never happened
             t.pnl = None
             # The close was FALSE, so the position was open the whole time —
             # the extremes observed during the reversible window belong to the

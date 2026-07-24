@@ -90,7 +90,13 @@ export function CommandStrip({
               <button
                 key={m.key}
                 onClick={() => onMode(m.key)}
-                title={m.key === "intraday" ? "same-day · weekly options" : "multi-day swing · monthly options"}
+                title={
+                  m.key === "intraday"
+                    ? "same-day · weekly options"
+                    : m.key === "scalp"
+                      ? "minutes-scale · paper-only until the book earns it"
+                      : "multi-day swing · monthly options"
+                }
                 className={`rounded px-2 py-0.5 text-xs font-medium transition ${
                   m.key === mode ? "bg-accent text-white" : "text-muted hover:text-white"
                 }`}

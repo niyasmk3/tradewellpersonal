@@ -49,12 +49,16 @@ def test_pcr_alignment_still_paid_against_a_neutral_bias():
 
 class _T:
     def __init__(self, mfe_pct, mode="intraday", status="exited", gap=0):
+        from app.paper.service import HONEST_FILLS_FROM
+
         self.mode = type("M", (), {"value": mode})()
         self.status = type("S", (), {"value": status})()
         self.entry_premium = 100.0
         self.mfe_premium = 100.0 * (1 + mfe_pct)
-        self.entered_at = 1000
-        self.excursion_from = 1000 + gap
+        # Inside the honest-fill era — pre-era rows are rejected wholesale
+        # (that rejection has its own test in test_p3_p5).
+        self.entered_at = HONEST_FILLS_FROM + 3600
+        self.excursion_from = self.entered_at + gap
 
 
 def test_calibration_needs_samples_and_clamps():

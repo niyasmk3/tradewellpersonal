@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     # Quiet period after a tick-feed gap ends: the first evaluations after a
     # blackout score a tape the engine never watched form. 0 = off.
     signal_post_gap_quiet_s: int = Field(default=600, ge=0, alias="SIGNAL_POST_GAP_QUIET_S")
+    # Scalp mode is PAPER-ONLY until flipped: journaling a scalp card live or
+    # handing one to Kite is refused while false. The gate to flip it is
+    # evidence, not enthusiasm — 50+ honest-fill paper scalps whose expectancy
+    # survives the charges model (friction eats 20-30%% of gross at this cadence).
+    scalp_live_enabled: bool = Field(default=False, alias="SCALP_LIVE_ENABLED")
+    # Refuse a scalp card when estimated round-trip charges exceed this share
+    # of the gross move to Target 1 (at the suggested size). 0 disables.
+    scalp_max_friction_pct: float = Field(default=0.20, ge=0, le=1, alias="SCALP_MAX_FRICTION_PCT")
     # Derive intraday Target 1 from the paper book's recorded MFE distribution
     # (P75, clamped 8-27%) once >=30 clean samples exist; below that the static
     # RR_TARGET1 ladder stands. The advertised +27% T1 has never been hit

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from app.config import get_settings
 
@@ -52,6 +53,52 @@ def excursion(source: str = "live") -> dict:
     return exc.target_curve(trade_store.all())
 
 
+@router.get("/analytics")
+def analytics(source: str = "live") -> dict:
+    """Expectancy and capture efficiency grouped by HOW trades ended.
+
+    `source=paper` reads the simulated book with BOTH of its summary's
+    disciplines: honest-fill era only (pre-23-Jul fills were fictional) AND
+    net of the Zerodha charge model — a gross paper expectancy flips sign at
+    exactly the scalp cadence where the SCALP_LIVE_ENABLED gate consults this
+    number. The live journal stays gross, matching what it records; the
+    payload's `pnl_basis` states which basis applies either way.
+    """
+    from app.trades import analytics as ana
+
+    if source == "paper":
+        from app.paper import charges as chg
+        from app.paper.service import HONEST_FILLS_FROM
+        from app.services import feed
+        store = getattr(feed, "paper_store", None)
+        if store is None:
+            raise HTTPException(status_code=409, detail="Paper trading is off")
+        rows = [t for t in store.all() if t.entered_at >= HONEST_FILLS_FROM]
+        return ana.summarize(
+            rows,
+            # legs=1 on a missing exit premium mirrors charges.py's lapse rule.
+            charges_fn=lambda t: chg.charges(
+                t.entry_premium, t.exit_premium or 0.0,
+                t.initial_quantity or t.quantity, 2 if t.exit_premium else 1),
+        )
+    return ana.summarize(trade_store.all())
+
+
+class ExitReasonRequest(BaseModel):
+    reason: str
+
+
+@router.post("/{tid}/exit-reason", response_model=Trade)
+def exit_reason(tid: str, body: ExitReasonRequest) -> Trade:
+    """Record why a closed trade ended — the input the exit-type report needs."""
+    if trade_store.get(tid) is None:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    updated = trade_store.set_exit_reason(tid, body.reason)
+    if updated is None:
+        raise HTTPException(status_code=409, detail="Trade is not closed (or reason was empty)")
+    return updated
+
+
 @router.post("/enter", response_model=Trade)
 def enter(body: EnterRequest) -> Trade:
     """Create a tracked trade from the currently-active signal for (symbol, mode)."""
@@ -92,6 +139,14 @@ def enter(body: EnterRequest) -> Trade:
     if product not in ("MIS", "NRML"):
         raise HTTPException(status_code=400, detail="product must be MIS or NRML")
     cfg = get_settings()
+    # Scalp cards are PAPER-ONLY until the paper book earns the flip: at scalp
+    # cadence the charges model shows friction eating 20-30%% of gross, and the
+    # SEBI 93%%-lose statistic is disproportionately made of option scalpers.
+    if card.mode is TradingMode.SCALP and not cfg.scalp_live_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail=("Scalp mode is paper-only: let the paper book accumulate 50+ "
+                    "honest fills, then set SCALP_LIVE_ENABLED=true if the expectancy survives."))
     # Same gate as the card: no configured capital means sizing cannot shrink
     # the position to pay for a wider stop, so the premium stop keeps governing.
     disaster_pct = (cfg.premium_disaster_pct

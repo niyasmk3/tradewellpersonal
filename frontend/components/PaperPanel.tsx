@@ -85,6 +85,14 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                 </span>
                 <span className="truncate font-mono text-muted">{r.contract}</span>
                 <span className="tag bg-panel text-[9px] text-muted">{r.reason}</span>
+                {r.era?.startsWith("inflated") && (
+                  <span
+                    className="tag bg-yellow-500/15 text-[9px] text-yellow-400"
+                    title="Filled before the honest-fill fix (23-Jul) — excluded from every aggregate above"
+                  >
+                    inflated
+                  </span>
+                )}
                 <span className={`ml-auto font-mono ${r.net_pnl >= 0 ? "text-bull" : "text-bear"}`}>
                   ₹{signed(r.net_pnl, 0)}
                   <span className="ml-1 text-[10px] opacity-80">{signed(r.return_pct, 1)}%</span>

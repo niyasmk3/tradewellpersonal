@@ -398,6 +398,51 @@ function JournalRow({ t, dayKey, onChange }: { t: Trade; dayKey: number; onChang
         </div>
       )}
 
+      {/* A broker-flat close means YOU exited and Tradewell only found out —
+          without your reason the expectancy-by-exit report cannot tell a
+          disciplined broker-side stop from a fear exit. One tap answers it. */}
+      {t.status === "exited" && t.auto_close_reason === "broker flat" && !t.exit_reason && (
+        <div className="mt-1 flex flex-wrap items-center gap-1 rounded bg-accent/10 px-1.5 py-1 text-[10px]">
+          <span className="text-white/80">why did you exit?</span>
+          {["broker stop", "target hit", "fear / cut early", "better setup"].map((r) => (
+            <button
+              key={r}
+              onClick={async () => {
+                try {
+                  await api.exitReason(t.id, r);
+                  onChange?.();
+                } catch (e) {
+                  alert(e instanceof Error ? e.message : "could not save the reason");
+                }
+              }}
+              className="rounded bg-panel2 px-1.5 py-0.5 text-muted hover:text-white"
+            >
+              {r}
+            </button>
+          ))}
+          <button
+            onClick={async () => {
+              const r = window.prompt("Why did you exit?");
+              if (!r?.trim()) return;
+              try {
+                await api.exitReason(t.id, r.trim());
+                onChange?.();
+              } catch (e) {
+                alert(e instanceof Error ? e.message : "could not save the reason");
+              }
+            }}
+            className="rounded bg-panel2 px-1.5 py-0.5 text-muted hover:text-white"
+          >
+            other…
+          </button>
+        </div>
+      )}
+      {t.exit_reason && (
+        <div className="mt-0.5 text-[10px] text-muted">
+          exit reason: <span className="text-white/80">{t.exit_reason}</span>
+        </div>
+      )}
+
       {t.status !== "ignored" && (
         // The audit trail: what you paid, what you got, when, and how long you
         // held it — so a trade can actually be reviewed after the fact.

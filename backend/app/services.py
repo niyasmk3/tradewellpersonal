@@ -88,8 +88,12 @@ def _seed_candles(kite, state) -> int:
                 for c in candles
             ]
             if rows:
-                last_day = (rows[-1]["ts"] + 19800) // 86400
-                rows = [r for r in rows if (r["ts"] + 19800) // 86400 == last_day]
+                # Session frames keep only the latest day; the 15m frame keeps
+                # its multi-day history so positional context exists from the
+                # open instead of ~13:15 (see candles._MULTI_DAY_TFS).
+                if tf != "15m":
+                    last_day = (rows[-1]["ts"] + 19800) // 86400
+                    rows = [r for r in rows if (r["ts"] + 19800) // 86400 == last_day]
                 engine.seed(tf, rows)
                 seeded += len(rows)
             _time.sleep(0.35)               # stay under Kite's ~3 req/s historical limit
@@ -210,6 +214,13 @@ class FeedController:
         from app.notify import push_signal, push_text
 
         signal_store.notify = lambda card: push_signal(card, get_settings())
+        signal_store.notify_retire = lambda card, state: push_text(
+            f"Tradewell: {card.mode.value} card {state}",
+            f"{card.contract} (score {card.confidence:.0f}) is {state} — "
+            + ("thesis flipped, do not chase the old plan." if state == "cancelled"
+               else "entry window closed."),
+            get_settings(),
+        )
 
         # MACHINE-VERIFIED ARMING. "The webhook is configured" was an assumption
         # three times on 23-Jul and wrong every time. The feed proves it on

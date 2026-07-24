@@ -30,6 +30,11 @@ function Row({ r, atm, hideVol }: { r: OptionRow; atm: number | null; hideVol?: 
         <OiCell value={r.ce_oi_change} />
       </td>
       {!hideVol && <td className="px-2 py-1 text-right font-mono text-muted">{compact(r.ce_volume)}</td>}
+      {!hideVol && (
+        <td className="px-2 py-1 text-right font-mono text-muted">
+          {r.ce_iv != null ? r.ce_iv.toFixed(1) : "—"}
+        </td>
+      )}
       <td className={`px-2 py-1 text-right font-mono ${itmCe ? "bg-bull/5" : ""}`}>{fmt(r.ce_ltp)}</td>
 
       {/* Strike */}
@@ -39,6 +44,11 @@ function Row({ r, atm, hideVol }: { r: OptionRow; atm: number | null; hideVol?: 
 
       {/* PE side */}
       <td className={`px-2 py-1 text-left font-mono ${itmPe ? "bg-bear/5" : ""}`}>{fmt(r.pe_ltp)}</td>
+      {!hideVol && (
+        <td className="px-2 py-1 text-left font-mono text-muted">
+          {r.pe_iv != null ? r.pe_iv.toFixed(1) : "—"}
+        </td>
+      )}
       {!hideVol && <td className="px-2 py-1 text-left font-mono text-muted">{compact(r.pe_volume)}</td>}
       <td className="px-2 py-1 text-left">
         <OiCell value={r.pe_oi_change} />
@@ -76,10 +86,10 @@ export function OptionChainTable({ chain, bare = false }: { chain: OptionChain |
         </div>
       </div>
 
-      <div className="grid grid-cols-9 border-b border-edge px-2 py-1 text-[10px] uppercase text-muted">
-        <div className={`${bare ? "col-span-3" : "col-span-4"} text-center text-bull`}>Calls (CE)</div>
+      <div className={`grid ${bare ? "grid-cols-7" : "grid-cols-11"} border-b border-edge px-2 py-1 text-[10px] uppercase text-muted`}>
+        <div className={`${bare ? "col-span-3" : "col-span-5"} text-center text-bull`}>Calls (CE)</div>
         <div className="text-center">Strike</div>
-        <div className={`${bare ? "col-span-3" : "col-span-4"} text-center text-bear`}>Puts (PE)</div>
+        <div className={`${bare ? "col-span-3" : "col-span-5"} text-center text-bear`}>Puts (PE)</div>
       </div>
 
       <div className={bare ? "min-h-0 flex-1 overflow-y-auto scroll-thin" : "max-h-[520px] overflow-y-auto scroll-thin"}>
@@ -91,9 +101,11 @@ export function OptionChainTable({ chain, bare = false }: { chain: OptionChain |
               <th className="px-2 py-1 text-right font-normal">OI</th>
               <th className="px-2 py-1 text-right font-normal">OI Δ</th>
               {!bare && <th className="px-2 py-1 text-right font-normal">Vol</th>}
+              {!bare && <th className="px-2 py-1 text-right font-normal">IV</th>}
               <th className="px-2 py-1 text-right font-normal">LTP</th>
               <th className="px-2 py-1 text-center font-normal"> </th>
               <th className="px-2 py-1 text-left font-normal">LTP</th>
+              {!bare && <th className="px-2 py-1 text-left font-normal">IV</th>}
               {!bare && <th className="px-2 py-1 text-left font-normal">Vol</th>}
               <th className="px-2 py-1 text-left font-normal">OI Δ</th>
               <th className="px-2 py-1 text-left font-normal">OI</th>
@@ -110,7 +122,7 @@ export function OptionChainTable({ chain, bare = false }: { chain: OptionChain |
         )}
       </div>
       <div className="border-t border-edge px-3 py-1.5 text-[10px] text-muted">
-        OI Δ = build since feed start · IV computed in Phase 2
+        OI Δ = build since feed start · IV = Black-Scholes solve, ±5 strikes of ATM
       </div>
     </div>
   );

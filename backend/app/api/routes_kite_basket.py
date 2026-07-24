@@ -150,6 +150,9 @@ def basket(
     profile = build_profiles(cfg).get(mode.value)
     if profile is None:
         raise HTTPException(status_code=409, detail=f"Mode '{mode.value}' is not enabled")
+    if mode is TradingMode.SCALP and not cfg.scalp_live_enabled:
+        raise HTTPException(status_code=409,
+                            detail="Scalp mode is paper-only — no Kite hand-off until SCALP_LIVE_ENABLED")
 
     is_ce = card.direction.value == "CE"
     contract = _resolve_contract(symbol, profile.expiry_key, card.token, card.strike, is_ce)

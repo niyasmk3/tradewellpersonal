@@ -12,8 +12,9 @@ intraday instead of freezing on the open. The OI baseline is reset at the IST
 session rollover so ``oi_change`` never drifts across days on a long-running
 process.
 
-Not provided by Kite ticks/quotes: implied volatility. IV is left ``None`` here;
-computing it via Black-Scholes is a Phase-2 addition.
+Not provided by Kite ticks/quotes: implied volatility. We compute it ourselves
+(app.options.iv) for the ±5 strikes around ATM, where the number means
+something; the deep wings stay ``None``.
 """
 from __future__ import annotations
 
@@ -21,7 +22,10 @@ import time
 
 from app.kite.instruments import OptionUniverse
 from app.models.schemas import OptionChain, OptionRow
+from app.options.iv import implied_vol, years_to_expiry
 from app.state import MarketState
+
+_IV_DEPTH = 5  # strikes each side of ATM that get an IV solve
 
 _IST_OFFSET = 19800  # +5:30 in seconds
 
@@ -61,6 +65,11 @@ class OptionChainBuilder:
         rows: list[OptionRow] = []
         total_ce_oi = 0.0
         total_pe_oi = 0.0
+        # One clock read per build; IV is only solved close to the money, where
+        # premiums carry real time value. 11 strikes x 2 legs x ~60 closed-form
+        # evaluations is sub-millisecond.
+        t_years = years_to_expiry(universe.expiry) if atm is not None else 0.0
+        iv_band = _IV_DEPTH * universe.step
 
         for strike in strikes:
             pair = universe.strikes[strike]
@@ -72,6 +81,11 @@ class OptionChainBuilder:
             total_ce_oi += ce_oi or 0
             total_pe_oi += pe_oi or 0
 
+            ce_iv = pe_iv = None
+            if atm is not None and t_years > 0 and abs(strike - atm) <= iv_band:
+                ce_iv = implied_vol(ce.get("last_price"), spot_ltp, strike, t_years, True)
+                pe_iv = implied_vol(pe.get("last_price"), spot_ltp, strike, t_years, False)
+
             rows.append(
                 OptionRow(
                     strike=strike,
@@ -80,13 +94,13 @@ class OptionChainBuilder:
                     ce_oi=ce_oi,
                     ce_oi_change=self._oi_change(pair.ce_token, ce_oi),
                     ce_volume=ce.get("volume_traded"),
-                    ce_iv=None,
+                    ce_iv=ce_iv,
                     pe_token=pair.pe_token,
                     pe_ltp=pe.get("last_price"),
                     pe_oi=pe_oi,
                     pe_oi_change=self._oi_change(pair.pe_token, pe_oi),
                     pe_volume=pe.get("volume_traded"),
-                    pe_iv=None,
+                    pe_iv=pe_iv,
                 )
             )
 

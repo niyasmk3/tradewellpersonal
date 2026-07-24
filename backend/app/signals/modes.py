@@ -83,6 +83,23 @@ def _build_all(cfg: Settings) -> dict[str, ModeProfile]:
             min_candles=15,
             horizon="Same-day · exit before close",
         ),
+        TradingMode.SCALP.value: ModeProfile(
+            mode=TradingMode.SCALP,
+            label="Scalp (paper-only)",
+            timeframe="1m",
+            expiry_key="nearest",
+            validity_seconds=180,                     # a scalp entry is now or never
+            # Stricter gate than intraday: at this cost profile only the
+            # cleanest setups can clear friction — see the viability veto.
+            score_valid=80,
+            score_wait=72,
+            premium_sl_pct=0.08,                      # tight stop; scalp risk is time, not depth
+            rr_target1=0.75,                          # T1 = +6% of premium
+            rr_target2=1.5,                           # T2 = +12%
+            strike_bias="itm_atm",                    # delta over decay at short holds
+            min_candles=10,                           # ~10 minutes of 1m bars
+            horizon="Minutes · paper-only until proven",
+        ),
         TradingMode.POSITIONAL.value: ModeProfile(
             mode=TradingMode.POSITIONAL,
             label="Positional / Swing",

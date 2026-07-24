@@ -8,8 +8,10 @@
 # processes owned by your own terminal, and a backend wrapped in caffeinate so
 # the Mac cannot sleep mid-session. This script is that, plus clean shutdown.
 #
-#   ./start.sh          start backend (caffeinate + uvicorn) and frontend
-#   ./start.sh stop     stop whatever is on the two ports
+#   ./start.sh                   start backend (caffeinate + uvicorn) and frontend
+#   ./start.sh stop              stop whatever is on the two ports
+#   ./start.sh --live-override   start even during market hours (see guard below)
+#   ./start.sh install-launchd   install the login auto-start (see deploy/)
 #
 # Ctrl+C in the running script stops BOTH servers — no orphans left holding
 # the ports, which is what made "localhost not working" a recurring mystery.
@@ -40,6 +42,42 @@ if [ "${1:-}" = "stop" ]; then
   stop_port "$FRONTEND_PORT"
   say "stack stopped"
   exit 0
+fi
+
+if [ "${1:-}" = "install-launchd" ]; then
+  # Ship the login auto-start. Installs the plist with this checkout's path
+  # baked in, but does NOT load it — loading is a one-line decision the user
+  # makes once, with the file in front of them, not a side effect of a script.
+  PLIST_SRC="$ROOT/deploy/tradewell.plist"
+  PLIST_DST="$HOME/Library/LaunchAgents/com.tradewell.stack.plist"
+  [ -f "$PLIST_SRC" ] || die "deploy/tradewell.plist missing from this checkout"
+  mkdir -p "$HOME/Library/LaunchAgents" "$LOGS"
+  sed "s|__TRADEWELL_ROOT__|$ROOT|g" "$PLIST_SRC" > "$PLIST_DST"
+  say "installed $PLIST_DST (not loaded)"
+  say "to enable auto-start at login:   launchctl load $PLIST_DST"
+  say "to disable it again:             launchctl unload $PLIST_DST"
+  say "NOTE: 'launchctl load' starts the stack IMMEDIATELY (RunAtLoad), not"
+  say "just at the next login — and it restarts whatever is on the ports."
+  say "Run it outside market hours, like any other deploy."
+  exit 0
+fi
+
+# MARKET-HOURS DEPLOY GUARD. A restart kills the tick feed, resets warm-up and
+# re-arms every monitor mid-session — the worst possible moment to discover a
+# code change misbehaves. Deploys land after 15:30; a mid-session start must
+# say --live-override out loud (crash recovery is what the flag is FOR — the
+# launchd job uses it, because at login nothing is running and bringing the
+# stack back IS the recovery).
+if [ "${1:-}" != "--live-override" ]; then
+  IST_DOW=$(TZ=Asia/Kolkata date +%u)   # 1=Mon … 7=Sun
+  IST_HM=$(TZ=Asia/Kolkata date +%H%M)
+  if [ "$IST_DOW" -le 5 ] && [ "$IST_HM" -ge 0915 ] && [ "$IST_HM" -le 1530 ]; then
+    # "inside market hours", not "market is open" — this guard cannot see NSE
+    # holidays, and claiming an open market on Independence Day would be false.
+    die "inside market hours (Mon-Fri 09:15-15:30 IST; now $IST_HM, holidays not tracked)
+            — restarting would drop a live feed. Deploy after 15:30, or run:
+            ./start.sh --live-override   (crash recovery / holiday)"
+  fi
 fi
 
 [ -x "$ROOT/backend/.venv/bin/python" ] || die "backend/.venv missing — create it and pip install -r requirements first"

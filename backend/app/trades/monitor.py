@@ -149,7 +149,7 @@ def evaluate(
         return
 
     intraday_close = (
-        trade.mode.value == "intraday"
+        trade.mode.value in ("intraday", "scalp")
         and ist_minutes is not None
         and ist_minutes >= _INTRADAY_EXIT_MIN
     )
@@ -319,7 +319,7 @@ def evaluate(
         # fallback demands the position be essentially flat or worse (≤ +2%):
         # a profitable trade must never be stalled out on the clock alone.
         stall_minutes
-        and trade.mode.value == "intraday"
+        and trade.mode.value in ("intraday", "scalp")
         and (now_ts - trade.entered_at) >= stall_minutes * 60
         and (trade.quick_target is not None or (trade.pnl_pct or 0.0) <= 2.0)
     ):

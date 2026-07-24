@@ -222,6 +222,34 @@ class SignalService:
                     "while the tape re-establishes")
         return None
 
+    def _scalp_friction_veto(self, card) -> str | None:
+        """Refuse a scalp card whose target cannot pay its own costs.
+
+        At scalp cadence the charges model is the game: brokerage + STT +
+        levies on a +6%% move eat 20-30%% of the gross. A card whose estimated
+        round-trip friction exceeds SCALP_MAX_FRICTION_PCT of the gross at
+        Target 1 (at the suggested size, min 1 lot) is a donation, not a trade.
+        """
+        if card.mode.value != "scalp":
+            return None
+        limit = self.cfg.scalp_max_friction_pct
+        lot = card.lot_size or 0
+        entry = card.ref_entry_premium
+        if limit <= 0 or lot <= 0 or not entry or card.target1 <= entry:
+            return None
+        try:
+            from app.paper import charges as chg
+
+            qty = max(1, card.suggested_lots or 1) * lot
+            gross = (card.target1 - entry) * qty
+            cost = chg.charges(entry, card.target1, qty, 2)
+            if gross > 0 and cost / gross > limit:
+                return (f"Scalp friction ₹{cost:,.0f} would eat {cost / gross * 100:.0f}% of the "
+                        f"₹{gross:,.0f} move to T1 (limit {limit * 100:.0f}%) — costs win this trade")
+        except Exception:  # a costing failure must not block other modes
+            log.debug("scalp friction check failed", exc_info=True)
+        return None
+
     def _leadership_note(self, symbol: str) -> str | None:
         """BANKNIFTY-vs-NIFTY relative strength, as a displayed note only."""
         if symbol.upper() != "NIFTY":
@@ -298,16 +326,6 @@ class SignalService:
             rr1_override=calibration.intraday_rr1(profile, self.cfg),
         )
 
-        # Context vetoes that need STATE the pure engine doesn't hold. Both
-        # convert an issued card into a WAIT with the reason shown — the score
-        # panel stays live, only the offer is withheld.
-        if fresh.signal is not None:
-            veto = self._context_veto(fresh, df, now)
-            if veto:
-                fresh.signal = None
-                fresh.action = Action.WAIT
-                fresh.no_trade_reason = veto
-
         # Cross-index leadership, surfaced as CONTEXT (zero score weight until
         # the paper book proves it deserves any): a CE thesis with BANKNIFTY
         # underperforming, or a PE with banks holding up, is worth an eyebrow.
@@ -316,6 +334,16 @@ class SignalService:
             fresh.status.notes = [*fresh.status.notes, lead][:6]
 
         self._apply_sizing(fresh, symbol)
+
+        # Context vetoes that need STATE (or the sizing above). Each converts
+        # an issued card into a WAIT with the reason shown — the score panel
+        # stays live, only the offer is withheld.
+        if fresh.signal is not None:
+            veto = self._context_veto(fresh, df, now) or self._scalp_friction_veto(fresh.signal)
+            if veto:
+                fresh.signal = None
+                fresh.action = Action.WAIT
+                fresh.no_trade_reason = veto
         # Score trend, recorded from the PRE-throttle evaluation: the throttle
         # shapes what is OFFERED, not what the market scored. record() swallows
         # its own failures — the trend feature must never stop a signal.

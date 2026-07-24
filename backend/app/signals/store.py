@@ -93,10 +93,13 @@ class SignalStore:
         self._latest: dict[str, SignalResponse] = {}
         self._slots: dict[str, _SlotState] = {}
         self._store_path = store_path
-        # Off-desk delivery hook, called with each newly ADOPTED card. Wired by
-        # the live feed only (services.py); None everywhere else so tests and
-        # offline replays adopt cards without any network side effect.
+        # Off-desk delivery hooks, wired by the live feed only (services.py);
+        # None everywhere else so tests and offline replays stay silent.
+        # notify: a newly ADOPTED card. notify_retire: (card, state) when an
+        # active card dies — a thesis that flips or expires deserves a phone
+        # buzz just as much as one that is born.
         self.notify: Callable[[SignalCard], bool] | None = None
+        self.notify_retire = None
         self._load()
 
     # ---- throttle ----------------------------------------------------------
@@ -215,6 +218,7 @@ class SignalStore:
         risk = risk or RiskState()
         key = _key(fresh.symbol, fresh.mode)
         adopted: SignalCard | None = None     # pushed after the lock is released
+        retired: tuple[SignalCard, str] | None = None   # likewise
         with self._lock:
             active = self._active.get(key)
             dirty = False
@@ -223,10 +227,12 @@ class SignalStore:
             if active is not None:
                 if now >= active.valid_until:
                     self._retire(key, active, SignalState.EXPIRED, now)
+                    retired = (active, "expired")
                     active = None
                     dirty = True
                 elif self._trend_flipped(fresh, active):
                     self._retire(key, active, SignalState.CANCELLED, now)
+                    retired = (active, "cancelled")
                     active = None
                     dirty = True
 
@@ -281,6 +287,11 @@ class SignalStore:
                              key, adopted.contract, adopted.confidence or 0)
             except Exception as exc:  # pragma: no cover - defensive
                 log.warning("signal push failed: %s", exc)
+        if retired is not None and self.notify_retire is not None:
+            try:
+                self.notify_retire(retired[0], retired[1])
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("retire push failed: %s", exc)
         return final
 
     @staticmethod

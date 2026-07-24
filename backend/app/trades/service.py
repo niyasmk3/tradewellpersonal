@@ -82,7 +82,8 @@ class TradeMonitorService:
                 return
             snap = self.state.underlying_snapshot(trade.symbol)
             spot = snap.ltp if snap else None
-            monitor.evaluate(trade, current, spot, ist_min, ist_day, stall_minutes=stall)
+            sm = min(stall, 10) if (stall and trade.mode.value == "scalp") else stall
+            monitor.evaluate(trade, current, spot, ist_min, ist_day, stall_minutes=sm)
 
         self.store.apply_monitor(updater, include_reversible=True)
         self._push_unacked_invalidations()

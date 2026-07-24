@@ -111,6 +111,11 @@ class Trade(BaseModel):
     # Where the exit price came from: "estimated" | "broker" | "simulated".
     # The UI banner must not claim "no order was placed" about a real fill.
     exit_price_source: Optional[str] = None
+    # WHY the trade ended, in the trader's own words — asked for after a
+    # broker-flat close that happened while the engine still said HOLD. Without
+    # it the expectancy-by-exit-type report can't tell a disciplined broker-side
+    # stop from a fear exit, and those two need opposite fixes.
+    exit_reason: Optional[str] = None
 
     # --- excursion, recorded by the monitor while the position is OPEN ---
     # MFE = best premium seen, MAE = worst. Because they stop updating when the

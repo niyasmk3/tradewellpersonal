@@ -92,7 +92,7 @@ export interface OptionChain {
 }
 
 // ---- Signal engine (Phase 2) ----
-export type TradingMode = "intraday" | "positional";
+export type TradingMode = "intraday" | "positional" | "scalp";
 export type Bias = "bullish" | "bearish" | "neutral";
 export type SignalAction = "buy_ce" | "buy_pe" | "wait" | "avoid";
 export type SignalState = "active" | "expired" | "cancelled" | "invalidated";
@@ -343,6 +343,8 @@ export interface Trade {
   auto_close_reason: string | null;
   /** "estimated" | "broker" | "simulated" — what the exit price actually is. */
   exit_price_source: string | null;
+  /** Why the trade ended, in your words — feeds the exit-type expectancy report. */
+  exit_reason: string | null;
   /** Quantity Zerodha's position book last reported; null = never confirmed. */
   broker_qty: number | null;
   broker_checked_at: number | null;
@@ -365,6 +367,8 @@ export interface PaperRow {
   charges: number;
   net_pnl: number;
   return_pct: number;
+  /** "honest" or "inflated (pre-honest-fill)" — pre-23-Jul fills were fictional. */
+  era?: string;
 }
 
 export interface PaperSummary {
@@ -508,6 +512,8 @@ export const api = {
   paperSummary: () => getJSON<PaperSummary>("/paper/summary"),
   reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),
   ackInvalidation: (tid: string) => postJSON<Trade>(`/trades/${tid}/ack-invalidation`, {}),
+  exitReason: (tid: string, reason: string) =>
+    postJSON<Trade>(`/trades/${tid}/exit-reason`, { reason }),
   repriceSignal: (symbol: string, mode: TradingMode) =>
     postJSON<RepriceResult>(`/signals/${symbol}/reprice?mode=${mode}`, {}),
   scoreHistory: (symbol: string, mode: TradingMode, minutes = 120) =>

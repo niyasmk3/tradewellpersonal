@@ -15,6 +15,11 @@ from pydantic import BaseModel
 class TradingMode(str, Enum):
     INTRADAY = "intraday"
     POSITIONAL = "positional"
+    # PAPER-ONLY until the paper book proves it: scalp cards cannot be
+    # journaled live or handed to Kite unless SCALP_LIVE_ENABLED is set (the
+    # gate documented to require 50+ honest-fill samples). Friction math is
+    # the whole game at this cadence — see the cost-viability veto.
+    SCALP = "scalp"
 
 
 class Regime(str, Enum):

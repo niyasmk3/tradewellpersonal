@@ -28,11 +28,17 @@ _cache: dict = {"at": 0.0, "value": None}
 
 
 def _p75_mfe_pct(trades) -> float | None:
+    from app.paper.service import HONEST_FILLS_FROM
+
     samples = []
     for t in trades:
         if t.mode.value != "intraday":
             continue
         if t.status.value != "exited" or not t.entry_premium or t.mfe_premium is None:
+            continue
+        # Pre-honest-fill entries were booked at prices the tape never printed,
+        # so MFE% measured against them is fiction — same cutoff as summarize().
+        if t.entered_at < HONEST_FILLS_FROM:
             continue
         if t.excursion_from is None or t.entered_at is None:
             continue

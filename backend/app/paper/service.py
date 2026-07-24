@@ -44,6 +44,14 @@ log = logging.getLogger("tradewell.paper")
 # right to touch real positions.
 _EXIT_TRIGGERS = {"stop", "target1", "target2", "invalidation", "time_exit", "stall"}
 
+# Fills became honest on 23-Jul-2026 (slippage + trigger-price cap). The book
+# before that filled at prices the tape never printed — the "+₹9.5k day" the
+# 22-Jul forensics restated to roughly −₹700. Those rows stay visible in the
+# ledger, flagged, but every aggregate that gates a decision (scalp go-live,
+# T1 calibration, expectancy) starts here.
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+HONEST_FILLS_FROM = int(_dt(2026, 7, 23, tzinfo=_tz(_td(hours=5, minutes=30))).timestamp())
+
 
 def _ist_minutes(now: int) -> int:
     return (now + 19800) % 86400 // 60
@@ -177,15 +185,25 @@ class PaperTradingService:
         # while the book was full, marked seen, and never reconsidered — by the
         # time a slot freed, the card was gone. Anything that can resolve on its
         # own while the card is still valid returns WITHOUT marking seen.
+        # PER MODE, unlike the live throttle's global cap, and on purpose: the
+        # paper book's product is EVIDENCE, and each mode's go-live/calibration
+        # gate needs its own sample (scalp: 50 honest fills; intraday T1: 30).
+        # With a shared cap, one positional row (no clock exit — it can hold a
+        # slot for days) plus one intraday row would block every scalp fill,
+        # and a 10-minute scalp hold outlives an intraday card's 480s validity
+        # — each mode's sample would be thinned, and selection-biased toward
+        # quiet tape, by the OTHER modes' holding times.
         open_now = [t for t in self.store.all()
-                    if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
+                    if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)
+                    and t.mode == card.mode]
         # The runtime override, not the .env default: the live engine reads the
         # same overlay, and a simulation gated tighter than the thing it is
         # meant to model reports fewer trades than the system would have taken.
         cap = int(risk_limit_store.effective(self.cfg)["max_open_positions"])
         if cap > 0 and len(open_now) >= cap:
-            log.info("paper: %s deferred — %d/%d position(s) open", card.contract, len(open_now), cap)
-            self._defer(card, f"book full ({len(open_now)}/{cap})")
+            log.info("paper: %s deferred — %d/%d %s position(s) open",
+                     card.contract, len(open_now), cap, card.mode.value)
+            self._defer(card, f"book full ({len(open_now)}/{cap} {card.mode.value})")
             return                       # NOT marked seen — a slot may free up
 
         lot = card.lot_size or 0
@@ -239,8 +257,10 @@ class PaperTradingService:
                 current = self.state.ticks.get(trade.token, {}).get("last_price")
             snap = self.state.underlying_snapshot(trade.symbol)
             spot = snap.ltp if snap else None
+            # A scalp thesis is stale in minutes, not three-quarters of an hour.
+            sm = min(stall, 10) if (stall and trade.mode.value == "scalp") else stall
             monitor.evaluate(trade, current, spot, ist_min, ist_day,
-                             stall_minutes=stall)
+                             stall_minutes=sm)
 
         self.store.apply_monitor(updater)
 
@@ -277,14 +297,22 @@ class PaperTradingService:
 
 
 def summarize(store: TradeStore) -> dict:
-    """Net-of-charges performance of the simulated book."""
+    """Net-of-charges performance of the simulated book.
+
+    Aggregates count the HONEST-FILL ERA ONLY. Rows entered before the
+    slippage/trigger-cap fix landed (23-Jul-2026 IST) are kept in the ledger
+    for the record, flagged "inflated", and excluded from every statistic —
+    a win rate propped up by fictional fills is worse than no win rate.
+    """
     closed = [t for t in store.all() if t.status is TradeStatus.EXITED and t.exit_premium]
     rows = []
+    inflated = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
         net = chg.net_pnl(t.entry_premium, t.exit_premium, qty)
         deployed = t.entry_premium * qty
-        rows.append({
+        honest = t.entered_at >= HONEST_FILLS_FROM
+        row = {
             "id": t.id, "contract": t.contract, "direction": t.direction.value,
             "entered_at": t.entered_at, "exited_at": t.exited_at,
             "entry": t.entry_premium, "exit": t.exit_premium, "quantity": qty,
@@ -293,7 +321,9 @@ def summarize(store: TradeStore) -> dict:
             "charges": chg.charges(t.entry_premium, t.exit_premium, qty, 2),
             "net_pnl": net,
             "return_pct": round(net / deployed * 100, 2) if deployed else 0.0,
-        })
+            "era": "honest" if honest else "inflated (pre-honest-fill)",
+        }
+        (rows if honest else inflated).append(row)
     wins = [r for r in rows if r["net_pnl"] > 0]
     losses = [r for r in rows if r["net_pnl"] < 0]
     net_total = round(sum(r["net_pnl"] for r in rows), 2)
@@ -317,6 +347,11 @@ def summarize(store: TradeStore) -> dict:
         },
         "note": ("Simulated. Fills carry slippage and the full Zerodha charge "
                  "schedule, but assume your order always fills at the tape — a "
-                 "real order can miss a fast move entirely."),
-        "rows": rows,
+                 "real order can miss a fast move entirely."
+                 + (f" {len(inflated)} pre-23-Jul row(s) are shown but excluded "
+                    "from every aggregate: their fills were inflated."
+                    if inflated else "")),
+        "inflated_trades": len(inflated),
+        # Inflated rows LAST, visibly flagged — history, not evidence.
+        "rows": rows + inflated,
     }

@@ -167,7 +167,12 @@ def compute_snapshot(
     dir_val = st_dir.iloc[-1] if len(st_dir) else None
 
     return IndicatorSnapshot(
-        vwap=_last(vwap(df)),
+        # VWAP is a SESSION anchor by definition. The 15m frame now spans
+        # several days (multi-day positional context), so VWAP must be computed
+        # over the newest session's rows only — a cumulative VWAP across days
+        # is a number no trader recognises. Single-session frames are unchanged
+        # (their rows are all one day).
+        vwap=_last(vwap(df[df["ts"] >= ((int(df["ts"].iloc[-1]) + 19800) // 86400) * 86400 - 19800])),
         ema9=_last(ema(close, 9)),
         ema20=_last(ema(close, 20)),
         ema50=_last(ema(close, 50)),

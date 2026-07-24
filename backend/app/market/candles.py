@@ -26,6 +26,13 @@ TIMEFRAME_SECONDS: dict[str, int] = {"1m": 60, "3m": 180, "5m": 300, "15m": 900}
 # Max candles retained per timeframe (plenty for intraday indicators).
 _MAX_CANDLES = 600
 
+# Timeframes whose buffers survive the day rollover. A multi-day swing thesis
+# lives on the 15m frame: wiping it every 09:15 forced the positional mode to
+# re-learn the trend from scratch and pushed its first honest card to ~13:15.
+# Session-scoped indicators (VWAP) handle the day boundary downstream — see
+# indicators.compute_snapshot, which anchors VWAP to the last session only.
+_MULTI_DAY_TFS = frozenset({"15m"})
+
 _IST_OFFSET = 19800  # +5:30 in seconds
 
 # NSE equity/F&O session, seconds since IST midnight: 09:15:00 – 15:30:59.
@@ -42,8 +49,10 @@ class CandleEngine:
         self._session_day: int | None = None
 
     def _reset(self, session_day: int) -> None:
-        for dq in self._candles.values():
-            dq.clear()
+        # Multi-day frames survive the rollover; everything session-scoped clears.
+        for tf, dq in self._candles.items():
+            if tf not in _MULTI_DAY_TFS:
+                dq.clear()
         self._prev_cum_vol = None
         self._session_day = session_day
 
@@ -99,17 +108,18 @@ class CandleEngine:
                     dq[-1]["volume"] += vol_delta  # late tick: keep the volume, drop the misplaced bar
 
     def seed(self, tf: str, rows: list[dict]) -> None:
-        """Preload one timeframe with historical candles for a session
-        (restart recovery / late start). Rows: ts/open/high/low/close/volume,
-        ascending, all from ONE session day. Never replaces a live buffer that
-        already holds at least as many candles."""
+        """Preload one timeframe with historical candles (restart recovery /
+        late start). Rows: ts/open/high/low/close/volume, ascending. Session
+        timeframes expect ONE session day; multi-day timeframes (15m) may span
+        several. Never replaces a live buffer that already holds at least as
+        many candles."""
         if not rows:
             return
         day = (int(rows[-1]["ts"]) + _IST_OFFSET) // 86400
         with self._lock:
             if self._session_day is None or day > self._session_day:
                 self._reset(day)
-            elif day < self._session_day:
+            elif day < self._session_day and tf not in _MULTI_DAY_TFS:
                 return  # seeding an older session than live ticks have built
             dq = self._candles.get(tf)
             if dq is None or len(rows) <= len(dq):
