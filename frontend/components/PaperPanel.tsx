@@ -77,11 +77,16 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
           have made. Negative = the floor is earning its keep. */}
       {data.hollow && (
         <div className="mt-2 rounded bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300">
-          Vetoed-card counterfactual: {data.hollow.trades} fill{data.hollow.trades === 1 ? "" : "s"},
-          net ₹{signed(data.hollow.net_pnl, 0)} (₹{signed(data.hollow.expectancy, 0)}/trade,
-          {" "}{data.hollow.win_rate}% wins). {data.hollow.expectancy < 0
-            ? "The volume/OI floor is earning its keep."
-            : "If this stays positive over 30+ fills, lower the floors."}
+          Vetoed-card counterfactual: {data.hollow.trades} closed fill
+          {data.hollow.trades === 1 ? "" : "s"}
+          {data.hollow.open ? ` (+${data.hollow.open} open)` : ""}, net ₹
+          {signed(data.hollow.net_pnl, 0)} (₹{signed(data.hollow.expectancy, 0)}/trade,{" "}
+          {data.hollow.win_rate}% wins).{" "}
+          {data.hollow.trades === 0
+            ? "No closed fills yet — verdict pending."
+            : data.hollow.expectancy < 0
+              ? "The volume/OI floor is earning its keep."
+              : "If this stays positive over 30+ fills, lower the floors."}
         </div>
       )}
 

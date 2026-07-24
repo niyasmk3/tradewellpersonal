@@ -388,7 +388,7 @@ export interface PaperSummary {
   by_reason: Record<string, number>;
   note: string;
   /** Net verdict on the cards the volume/OI floor vetoed; null until one fills. */
-  hollow?: { trades: number; net_pnl: number; expectancy: number; win_rate: number } | null;
+  hollow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
   rows: PaperRow[];
   slippage_pct: number;
   lots: number;

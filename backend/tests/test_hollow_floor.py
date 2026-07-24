@@ -123,17 +123,25 @@ def test_hollow_capacity_is_separate_from_clean():
     import tempfile
     from pathlib import Path
 
+    import app.paper.service as paper_svc
     from app.paper.service import PaperTradingService
-    from app.signals.risk_limits import risk_limit_store
+    from app.signals.risk_limits import RiskLimitStore
     from app.state import MarketState
     from app.trades.store import TradeStore
 
     with tempfile.TemporaryDirectory() as d:
         store = TradeStore(path=Path(d) / "p.json")
         state = MarketState()
-        svc = PaperTradingService(_cfg(SIGNAL_MAX_PREMIUM_AGE_S=0), state, store)
-        orig = risk_limit_store.effective
-        risk_limit_store.effective = lambda c: {**orig(c), "max_open_positions": 1}
+        cfg = _cfg(SIGNAL_MAX_PREMIUM_AGE_S=0)
+        svc = PaperTradingService(cfg, state, store)
+        # consider() reads risk_limit_store from ITS OWN module namespace, which
+        # test_paper.py rebinds at import time — so pin the cap on the exact
+        # object consider() reads, not the shared singleton, or this passes
+        # per-file but silently no-ops under a full `pytest` collection.
+        capped = RiskLimitStore(path=None)
+        capped.set_many({"max_open_positions": 1}, cfg)
+        prev = paper_svc.risk_limit_store
+        paper_svc.risk_limit_store = capped
         try:
             # Clean intraday slot is FULL.
             _dummy_clean(store)
@@ -152,7 +160,7 @@ def test_hollow_capacity_is_separate_from_clean():
                            if t.notes and t.notes.startswith("hollow:"))
             assert n_hollow == 1, n_hollow
         finally:
-            risk_limit_store.effective = orig
+            paper_svc.risk_limit_store = prev
     print("  SLOTS  -> hollow and clean books hold separate per-mode capacity")
 
 

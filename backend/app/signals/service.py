@@ -225,7 +225,8 @@ class SignalService:
                     return (f"{comp.name} {comp.points:.0f}/{comp.max:.0f} is below the "
                             f"{floor:.0f}-point floor — price is moving without "
                             "participation, and that is how exhaustion tails score. "
-                            "Paper will still take it, tagged, as counter-evidence.")
+                            "The paper book tracks it as counter-evidence where its "
+                            "own throttle allows.")
         except Exception:  # a floor bug must never stop the engine
             log.debug("hollow veto failed", exc_info=True)
         return None

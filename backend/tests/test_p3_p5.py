@@ -253,21 +253,25 @@ def test_paper_capacity_is_per_mode():
     import tempfile
     from pathlib import Path
 
+    import app.paper.service as paper_svc
     from app.paper.service import PaperTradingService
+    from app.signals.risk_limits import RiskLimitStore
     from app.state import MarketState
     from app.trades.store import TradeStore
-
-    from app.signals.risk_limits import risk_limit_store
 
     with tempfile.TemporaryDirectory() as d:
         store = TradeStore(path=Path(d) / "p.json")
         state = MarketState()
         cfg = _cfg(MAX_OPEN_POSITIONS=1, SIGNAL_MAX_PREMIUM_AGE_S=0)
         svc = PaperTradingService(cfg, state, store)
-        # The service reads the RUNTIME limits overlay, and this repo's live
-        # overlay file may raise the cap — pin it to 1 for the assertion.
-        orig_effective = risk_limit_store.effective
-        risk_limit_store.effective = lambda c: {**orig_effective(c), "max_open_positions": 1}
+        # consider() reads risk_limit_store from its OWN module namespace, which
+        # test_paper.py rebinds at import — pin the cap on the object consider()
+        # actually reads (not the shared singleton), or this no-ops under a full
+        # `pytest` collection and the assertion passes for the wrong reason.
+        capped = RiskLimitStore(path=None)
+        capped.set_many({"max_open_positions": 1}, cfg)
+        prev = paper_svc.risk_limit_store
+        paper_svc.risk_limit_store = capped
         # Fill the single INTRADAY slot.
         occupier = _card(mode=TradingMode.INTRADAY, entry=100.0, t1=127.0, cid="OCC")
         store.create_from_signal(occupier, 1, 100.0, 65)
@@ -291,7 +295,7 @@ def test_paper_capacity_is_per_mode():
             n_scalp = sum(1 for t in store.all() if t.mode.value == "scalp")
             assert n_scalp == 1, f"second scalp fill should defer, got {n_scalp}"
         finally:
-            risk_limit_store.effective = orig_effective
+            paper_svc.risk_limit_store = prev
         print("  SLOTS  -> full intraday book no longer blocks the scalp sample")
 
 

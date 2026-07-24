@@ -131,6 +131,7 @@ class TradeStore:
         product: str | None = None, disaster_pct: float | None = None,
         quick_pct: float | None = None, sl_pct: float | None = None,
         rr1: float | None = None, rr2: float | None = None,
+        notes: str | None = None,
     ) -> Trade:
         """Journal a position taken on `card`, with every level re-anchored to
         the fill.
@@ -205,6 +206,10 @@ class TradeStore:
                 quick_target=quick_target,
                 invalidation_level=card.invalidation_level, invalidation_dir=card.invalidation_dir,
                 created_at=now, entered_at=now,
+                # Set at creation (not a follow-up update) so a hollow tag is
+                # ATOMIC with the fill — an untagged hollow row would be
+                # miscounted as clean by is_hollow_row() in every aggregate.
+                notes=notes,
                 events=events,
             )
             self._trades[tid] = trade

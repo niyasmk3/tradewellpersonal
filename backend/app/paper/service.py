@@ -241,6 +241,10 @@ class PaperTradingService:
         # ladder no real trade of this fill would have carried.
         params = ladder_params(self.cfg, card.mode)
         sl_pct, rr1, rr2 = params if params else (None, None, None)
+        # The hollow tag rides the notes field, set AT FILL (not a follow-up
+        # update): if the tag ever failed to land, is_hollow_row() would read
+        # the row as clean and it would pollute every aggregate the floor's
+        # evidence separation depends on. Atomic with the row, no window.
         t = self.store.create_from_signal(
             card, lots, fill, lot, product=None,
             disaster_pct=(self.cfg.premium_disaster_pct
@@ -248,11 +252,8 @@ class PaperTradingService:
                           and self.cfg.trading_capital > 0 else None),
             quick_pct=self.cfg.quick_target_pct or None,
             sl_pct=sl_pct, rr1=rr1, rr2=rr2,
+            notes=f"hollow: {card.hollow_reason}" if card_hollow else None,
         )
-        if card_hollow:
-            # The tag rides the notes field so it survives restarts and shows
-            # in the UI; is_hollow_row() is the single reader of this format.
-            self.store.update(t.id, notes=f"hollow: {card.hollow_reason}")
         log.info("paper: entered %s%s %d lot(s) @ Rs%s (signal %s)",
                  "HOLLOW " if card_hollow else "", card.contract, lots, fill, card.id)
         return t
@@ -353,11 +354,17 @@ def summarize(store: TradeStore) -> dict:
     wins = [r for r in rows if r["net_pnl"] > 0]
     losses = [r for r in rows if r["net_pnl"] < 0]
     net_total = round(sum(r["net_pnl"] for r in rows), 2)
-    open_rows = [t for t in store.all()
-                 if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
+    # Open positions split the same way every other stat is: the clean book's
+    # count is the headline number, hollow (vetoed-card) open fills go to the
+    # hollow block. Blending them would inflate the apparent live book by the
+    # engine's own counterfactuals, next to a clean-only "Closed" count.
+    open_all = [t for t in store.all()
+                if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
+    open_hollow = [t for t in open_all if is_hollow_row(t)]
+    open_clean = [t for t in open_all if not is_hollow_row(t)]
     return {
         "trades": len(rows),
-        "open": len(open_rows),
+        "open": len(open_clean),
         "wins": len(wins),
         "losses": len(losses),
         "win_rate": round(100 * len(wins) / len(rows), 1) if rows else 0.0,
@@ -384,11 +391,13 @@ def summarize(store: TradeStore) -> dict:
         # with this ledger as the evidence. None until the first hollow fill.
         "hollow": {
             "trades": len(hollow_rows),
+            "open": len(open_hollow),
             "net_pnl": round(sum(r["net_pnl"] for r in hollow_rows), 2),
-            "expectancy": round(sum(r["net_pnl"] for r in hollow_rows) / len(hollow_rows), 2),
-            "win_rate": round(100 * sum(1 for r in hollow_rows if r["net_pnl"] > 0)
-                              / len(hollow_rows), 1),
-        } if hollow_rows else None,
+            "expectancy": (round(sum(r["net_pnl"] for r in hollow_rows) / len(hollow_rows), 2)
+                           if hollow_rows else 0.0),
+            "win_rate": (round(100 * sum(1 for r in hollow_rows if r["net_pnl"] > 0)
+                               / len(hollow_rows), 1) if hollow_rows else 0.0),
+        } if (hollow_rows or open_hollow) else None,
         # Hollow and inflated rows LAST, visibly flagged — context, not evidence.
         "rows": rows + hollow_rows + inflated,
     }
