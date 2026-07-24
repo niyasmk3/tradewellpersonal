@@ -139,13 +139,6 @@ def test_a_dead_webhook_never_raises():
     print("  NOTIFY -> unreachable webhook logs and moves on")
 
 
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-    print("\nAll notify tests passed.")
-
-
 def test_push_text_uses_the_same_pipe_and_guards():
     """Watchdog pages and armed confirmations ride the signal-alert transport:
     same webhook, same never-raise, same no-op without configuration."""
@@ -191,3 +184,143 @@ def test_post_reports_delivery_not_dispatch():
         notify.urllib.request.urlopen = real
     assert results == [True, False, False], results
     print("  NOTIFY -> on_result: 2xx True; DNS failure and 404 both False")
+
+
+def test_second_webhook_receives_signals_only():
+    """ALERT_WEBHOOK_URL_2 is the shared, signals-only topic: cards and card
+    retirements go to both topics; watchdog pages, invalidation nags and armed
+    confirmations stay on the primary. The guest follows the cards — they do
+    not get to watch YOUR positions or YOUR infrastructure."""
+    real = _capture()
+    two = {"ALERT_WEBHOOK_URL_2": "https://ntfy.example/shared"}
+    try:
+        # A card fans out to both topics — but the shared copy is SANITIZED:
+        # suggested lots are TRADING_CAPITAL worked backwards through the stop
+        # distance, so they never leave the owner's own topic.
+        assert notify.push_signal(_card(), _cfg(**two)) is True
+        _drain()
+        assert [s[0] for s in SENT] == ["https://ntfy.example/tw", "https://ntfy.example/shared"]
+        primary_body, shared_body = SENT[0][1].decode(), SENT[1][1].decode()
+        assert "Suggested 3 lot(s)" in primary_body
+        assert "Suggested" not in shared_body, shared_body
+        # Everything a follower legitimately needs survives sanitisation.
+        for needed in ("Entry", "SL", "T1", "Valid for", "23950"):
+            assert needed in shared_body, needed
+
+        # Default (private) push_text: primary only.
+        SENT.clear()
+        assert notify.push_text("TRADEWELL FEED SILENT", "180s", _cfg(**two)) is True
+        _drain()
+        assert [s[0] for s in SENT] == ["https://ntfy.example/tw"]
+
+        # Signals-audience push_text (card retirements): both.
+        SENT.clear()
+        assert notify.push_text("card expired", "window closed", _cfg(**two),
+                                audience="signals") is True
+        _drain()
+        assert [s[0] for s in SENT] == ["https://ntfy.example/tw", "https://ntfy.example/shared"]
+    finally:
+        notify.threading.Thread = real
+    print("  SHARE  -> cards + retirements fan out; private pushes stay private")
+
+
+def test_second_webhook_edge_cases():
+    real = _capture()
+    try:
+        # Same URL twice must not double-buzz the phone.
+        dup = _cfg(ALERT_WEBHOOK_URL_2="https://ntfy.example/tw")
+        assert notify.push_signal(_card(), dup) is True
+        _drain()
+        assert len(SENT) == 1, [s[0] for s in SENT]
+
+        # Secondary alone still delivers cards (a guest-only setup is legal),
+        # but private pushes have nowhere to go, and the lone shared copy is
+        # still sanitized — no primary does not mean no privacy.
+        SENT.clear()
+        only2 = _cfg(ALERT_WEBHOOK_URL="", ALERT_WEBHOOK_URL_2="https://ntfy.example/shared")
+        assert notify.push_signal(_card(), only2) is True
+        _drain()
+        assert [s[0] for s in SENT] == ["https://ntfy.example/shared"]
+        assert "Suggested" not in SENT[0][1].decode()
+        assert notify.push_text("page", "x", only2) is False
+
+        # A bad scheme on the secondary is refused without touching the primary.
+        SENT.clear()
+        bad2 = _cfg(ALERT_WEBHOOK_URL_2="file:///etc/passwd")
+        assert notify.push_signal(_card(), bad2) is True
+        _drain()
+        assert [s[0] for s in SENT] == ["https://ntfy.example/tw"]
+
+        # The min-score filter guards both topics equally.
+        SENT.clear()
+        strict = _cfg(ALERT_MIN_SCORE=95.0, ALERT_WEBHOOK_URL_2="https://ntfy.example/shared")
+        assert notify.push_signal(_card(score=90.0), strict) is False
+        assert not SENT
+    finally:
+        notify.threading.Thread = real
+    print("  SHARE  -> dedup, guest-only, bad-scheme and min-score edges hold")
+
+
+def test_retire_push_respects_min_score_and_reaches_both():
+    """A guest must never hear about the death of a card they were never shown:
+    push_retire applies the SAME score gate as the adoption push."""
+    real = _capture()
+    two = {"ALERT_WEBHOOK_URL_2": "https://ntfy.example/shared"}
+    try:
+        # Above the gate: retirement fans out to both topics.
+        assert notify.push_retire(_card(score=92.9), "expired", _cfg(**two)) is True
+        _drain()
+        assert [s[0] for s in SENT] == ["https://ntfy.example/tw", "https://ntfy.example/shared"]
+        assert b"expired" in SENT[0][1] and b"entry window closed" in SENT[0][1]
+
+        # Below the gate: the card was never announced, so neither is its death.
+        SENT.clear()
+        strict = _cfg(ALERT_MIN_SCORE=95.0, **two)
+        assert notify.push_retire(_card(score=90.0), "cancelled", strict) is False
+        assert not SENT
+
+        # A card with no score must not crash the formatter.
+        SENT.clear()
+        unscored = _card()
+        unscored.confidence = None
+        assert notify.push_retire(unscored, "cancelled", _cfg(**two)) is True
+        _drain()
+        assert b"unscored" in SENT[0][1] and b"do not chase" in SENT[0][1]
+    finally:
+        notify.threading.Thread = real
+    print("  SHARE  -> retirements gated like adoptions; unscored cards safe")
+
+
+def test_on_result_binds_to_primary_only():
+    """The armed chip vouches for YOUR phone: with a secondary configured, the
+    delivery callback must fire once, for the primary URL's outcome."""
+    real = _capture()
+    try:
+        got = []
+        cfg = _cfg(ALERT_WEBHOOK_URL_2="https://ntfy.example/shared")
+        assert notify.push_text("armed?", "test", cfg, on_result=got.append,
+                                audience="signals") is True
+        _drain()
+        callbacks = [s[3] for s in SENT]
+        assert callbacks[0] is not None and callbacks[1] is None, callbacks
+    finally:
+        notify.threading.Thread = real
+    print("  SHARE  -> on_result rides only the primary send")
+
+
+if __name__ == "__main__":
+    import sys as _sys
+
+    failed = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+            except AssertionError as e:
+                failed += 1
+                print(f"  FAIL  {name}: {e}")
+            except Exception as e:  # noqa: BLE001
+                failed += 1
+                print(f"  ERROR {name}: {type(e).__name__}: {e}")
+    print("\n" + ("ALL PASSED" if failed == 0 else f"{failed} FAILED"))
+    _sys.exit(1 if failed else 0)

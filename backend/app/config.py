@@ -111,6 +111,15 @@ class Settings(BaseSettings):
     # ntfy example:     https://ntfy.sh/<your-private-topic>
     # Telegram example: https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>
     alert_webhook_url: str = Field(default="", alias="ALERT_WEBHOOK_URL")
+    # SIGNALS-ONLY second webhook (its own ntfy topic), for sharing cards with
+    # another person WITHOUT handing over the master topic. Receives signal
+    # cards and card retirements only — never watchdog pages, invalidation
+    # nags, or armed confirmations (those describe YOUR positions and YOUR
+    # infrastructure), and shared cards are sent WITHOUT the suggested-lots
+    # line (sizing is TRADING_CAPITAL worked backwards through the stop — a
+    # guest could reconstruct your account size from it). Revoke by rotating
+    # just this topic; the primary stays untouched. Same format for both.
+    alert_webhook_url_2: str = Field(default="", alias="ALERT_WEBHOOK_URL_2")
     # "text" posts a plain body (ntfy); "json" posts {title,text,message,...}.
     alert_webhook_format: str = Field(default="text", alias="ALERT_WEBHOOK_FORMAT")
     # Only push cards at or above this score. 0 = every issued card. The default

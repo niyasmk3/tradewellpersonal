@@ -44,13 +44,21 @@ def _headline(card: SignalCard) -> str:
     return f"{side} {card.contract} · score {card.confidence:.0f}"
 
 
-def _body(card: SignalCard) -> str:
-    """Everything needed to act without opening the dashboard."""
+def _body(card: SignalCard, include_sizing: bool = True) -> str:
+    """Everything needed to act without opening the dashboard.
+
+    `include_sizing=False` builds the SHARED-topic variant: the suggested lot
+    count is TRADING_CAPITAL x RISK_PER_TRADE_PCT worked backwards through the
+    stop distance — from a few cards a guest could reconstruct the owner's
+    account size, and it doubles as the owner's actual next position size.
+    Sizing derives from the owner's money, not from the signal, so it never
+    leaves the primary topic.
+    """
     lines = [
         f"Entry ₹{card.entry_low}–{card.entry_high}",
         f"SL ₹{card.premium_sl} · T1 ₹{card.target1} · T2 ₹{card.target2}",
     ]
-    if card.suggested_lots:
+    if card.suggested_lots and include_sizing:
         lines.append(f"Suggested {card.suggested_lots} lot(s)")
     if card.underlying_invalidation:
         lines.append(card.underlying_invalidation)
@@ -85,8 +93,8 @@ def _post(url: str, data: bytes, headers: dict[str, str], on_result=None) -> Non
             log.debug("alert on_result callback failed", exc_info=True)
 
 
-def _webhook_url(cfg: Settings) -> str | None:
-    url = (cfg.alert_webhook_url or "").strip()
+def _valid_url(raw: str | None) -> str | None:
+    url = (raw or "").strip()
     if not url:
         return None
     if urllib.parse.urlparse(url).scheme.lower() not in _ALLOWED_SCHEMES:
@@ -95,17 +103,47 @@ def _webhook_url(cfg: Settings) -> str | None:
     return url
 
 
-def push_text(title: str, body: str, cfg: Settings, on_result=None) -> bool:
+def _webhook_url(cfg: Settings) -> str | None:
+    return _valid_url(cfg.alert_webhook_url)
+
+
+def _signal_urls(cfg: Settings) -> list[str]:
+    """Destinations for SIGNAL-audience pushes: the primary plus, if set, the
+    shared signals-only topic (ALERT_WEBHOOK_URL_2).
+
+    The second topic exists so another person can follow the cards without
+    holding the master topic — which also carries watchdog pages and position
+    nags that are nobody else's business, and which can only be revoked by
+    rotating the topic everyone uses. Deduped: pointing both at the same URL
+    must not double-buzz every card.
+    """
+    urls = [_webhook_url(cfg), _valid_url(getattr(cfg, "alert_webhook_url_2", ""))]
+    out: list[str] = []
+    for u in urls:
+        if u is not None and u not in out:
+            out.append(u)
+    return out
+
+
+def push_text(title: str, body: str, cfg: Settings, on_result=None,
+              audience: str = "private") -> bool:
     """Fire-and-forget plain push — watchdog pages, armed confirmations, and
     anything else that must reach the phone without being a signal card.
 
+    `audience` picks the destinations: "private" (default) goes to the primary
+    topic only — position nags and infra pages describe YOUR trading and must
+    never reach a shared topic. "signals" additionally posts to the shared
+    signals-only topic (card lifecycle news like retirements belongs to anyone
+    following the cards). `on_result` reports the PRIMARY delivery only — the
+    armed chip vouches for your own phone, not a guest's.
+
     Same transport and same non-negotiables as push_signal: never raises,
     never blocks, silently a no-op when no webhook is configured. Returns True
-    when a send was DISPATCHED; pass `on_result` to learn (from the posting
-    thread) whether the endpoint actually answered 2xx.
+    when at least one send was DISPATCHED.
     """
-    url = _webhook_url(cfg)
-    if url is None:
+    urls = _signal_urls(cfg) if audience == "signals" else \
+        [u for u in [_webhook_url(cfg)] if u is not None]
+    if not urls:
         return False
     if cfg.alert_webhook_format == "json":
         payload = json.dumps({"title": title, "text": f"{title}\n{body}",
@@ -114,43 +152,73 @@ def push_text(title: str, body: str, cfg: Settings, on_result=None) -> bool:
     else:
         payload = body.encode()
         headers = {"Content-Type": "text/plain; charset=utf-8", "Title": title}
-    threading.Thread(target=_post, args=(url, payload, headers, on_result),
-                     daemon=True, name="tradewell-alert").start()
+    primary = _webhook_url(cfg)
+    for url in urls:
+        threading.Thread(
+            target=_post,
+            args=(url, payload, headers, on_result if url == primary else None),
+            daemon=True, name="tradewell-alert").start()
     return True
 
 
+def push_retire(card: SignalCard, state: str, cfg: Settings) -> bool:
+    """Card-lifecycle push (expired / cancelled), signals audience.
+
+    Applies the SAME min-score gate as the adoption push: with ALERT_MIN_SCORE
+    set, a sub-threshold card is never pushed at birth — announcing its death
+    would tell the topic (including a shared guest) about a signal it was
+    deliberately never shown.
+    """
+    if cfg.alert_min_score > 0 and (card.confidence or 0) < cfg.alert_min_score:
+        return False
+    score = f"score {card.confidence:.0f}" if card.confidence is not None else "unscored"
+    reason = ("thesis flipped, do not chase the old plan."
+              if state == "cancelled" else "entry window closed.")
+    return push_text(
+        f"Tradewell: {card.mode.value} card {state}",
+        f"{card.contract} ({score}) is {state} — {reason}",
+        cfg, audience="signals",
+    )
+
+
 def push_signal(card: SignalCard, cfg: Settings) -> bool:
-    """Fire-and-forget push for a newly adopted card.
+    """Fire-and-forget push for a newly adopted card — to the primary topic
+    AND the shared signals-only topic when one is configured.
 
     Returns True when a send was dispatched, False when it was suppressed —
     the caller uses this only for logging, never for control flow.
     """
-    url = _webhook_url(cfg)
-    if url is None:
+    urls = _signal_urls(cfg)
+    if not urls:
         return False
     if cfg.alert_min_score > 0 and (card.confidence or 0) < cfg.alert_min_score:
         log.debug("alert suppressed: score %.1f below %.1f",
                   card.confidence or 0, cfg.alert_min_score)
         return False
 
-    title, body = _headline(card), _body(card)
-    if cfg.alert_webhook_format == "json":
-        payload = json.dumps({
-            "title": title,
-            "text": f"{title}\n{body}",
-            "message": f"{title}\n{body}",   # Telegram/Slack-friendly aliases
-            "signal_id": card.id,
-            "symbol": card.symbol,
-            "mode": card.mode.value,
-            "score": card.confidence,
-        }).encode()
-        headers = {"Content-Type": "application/json"}
-    else:
-        payload = f"{title}\n{body}".encode()
-        headers = {"Content-Type": "text/plain; charset=utf-8", "Title": title}
+    title = _headline(card)
+    primary = _webhook_url(cfg)
 
-    threading.Thread(
-        target=_post, args=(url, payload, headers), daemon=True,
-        name="tradewell-alert",
-    ).start()
+    def _payload(include_sizing: bool) -> tuple[bytes, dict[str, str]]:
+        body = _body(card, include_sizing=include_sizing)
+        if cfg.alert_webhook_format == "json":
+            return json.dumps({
+                "title": title,
+                "text": f"{title}\n{body}",
+                "message": f"{title}\n{body}",   # Telegram/Slack-friendly aliases
+                "signal_id": card.id,
+                "symbol": card.symbol,
+                "mode": card.mode.value,
+                "score": card.confidence,
+            }).encode(), {"Content-Type": "application/json"}
+        return (f"{title}\n{body}".encode(),
+                {"Content-Type": "text/plain; charset=utf-8", "Title": title})
+
+    for url in urls:
+        # Only the owner's own topic carries sizing — see _body.
+        payload, headers = _payload(include_sizing=(url == primary))
+        threading.Thread(
+            target=_post, args=(url, payload, headers), daemon=True,
+            name="tradewell-alert",
+        ).start()
     return True

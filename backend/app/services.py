@@ -211,16 +211,14 @@ class FeedController:
         # get_settings() is resolved AT PUSH TIME (not captured): combined with
         # the cache_clear above, a webhook edited into .env is live from the
         # next feed restart, never silently stale again.
-        from app.notify import push_signal, push_text
+        from app.notify import push_retire, push_signal, push_text
 
         signal_store.notify = lambda card: push_signal(card, get_settings())
-        signal_store.notify_retire = lambda card, state: push_text(
-            f"Tradewell: {card.mode.value} card {state}",
-            f"{card.contract} (score {card.confidence:.0f}) is {state} — "
-            + ("thesis flipped, do not chase the old plan." if state == "cancelled"
-               else "entry window closed."),
-            get_settings(),
-        )
+        # Card lifecycle belongs to everyone following the cards — a guest
+        # acting on a cancelled thesis is exactly the harm this push stops.
+        # push_retire carries the audience AND the min-score gate itself.
+        signal_store.notify_retire = lambda card, state: push_retire(
+            card, state, get_settings())
 
         # MACHINE-VERIFIED ARMING. "The webhook is configured" was an assumption
         # three times on 23-Jul and wrong every time. The feed proves it on
