@@ -19,7 +19,10 @@ def paper_summary() -> dict:
             status_code=409,
             detail="Paper trading is off — set PAPER_TRADING=true and restart the backend",
         )
-    out = summarize(store)
+    # The exit-A/B prices its counterfactual quick-target fill with the same
+    # slippage the simulator applies, and must know which policy is live.
+    out = summarize(store, exit_slippage_pct=cfg.paper_slippage_pct,
+                    quick_bank_live=cfg.quick_bank_single_lot)
     out["slippage_pct"] = cfg.paper_slippage_pct
     out["lots"] = cfg.paper_lots
     # Fill-rate honesty: cards the simulator was OFFERED but never filled

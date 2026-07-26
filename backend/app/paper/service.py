@@ -301,8 +301,12 @@ class PaperTradingService:
 
         # Closing happens outside apply_monitor: that call holds the store lock
         # while iterating, and closing takes the same lock to write.
+        # quick_bank joins the trigger set only when the policy flag is on —
+        # until then the exit_ab block below measures it as a counterfactual.
+        triggers = (_EXIT_TRIGGERS | {"quick_bank"}
+                    if self.cfg.quick_bank_single_lot else _EXIT_TRIGGERS)
         for trade in self.store.all():
-            reason = monitor.auto_close_trigger(trade, _EXIT_TRIGGERS)
+            reason = monitor.auto_close_trigger(trade, triggers)
             if reason is None:
                 continue
             px = trade.current_premium
@@ -317,13 +321,19 @@ class PaperTradingService:
                          trade.contract, reason, fill, net)
 
 
-def summarize(store: TradeStore) -> dict:
+def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
+              quick_bank_live: bool = False) -> dict:
     """Net-of-charges performance of the simulated book.
 
     Aggregates count the HONEST-FILL ERA ONLY. Rows entered before the
     slippage/trigger-cap fix landed (23-Jul-2026 IST) are kept in the ledger
     for the record, flagged "inflated", and excluded from every statistic —
     a win rate propped up by fictional fills is worse than no win rate.
+
+    `exit_slippage_pct` prices the exit-A/B counterfactual's quick-target fill
+    (the route passes cfg.paper_slippage_pct; the 0.0 default keeps this
+    function pure for tests). `quick_bank_live` marks that banking IS the live
+    policy, in which case the ratchet counterfactual is unobservable.
     """
     closed = [t for t in store.all() if t.status is TradeStatus.EXITED and t.exit_premium]
     rows = []
@@ -362,6 +372,78 @@ def summarize(store: TradeStore) -> dict:
                 if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
     open_hollow = [t for t in open_all if is_hollow_row(t)]
     open_clean = [t for t in open_all if not is_hollow_row(t)]
+
+    # ---- 1-lot exit-policy A/B: trailing ratchet vs bank-the-quick-target ---
+    # The two policies are IDENTICAL until the quick target trades, so the
+    # banked variant's exit is reconstructable from each recorded row: the
+    # premium observed at the t0 cross (t0_cross_premium — what a banking exit
+    # would actually fill at, gaps included) with the quick_target level as the
+    # fallback for rows recorded before that field existed. A paired comparison
+    # on the same trades — no second book, no sampling noise between arms.
+    # Single-lot rows only (a multi-lot trade already books half at the quick
+    # target), honest era, counterfactuals excluded, intraday/scalp only
+    # (banking a POSITIONAL thesis at +12% forfeits the multi-day move that
+    # mode exists to ride — the retro book's one positional runner was +60%
+    # ridden vs +12% banked; no sample size makes that trade).
+    #
+    # Rows the live quick_bank trigger itself closed are EXCLUDED from both
+    # arms: their ratchet path was never observed, so crediting their banked
+    # exit to the "ratchet" arm after the flag is turned back off would let
+    # the policy grade itself. They are counted separately for transparency.
+    ab_all = [t for t in closed
+              if t.entered_at >= HONEST_FILLS_FROM and not is_hollow_row(t)
+              and t.mode.value in ("intraday", "scalp")
+              and t.initial_quantity == t.lot_size]
+    banked_live = [t for t in ab_all if t.auto_close_reason == "quick_bank"]
+    ab_rows = [t for t in ab_all if t.auto_close_reason != "quick_bank"]
+    exit_ab = None
+    if ab_all and quick_bank_live:
+        exit_ab = {
+            "policy_live": "quick_bank", "n": len(ab_all),
+            "note": ("Banking is the live policy — the ratchet counterfactual is "
+                     "unobservable. Flip QUICK_BANK_SINGLE_LOT off to resume the A/B."),
+        }
+    elif ab_rows:
+        pairs = []
+        for t in ab_rows:
+            qty = t.initial_quantity or t.quantity
+            actual = chg.net_pnl(t.entry_premium, t.exit_premium, qty)
+            diverged = bool(t.t0_hit and t.quick_target)
+            if diverged:
+                cross = t.t0_cross_premium or t.quick_target
+                vexit = round(cross * (1 - exit_slippage_pct), 2)
+                variant = chg.net_pnl(t.entry_premium, vexit, qty)
+            else:
+                variant = actual         # below the quick target the policies agree
+            pairs.append((actual, variant, diverged))
+        n, n_div = len(pairs), sum(1 for *_, d in pairs if d)
+        a_tot = round(sum(a for a, _, _ in pairs), 2)
+        v_tot = round(sum(v for _, v, _ in pairs), 2)
+        delta = round(v_tot - a_tot, 2)
+        if n_div < 30:
+            verdict = (f"{n_div} diverged fill(s) — evidence gathering; "
+                       "decide at 30+, not before.")
+        elif delta > 0:
+            verdict = "Banking wins on this sample — consider QUICK_BANK_SINGLE_LOT=true."
+        elif delta < 0:
+            verdict = "The ratchet wins on this sample — keep it."
+        else:
+            verdict = "Dead heat on this sample."
+        exit_ab = {
+            "policy_live": "ratchet",
+            "n": n, "n_diverged": n_div,
+            # Fills the live quick_bank trigger closed during an earlier flag-on
+            # period — visible, but in neither arm (their ratchet path was
+            # never observed).
+            "banked_live_excluded": len(banked_live),
+            "ratchet": {"net_pnl": a_tot, "expectancy": round(a_tot / n, 2),
+                        "win_rate": round(100 * sum(1 for a, _, _ in pairs if a > 0) / n, 1)},
+            "quick_bank": {"net_pnl": v_tot, "expectancy": round(v_tot / n, 2),
+                           "win_rate": round(100 * sum(1 for _, v, _ in pairs if v > 0) / n, 1)},
+            "delta_net": delta,
+            "verdict": verdict,
+        }
+
     return {
         "trades": len(rows),
         "open": len(open_clean),
@@ -398,6 +480,8 @@ def summarize(store: TradeStore) -> dict:
             "win_rate": (round(100 * sum(1 for r in hollow_rows if r["net_pnl"] > 0)
                                / len(hollow_rows), 1) if hollow_rows else 0.0),
         } if (hollow_rows or open_hollow) else None,
+        # THE EXIT-POLICY A/B (see the block above): same trades, two exits.
+        "exit_ab": exit_ab,
         # Hollow and inflated rows LAST, visibly flagged — context, not evidence.
         "rows": rows + hollow_rows + inflated,
     }

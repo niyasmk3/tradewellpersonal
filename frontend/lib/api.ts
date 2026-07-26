@@ -389,6 +389,20 @@ export interface PaperSummary {
   note: string;
   /** Net verdict on the cards the volume/OI floor vetoed; null until one fills. */
   hollow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
+  /** 1-lot exit-policy A/B: trailing ratchet vs banking the whole position at
+      the quick target — a paired counterfactual on the same recorded fills. */
+  exit_ab?: {
+    policy_live: "ratchet" | "quick_bank";
+    n: number;
+    n_diverged?: number;
+    /** Fills the live banking trigger closed in an earlier flag-on period — in neither arm. */
+    banked_live_excluded?: number;
+    ratchet?: { net_pnl: number; expectancy: number; win_rate: number };
+    quick_bank?: { net_pnl: number; expectancy: number; win_rate: number };
+    delta_net?: number;
+    verdict?: string;
+    note?: string;
+  } | null;
   rows: PaperRow[];
   slippage_pct: number;
   lots: number;

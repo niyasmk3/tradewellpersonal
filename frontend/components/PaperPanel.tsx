@@ -90,6 +90,23 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* Exit-policy A/B: the same recorded fills replayed under "bank the
+          whole 1-lot position at the quick target" vs the live ratchet. */}
+      {data.exit_ab && (
+        <div className="mt-2 rounded bg-sky-500/10 px-2 py-1 text-[10px] text-sky-300">
+          {data.exit_ab.policy_live === "quick_bank" ? (
+            <>Exit policy: banking at the quick target is LIVE. {data.exit_ab.note}</>
+          ) : (
+            <>
+              Exit A/B (1-lot, {data.exit_ab.n} fills, {data.exit_ab.n_diverged} diverged):
+              ratchet ₹{signed(data.exit_ab.ratchet?.expectancy ?? 0, 0)}/trade vs
+              bank-at-QT ₹{signed(data.exit_ab.quick_bank?.expectancy ?? 0, 0)}/trade
+              (Δ ₹{signed(data.exit_ab.delta_net ?? 0, 0)} total). {data.exit_ab.verdict}
+            </>
+          )}
+        </div>
+      )}
+
       <div className="mt-2 space-y-1">
         {data.rows
           .slice()

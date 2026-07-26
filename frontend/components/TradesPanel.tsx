@@ -290,6 +290,7 @@ const EXIT_LABEL: Record<string, string> = {
   invalidation: "underlying invalidation",
   time_exit: "time exit",
   stall: "stalled — no follow-through",
+  quick_bank: "banked at quick target",
   "broker flat": "closed at broker",
 };
 

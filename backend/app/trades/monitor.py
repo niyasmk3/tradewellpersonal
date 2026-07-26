@@ -13,7 +13,8 @@ from app.trades.models import Trade, TradeAction, TradeEvent, TradeStatus
 _TRAIL_PCT = 0.12          # once in profit, trail 12% below the live premium
 _INTRADAY_EXIT_MIN = 15 * 60 + 10   # 15:10 IST — start flagging intraday exit
 
-AUTO_CLOSE_NAMES = ("stop", "target1", "target2", "invalidation", "time_exit", "stall")
+AUTO_CLOSE_NAMES = ("stop", "target1", "target2", "invalidation", "time_exit", "stall",
+                    "quick_bank")
 
 
 def auto_close_trigger(trade: Trade, enabled: set[str]) -> str | None:
@@ -45,6 +46,26 @@ def auto_close_trigger(trade: Trade, enabled: set[str]) -> str | None:
         return "time_exit"
     if "stall" in enabled and trade.recommendation is TradeAction.STALL:
         return "stall"
+    # BANK-THE-QUICK-TARGET (single lot only; enabled via QUICK_BANK_SINGLE_LOT
+    # for paper, or by adding "quick_bank" to AUTO_CLOSE_TRIGGERS for the live
+    # journal). One lot cannot book half at the quick target, so the default
+    # ratchet leaves the first +12% unbanked; this policy takes the whole
+    # position there instead. Checked BEFORE the targets: the policy's whole
+    # point is that the trade ends at the first quick-target touch, so a bar
+    # that reaches T1 too still records the quick-bank exit, not the runner it
+    # would have declined to hold. Losses (stop/invalidation) still outrank it.
+    # Strict initial_quantity: None means single-lot-at-entry is UNPROVABLE
+    # (legacy row) — after a partial, quantity==lot_size is true of a de-risked
+    # multi-lot position too, so falling back to quantity would bank the wrong
+    # trades. No proof, no policy.
+    if (
+        "quick_bank" in enabled
+        and trade.mode.value in ("intraday", "scalp")
+        and trade.quick_target
+        and px >= trade.quick_target
+        and trade.initial_quantity == trade.lot_size
+    ):
+        return "quick_bank"
     if "target2" in enabled and px >= trade.target2:
         return "target2"
     if "target1" in enabled and px >= trade.target1:
@@ -200,6 +221,11 @@ def evaluate(
         and current_premium >= trade.quick_target
     ):
         trade.t0_hit = True
+        # The premium THIS cycle — what a bank-at-the-quick-target exit would
+        # actually fill at (a gap past the target fills at the observed price,
+        # not the level). The exit_ab counterfactual reads it; without it the
+        # banking arm is systematically understated on every gap-through.
+        trade.t0_cross_premium = current_premium
         if trade.stop_loss < entry:
             trade.stop_loss = entry
         _event(trade, "quick_target",

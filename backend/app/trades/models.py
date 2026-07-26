@@ -84,6 +84,12 @@ class Trade(BaseModel):
     # disaster backstop no longer applies.
     quick_target: Optional[float] = None
     t0_hit: bool = False
+    # Premium OBSERVED on the cycle t0 latched — the fill a bank-at-the-quick-
+    # target exit would actually get (a gap past the level fills at the tape,
+    # not the level). The exit-policy A/B prices its counterfactual from this;
+    # None on rows recorded before the field existed (A/B falls back to the
+    # quick_target level, understating banking on gap-throughs — conservative).
+    t0_cross_premium: Optional[float] = None
     invalidation_level: Optional[float] = None
     invalidation_dir: Optional[str] = None
     # STICKY INVALIDATION. When the underlying first breaks the level, the

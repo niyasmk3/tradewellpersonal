@@ -70,6 +70,16 @@ class Settings(BaseSettings):
     # Refuse a scalp card when estimated round-trip charges exceed this share
     # of the gross move to Target 1 (at the suggested size). 0 disables.
     scalp_max_friction_pct: float = Field(default=0.20, ge=0, le=1, alias="SCALP_MAX_FRICTION_PCT")
+    # BANK-THE-QUICK-TARGET policy (25-Jul, prototype): on a SINGLE-LOT trade,
+    # exit the whole position at the +12%% quick target instead of going
+    # risk-free and trailing. Exists because 1 lot cannot "book half": the
+    # ratchet only locks value ABOVE the quick target, so a trade peaking near
+    # +12%% still round-trips to ~breakeven. Default OFF — the paper summary's
+    # exit_ab block measures the paired counterfactual on every recorded fill,
+    # and the ledger (30+ diverged fills), not a hunch, decides the flip. Note:
+    # the A/B is only measurable while this is off; banking ends the trade at
+    # the quick target, so the ratchet's path is never observed after a flip.
+    quick_bank_single_lot: bool = Field(default=False, alias="QUICK_BANK_SINGLE_LOT")
     # Derive intraday Target 1 from the paper book's recorded MFE distribution
     # (P75, clamped 8-27%) once >=30 clean samples exist; below that the static
     # RR_TARGET1 ladder stands. The advertised +27% T1 has never been hit
