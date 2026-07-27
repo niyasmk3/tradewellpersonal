@@ -16,6 +16,7 @@ import { ContextRail } from "./ContextRail";
 import { IndicatorPanel } from "./IndicatorPanel";
 import { OptionChainTable } from "./OptionChainTable";
 import { SignalPanel } from "./SignalPanel";
+import { MarketPulsePanel } from "./MarketPulsePanel";
 import { TradesPanel, TradeJournal, realizedSummary } from "./TradesPanel";
 import { NewsPanel } from "./NewsPanel";
 import { BacktestPanel } from "./BacktestPanel";
@@ -73,6 +74,8 @@ export function Dashboard() {
   // Simulated book — polled slowly; it only changes when a signal fires.
   const paper = usePolling(() => api.paperSummary(), 15000, []);
   const signalHist = usePolling(() => api.signalHistory(symbol), 15000, [symbol]);
+  // Live tape analytics under the score card — cheap, so polled at chart cadence.
+  const marketPulse = usePolling(() => api.pulse(symbol), 3000, [symbol]);
 
   // Trades are global (not per-symbol). `tradesTick` forces an immediate refetch after an action.
   const [tradesTick, setTradesTick] = useState(0);
@@ -264,6 +267,8 @@ export function Dashboard() {
             onReprice={() => setSigTick((n) => n + 1)}
             className="min-h-0 flex-1"
           />
+          {/* What the market is DOING while you read the score above. */}
+          <MarketPulsePanel data={marketPulse.data} error={marketPulse.error} />
         </section>
 
         {/* RAIL 2 — MARKET. Chart absorbs all leftover height (~700px vs the

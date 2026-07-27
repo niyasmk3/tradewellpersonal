@@ -352,6 +352,31 @@ export interface Trade {
   events: TradeEvent[];
 }
 
+// ---- Market pulse (live tape analytics under the score card) ----
+export interface MarketPulse {
+  symbol: string;
+  updated_at: number;
+  fut_ltp?: number;
+  day_high?: number;
+  day_low?: number;
+  /** Where the future trades inside today's range, 0 (low) to 100 (high). */
+  range_pos_pct?: number;
+  vwap?: number;
+  atr?: number;
+  /** Signed distance from VWAP in ATR units — stretch, not direction quality. */
+  vwap_dist_atr?: number;
+  /** Mean 15m volume today vs prior sessions in the frame. 1 = normal. */
+  vol_run_rate?: number;
+  /** Today's high-low as a % of the typical prior daily range. */
+  range_vs_typical_pct?: number;
+  pcr?: number;
+  pcr_first?: number;
+  /** PCR drift since Tradewell first observed it today (not the exchange open). */
+  pcr_shift?: number;
+  vix?: number;
+  vix_chg_pct?: number;
+}
+
 // ---- Paper trading (simulated; no orders) ----
 export interface PaperRow {
   id: string;
@@ -513,6 +538,7 @@ export const api = {
   signal: (symbol: string, mode: TradingMode = "intraday") =>
     getJSON<SignalResponse>(`/signals/${symbol}?mode=${mode}`),
   modes: () => getJSON<{ modes: TradingMode[] }>("/signals/modes"),
+  pulse: (symbol: string) => getJSON<MarketPulse>(`/market/${symbol}/pulse`),
 
   news: () => getJSON<NewsResponse>("/news"),
   marketMood: () => getJSON<MarketMood | null>("/market/mood"),

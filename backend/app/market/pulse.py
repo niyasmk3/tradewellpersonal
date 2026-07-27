@@ -1,0 +1,118 @@
+"""Market pulse — what the tape is DOING right now, computed per request.
+
+The score card says what the engine thinks of a setup; this says what the
+market is doing while you read it: where price sits in the day's range, how
+stretched it is from VWAP in ATR units, whether volume is running hot or thin
+against recent sessions, how much of a typical day's range is already spent,
+where put/call positioning has drifted since the session's first observation,
+and what fear (VIX) is doing intraday.
+
+Everything derives from state already in memory — the future's candle frames
+(the multi-day 15m frame supplies the "typical day" baselines), the live
+option chain, and the VIX tick. No new data sources, no persistence; every
+field is None when its inputs aren't warm yet, and the UI says so instead of
+inventing a number.
+"""
+from __future__ import annotations
+
+import logging
+import time
+
+from app.market.indicators import compute_snapshot
+from app.state import MarketState
+
+log = logging.getLogger("tradewell.market")
+
+_IST_OFFSET = 19800
+
+# First PCR observed per (IST day, symbol). Captured on the first pulse
+# computation of the day, so "shift" means "since Tradewell first looked
+# today" — that is the open only when the dashboard was up at 09:15, and the
+# UI labels it honestly as a session drift, not an official open print.
+_pcr_first: dict[tuple[int, str], float] = {}
+
+
+def _ist_day(ts: float) -> int:
+    return int(ts + _IST_OFFSET) // 86400
+
+
+def compute_pulse(state: MarketState, symbol: str) -> dict:
+    symbol = symbol.upper()
+    now = time.time()
+    out: dict = {"symbol": symbol, "updated_at": int(now)}
+
+    engine = state.engine_for_symbol(symbol)
+    meta = state.underlyings.get(symbol)
+    fut_ltp = None
+    if meta and meta.fut_token:
+        fut_ltp = state.ticks.get(meta.fut_token, {}).get("last_price")
+
+    # --- day range + VWAP stretch, from the session (3m) frame --------------
+    try:
+        df = engine.dataframe("3m") if engine else None
+        if df is not None and len(df) >= 3:
+            day_high = float(df["high"].max())
+            day_low = float(df["low"].min())
+            last = fut_ltp or float(df["close"].iloc[-1])
+            out["day_high"], out["day_low"], out["fut_ltp"] = day_high, day_low, last
+            rng = day_high - day_low
+            if rng > 0:
+                out["range_pos_pct"] = round((last - day_low) / rng * 100, 1)
+            ind = compute_snapshot(df)
+            if ind.vwap and ind.atr:
+                out["vwap"] = ind.vwap
+                out["atr"] = ind.atr
+                out["vwap_dist_atr"] = round((last - ind.vwap) / ind.atr, 2)
+    except Exception:
+        log.debug("pulse: session frame section failed", exc_info=True)
+
+    # --- run-rates vs recent sessions, from the multi-day 15m frame ---------
+    # Volume: mean per completed 15m bar today vs the same mean over prior
+    # days in the frame. Range: today's high-low vs the mean prior daily range.
+    # Both need at least one full prior session in the frame.
+    try:
+        df15 = engine.dataframe("15m") if engine else None
+        if df15 is not None and len(df15) >= 10:
+            days = df15["ts"].map(_ist_day)
+            today = _ist_day(now)
+            cur = df15[days == today]
+            prior = df15[days < today]
+            if len(cur) >= 2 and len(prior) >= 10:
+                prior_days = prior.groupby(prior["ts"].map(_ist_day))
+                # Drop the forming bar: its partial volume drags today's mean.
+                cur_done = cur.iloc[:-1] if len(cur) > 2 else cur
+                prior_vol = float(prior["volume"].mean())
+                if prior_vol > 0:
+                    out["vol_run_rate"] = round(float(cur_done["volume"].mean()) / prior_vol, 2)
+                ranges = prior_days["high"].max() - prior_days["low"].min()
+                typical = float(ranges.mean())
+                if typical > 0 and "day_high" in out:
+                    out["range_vs_typical_pct"] = round(
+                        (out["day_high"] - out["day_low"]) / typical * 100, 1)
+    except Exception:
+        log.debug("pulse: 15m baseline section failed", exc_info=True)
+
+    # --- put/call positioning drift -----------------------------------------
+    try:
+        chain = state.get_option_chain(f"{symbol}:nearest")
+        if chain and chain.pcr is not None:
+            out["pcr"] = chain.pcr
+            key = (_ist_day(now), symbol)
+            first = _pcr_first.setdefault(key, chain.pcr)
+            out["pcr_first"] = first
+            out["pcr_shift"] = round(chain.pcr - first, 2)
+    except Exception:
+        log.debug("pulse: pcr section failed", exc_info=True)
+
+    # --- VIX intraday --------------------------------------------------------
+    try:
+        vix = state.ticks.get(state.vix_token, {}).get("last_price") if state.vix_token else None
+        if vix:
+            out["vix"] = vix
+            closes = state.vix_daily_closes
+            if closes:
+                out["vix_chg_pct"] = round((vix - closes[-1]) / closes[-1] * 100, 2)
+    except Exception:
+        log.debug("pulse: vix section failed", exc_info=True)
+
+    return out

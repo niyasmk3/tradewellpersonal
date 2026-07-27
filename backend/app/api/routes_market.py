@@ -54,6 +54,15 @@ def candles(symbol: str, tf: str = Query("3m"), limit: int = Query(240, le=600))
     return engine.snapshot(tf, limit=limit)
 
 
+@router.get("/{symbol}/pulse")
+def pulse(symbol: str) -> dict:
+    """Live tape analytics under the score card — see app/market/pulse.py."""
+    _require_symbol(symbol)
+    from app.market.pulse import compute_pulse
+
+    return compute_pulse(market_state, symbol)
+
+
 @router.get("/{symbol}/indicators", response_model=IndicatorSnapshot)
 def indicators(symbol: str, tf: str = Query("3m")) -> IndicatorSnapshot:
     _require_symbol(symbol)
