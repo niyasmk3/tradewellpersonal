@@ -404,6 +404,20 @@ class FeedController:
                 log.warning("trade loop error: %s", exc)
             await asyncio.sleep(interval)
 
+    @staticmethod
+    def _news_hours() -> bool:
+        """Trading days 07:00-17:00 IST (holiday-aware via the shared calendar).
+        The sentiment window is 6h, so off-session headlines can't affect a
+        signal anyway — no reason to bill Claude for them.
+
+        Restored 27-Jul: the 24-Jul "Guard the guards" commit deleted this
+        while editing neighbouring code but left the _news_loop call — every
+        news cycle since crashed with AttributeError, caught and logged by the
+        loop's own handler, so the tab silently froze at Friday 16:57.
+        """
+        from app.market import calendar as mcal
+        return mcal.in_news_hours()
+
     async def _news_loop(self, interval: float) -> None:
         while True:
             try:

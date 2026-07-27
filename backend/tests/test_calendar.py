@@ -74,6 +74,18 @@ def test_monthly_rollover_fallback():
     assert _nearest_monthly_expiry(options, date(2026, 7, 28)) == date(2026, 7, 28)
 
 
+def test_news_loop_dependencies_exist():
+    """The 24-Jul regression: FeedController._news_hours was deleted while its
+    _news_loop call survived, and every news cycle since crashed inside the
+    loop's own error handler — a silent freeze, not a visible failure."""
+    from app.services import FeedController
+
+    assert callable(getattr(FeedController, "_news_hours", None)), \
+        "_news_hours missing — the news loop will AttributeError every cycle"
+    assert isinstance(FeedController._news_hours(), bool)
+    print("  NEWSDEP-> _news_hours exists and answers; the loop cannot crash on it")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
