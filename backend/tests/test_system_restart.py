@@ -68,6 +68,15 @@ def test_failed_exec_leaves_the_process_alive():
     print("  SAFE   -> a failed exec logs and returns; the process survives")
 
 
+def test_boot_id_is_stable_within_a_process():
+    """The dashboard reloads only when this CHANGES — so within one process it
+    must never change, and it must exist."""
+    a = rs.boot()
+    b = rs.boot()
+    assert a["boot_id"] and a["boot_id"] == b["boot_id"]
+    print("  BOOTID -> stable within a process; restart response carries it")
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

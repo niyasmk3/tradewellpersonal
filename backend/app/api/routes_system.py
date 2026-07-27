@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -31,6 +32,13 @@ log = logging.getLogger("tradewell.system")
 router = APIRouter(prefix="/system", tags=["system"])
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+# Stamped at IMPORT — a fresh interpreter gets a fresh id even though execv
+# keeps the PID. This is the only reliable "did the restart actually happen"
+# signal: same PID by design, and /auth/status looks identical either way. The
+# dashboard reloads only after seeing a DIFFERENT id, so a silently failed
+# exec can never masquerade as a successful restart.
+_BOOT_ID = uuid.uuid4().hex[:12]
 
 
 def _relaunch_argv() -> list[str]:
@@ -60,20 +68,33 @@ def _exec_self(argv: list[str], delay_s: float = 0.8) -> None:  # pragma: no cov
         log.exception("self-restart failed — process continues unchanged")
 
 
+@router.get("/boot")
+def boot() -> dict:
+    """This process generation's identity — changes only on a real restart."""
+    return {"boot_id": _BOOT_ID}
+
+
 @router.post("/restart")
 def restart_backend() -> dict:
     """Replace the backend process with a fresh one running the code on disk.
 
     Responds first, execs ~0.8s later from a daemon thread (execv from a
     non-main thread replaces the whole process on POSIX). The frontend keeps
-    running and its polls recover once the new process binds the port.
+    running and reloads only once /system/boot reports a NEW boot id.
+
+    Timing honesty: the fresh process does not bind the port until its lifespan
+    finishes, and the lifespan awaits the feed start — including up to a dozen
+    sequential Kite historical fetches for candle re-seeding. Typical is
+    10-30s; a degraded Kite/network day (exactly when this button gets used)
+    can take a couple of minutes. The caller's deadline must budget for that.
     """
     argv = _relaunch_argv()
     threading.Thread(target=_exec_self, args=(argv,), daemon=True,
                      name="tradewell-restart").start()
     return {
         "restarting": True,
-        "note": ("Backend replacing itself — back in ~10-20s on the current "
-                 "code. Same-day Kite token is reloaded; if it expired you "
-                 "will see the login gate."),
+        "boot_id": _BOOT_ID,
+        "note": ("Backend replacing itself — typically back in 10-30s (longer "
+                 "if Kite data re-seeding is slow). Same-day Kite token is "
+                 "reloaded; if it expired you will see the login gate."),
     }

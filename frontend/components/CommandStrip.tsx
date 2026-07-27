@@ -14,24 +14,28 @@ import { AlertToneMenu } from "./AlertToneMenu";
  */
 function RestartBackendButton() {
   const [state, setState] = useState<"idle" | "waiting">("idle");
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
   const click = async () => {
     if (
       !window.confirm(
-        "Restart the backend process?\n\nThe tick feed drops for ~10-20 seconds while it " +
-          "relaunches on the current code. If today's Kite login hasn't been done yet, " +
-          "the login gate appears. Tradewell places no orders either way.",
+        "Restart the backend process?\n\nThe tick feed drops while it relaunches on the " +
+          "current code — typically 10-30 seconds, up to a couple of minutes if Kite data " +
+          "re-seeding is slow. If today's Kite login hasn't been done yet, the login gate " +
+          "appears. Tradewell places no orders either way.",
       )
     )
       return;
     setState("waiting");
+
+    // The boot id is the ONLY honest success signal: the restart keeps the
+    // PID, and /auth/status looks identical from the old and new process. We
+    // reload solely on seeing a DIFFERENT id — a silently failed exec can
+    // never masquerade as a restart.
+    let before: string | null = null;
     try {
-      await api.restartBackend();
-    } catch (e) {
-      // Two very different failures: the old process dying before the response
-      // finishes (success — proceed to poll), vs a clean 404 because the
-      // RUNNING backend predates this endpoint (this code hot-reloads into the
-      // dev frontend before the backend has been restarted onto it once).
-      if (e instanceof Error && /404|not found/i.test(e.message)) {
+      const res = await fetch(`${API_BASE}/system/boot`, { cache: "no-store" });
+      if (res.status === 404) {
         setState("idle");
         alert(
           "The running backend predates this button. Restart it once from the " +
@@ -39,31 +43,65 @@ function RestartBackendButton() {
         );
         return;
       }
+      if (res.ok) before = (await res.json()).boot_id ?? null;
+    } catch {
+      /* backend unreachable — the POST below will surface it */
     }
-    const deadline = Date.now() + 60_000;
-    // First give the OLD process time to actually exit, or an immediate poll
-    // hits it and we reload straight back into the stale backend.
-    await new Promise((r) => setTimeout(r, 3000));
+
+    try {
+      await api.restartBackend();
+    } catch (e) {
+      // A network drop can be the old process dying mid-response (fine —
+      // proceed to watch the boot id). A CLEAN HTTP error is a real refusal
+      // and must be surfaced, not swallowed as fake success.
+      const msg = e instanceof Error ? e.message : "";
+      const looksLikeHttpError = /\d{3}|not found|internal|error/i.test(msg);
+      if (looksLikeHttpError && !/failed to fetch|networkerror|load failed/i.test(msg)) {
+        setState("idle");
+        alert(`Restart request failed: ${msg}`);
+        return;
+      }
+    }
+
+    // Generous deadline on purpose: the fresh process doesn't bind the port
+    // until candle re-seeding finishes, which on a degraded Kite day (exactly
+    // when this button gets used) can take a couple of minutes.
+    const deadline = Date.now() + 180_000;
+    await sleep(3000);
+    let sawOldAfterGrace = false;
     while (Date.now() < deadline) {
       try {
-        const res = await fetch(`${API_BASE}/auth/status`, { cache: "no-store" });
+        const res = await fetch(`${API_BASE}/system/boot`, { cache: "no-store" });
         if (res.ok) {
-          window.location.reload();
-          return;
+          const id = (await res.json()).boot_id ?? null;
+          if (id && id !== before) {
+            window.location.reload();
+            return;
+          }
+          // Same id well after the exec should have happened (0.8s + margin):
+          // the old process is still alive — the exec likely failed.
+          if (Date.now() - (deadline - 180_000) > 10_000) sawOldAfterGrace = true;
         }
       } catch {
-        /* still rebinding */
+        /* port unbound — the new process is still starting; keep waiting */
       }
-      await new Promise((r) => setTimeout(r, 2000));
+      await sleep(2000);
     }
     setState("idle");
-    alert("Backend did not come back within 60s — check the terminal running start.sh.");
+    alert(
+      sawOldAfterGrace
+        ? "The restart did not take effect — the old process is still running. " +
+            "Check logs/backend.log for a 'self-restart failed' line."
+        : "Still starting after 3 minutes — data re-seeding may be very slow. " +
+            "Give it another minute, then check the terminal running start.sh.",
+    );
   };
+
   return (
     <button
       onClick={click}
       disabled={state === "waiting"}
-      title="Restart the backend process — picks up deployed code and revives a dead ticker (restart feed cannot). ~10-20s of feed downtime."
+      title="Restart the backend process — picks up deployed code and revives a dead ticker (restart feed cannot). Feed down typically 10-30s while it relaunches."
       className="rounded-md border border-edge bg-panel px-2 py-0.5 text-xs text-muted transition hover:text-white disabled:opacity-50"
     >
       {state === "waiting" ? "restarting…" : "⟳ backend"}
