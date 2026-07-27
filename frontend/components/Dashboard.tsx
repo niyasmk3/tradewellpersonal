@@ -19,6 +19,7 @@ import { SignalPanel } from "./SignalPanel";
 import { TradesPanel, TradeJournal, realizedSummary } from "./TradesPanel";
 import { NewsPanel } from "./NewsPanel";
 import { BacktestPanel } from "./BacktestPanel";
+import { QtyCalculator } from "./QtyCalculator";
 import { RiskSettings } from "./RiskSettings";
 import { PaperPanel } from "./PaperPanel";
 
@@ -180,6 +181,8 @@ export function Dashboard() {
     ...(symbol === "NIFTY"
       ? [{ key: "backtest", label: "Backtest", node: <BacktestPanel symbol={symbol} /> }]
       : []),
+    // Lot/qty affordability calculator (the "tradewell Qty.xlsx" sheet, live).
+    { key: "calc", label: "Calc", node: <QtyCalculator /> },
   ];
 
   return (

@@ -4,9 +4,17 @@
     {
       "name": "frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000,
       "cwd": "frontend"
+    },
+    {
+      "name": "frontend-attached",
+      "url": "http://localhost:3000",
+      "port": 3000
     }
   ]
 }
