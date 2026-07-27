@@ -116,6 +116,71 @@ def signal_history(symbol: str, mode: str = Query("all")) -> dict:
     return {"rows": rows, "count": len(rows)}
 
 
+@router.get("/{symbol}/archive")
+def signal_archive_history(symbol: str, mode: str = Query("all"),
+                           days: int = Query(7, ge=1, le=90)) -> dict:
+    """Multi-day card history from the append-only archive.
+
+    The in-memory store is deliberately day-scoped (yesterday's zones must
+    never serve as live), so this reads signals/archive.py instead — every
+    adoption and retirement since the archive shipped, plus whatever the
+    boot-merge harvested. Today's cards are merged from the LIVE store by id
+    (fresher state wins), and the same effective-state / taken-join rules as
+    /history apply, so the tab renders both sources identically.
+    """
+    import time as _time
+
+    from app.signals.archive import signal_archive
+    from app.signals.store import signal_store
+    from app.trades.store import trade_store
+
+    cfg = get_settings()
+    if symbol.upper() not in cfg.signal_symbols:
+        raise HTTPException(status_code=404, detail=f"Signals not enabled for {symbol}")
+    modes = cfg.signal_mode_list if mode == "all" else [_resolve(symbol, mode).value]
+
+    cards = {c.id: c for c in signal_archive.load(days=days, symbol=symbol.upper(),
+                                                  modes=modes)}
+    for m in modes:                       # live store wins: freshest state
+        try:
+            for c in signal_store.history(symbol.upper(), TradingMode(m)):
+                cards[c.id] = c
+        except ValueError:
+            continue
+
+    live_ids = {t.signal_id for t in trade_store.all() if t.signal_id}
+    paper_ids: set[str] = set()
+    try:
+        from app.services import feed
+
+        if getattr(feed, "paper_store", None) is not None:
+            paper_ids = {t.signal_id for t in feed.paper_store.all() if t.signal_id}
+    except Exception:
+        pass                              # paper trading off — column stays empty
+
+    now = int(_time.time())
+    rows = []
+    for c in cards.values():
+        state = c.state.value
+        if state == "active" and now >= c.valid_until:
+            state = "expired"
+        taken = ("both" if c.id in live_ids and c.id in paper_ids
+                 else "live" if c.id in live_ids
+                 else "paper" if c.id in paper_ids
+                 else None)
+        rows.append({
+            "id": c.id, "mode": c.mode.value, "direction": c.direction.value,
+            "contract": c.contract, "score": c.confidence,
+            "state": state, "taken": taken,
+            "created_at": c.created_at, "valid_until": c.valid_until,
+            "entry_low": c.entry_low, "entry_high": c.entry_high,
+            "premium_sl": c.premium_sl, "target1": c.target1, "target2": c.target2,
+            "ref_entry_premium": c.ref_entry_premium,
+        })
+    rows.sort(key=lambda r: r["created_at"], reverse=True)
+    return {"rows": rows, "count": len(rows), "days": days}
+
+
 @router.get("/{symbol}", response_model=SignalResponse)
 def current_signal(symbol: str, mode: str = Query("intraday")) -> SignalResponse:
     # Import here to avoid a circular import at module load.

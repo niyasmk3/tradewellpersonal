@@ -1,7 +1,7 @@
 "use client";
 
 import { SignalHistoryRow } from "@/lib/api";
-import { istDateTime, istDayKey, istTime } from "@/lib/format";
+import { istDateTime, istDayKey, istDayLabel, istTime } from "@/lib/format";
 
 /**
  * Every card the engine issued lately — the record of what came and went.
@@ -67,8 +67,24 @@ export function SignalHistoryPanel({
         )}
       </div>
       <div className="space-y-1">
-        {data.rows.map((r) => (
-          <div key={r.id} className="rounded border border-edge/60 bg-panel2 px-2 py-1">
+        {data.rows.map((r, i) => (
+          <div key={r.id}>
+            {/* Day separator: a week of cards must read as days, not one wall.
+                Rows arrive newest-first, so a header goes wherever the IST
+                day changes from the previous row. */}
+            {(i === 0 || istDayKey(r.created_at) !== istDayKey(data.rows[i - 1].created_at)) && (
+              <div className="mb-1 mt-2 flex items-center gap-2 first:mt-0">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-white/70">
+                  {istDayLabel(r.created_at)}
+                </span>
+                <span className="h-px flex-1 bg-edge" />
+                <span className="text-[9px] text-muted">
+                  {data.rows.filter((x) => istDayKey(x.created_at) === istDayKey(r.created_at)).length}{" "}
+                  card(s)
+                </span>
+              </div>
+            )}
+            <div className="rounded border border-edge/60 bg-panel2 px-2 py-1">
             <div className="flex items-center gap-2">
               <span className={`tag ${r.direction === "CE" ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
                 {r.direction}
@@ -101,12 +117,15 @@ export function SignalHistoryPanel({
               <span>SL ₹{r.premium_sl}</span>
               <span>T1 ₹{r.target1}</span>
             </div>
+            </div>
           </div>
         ))}
       </div>
       <div className="mt-2 text-[10px] text-muted">
-        Last 50 cards per mode. &ldquo;not taken&rdquo; means neither the journal nor the
-        paper book has a trade on that card.
+        Last 7 days from the signal archive (older cards from before the archive
+        shipped on 27-Jul are gone — only 24-Jul was recoverable). &ldquo;not
+        taken&rdquo; means neither the journal nor the paper book has a trade on
+        that card.
       </div>
     </div>
   );

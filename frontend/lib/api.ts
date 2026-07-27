@@ -540,8 +540,19 @@ export const api = {
     getJSON<{ points: ScoreHistoryPoint[]; count: number }>(
       `/signals/${symbol}/score-history?mode=${mode}&minutes=${minutes}`,
     ),
-  signalHistory: (symbol: string) =>
-    getJSON<{ rows: SignalHistoryRow[]; count: number }>(`/signals/${symbol}/history?mode=all`),
+  signalHistory: async (symbol: string, days = 7) => {
+    try {
+      return await getJSON<{ rows: SignalHistoryRow[]; count: number }>(
+        `/signals/${symbol}/archive?mode=all&days=${days}`,
+      );
+    } catch {
+      // Backend predates the archive endpoint (deploy lands at its next
+      // restart) — degrade to the day-scoped history instead of erroring.
+      return await getJSON<{ rows: SignalHistoryRow[]; count: number }>(
+        `/signals/${symbol}/history?mode=all`,
+      );
+    }
+  },
   exitTrade: (id: string, exit_premium?: number) =>
     postJSON<Trade>(`/trades/${id}/exit`, { exit_premium }),
   partialTrade: (id: string, exit_premium?: number, fraction = 0.5) =>

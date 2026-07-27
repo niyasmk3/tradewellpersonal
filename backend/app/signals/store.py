@@ -89,6 +89,11 @@ class SignalStore:
         # buzz just as much as one that is born.
         self.notify: Callable[[SignalCard], bool] | None = None
         self.notify_retire = None
+        # Append-only history sink (signals/archive.py). Attached to the module
+        # SINGLETON only — this store is deliberately day-scoped, so without
+        # the archive every restart erased yesterday from the history tab.
+        # None everywhere else: tests must not write synthetic cards there.
+        self.archive = None
         self._load()
 
     # ---- throttle ----------------------------------------------------------
@@ -254,6 +259,13 @@ class SignalStore:
                 self.notify_retire(retired[0], retired[1])
             except Exception as exc:  # pragma: no cover - defensive
                 log.warning("retire push failed: %s", exc)
+        # Permanent history: adoption snapshot, then the retirement supersedes
+        # it (readers keep the last line per id). record() never raises.
+        if self.archive is not None:
+            if adopted is not None:
+                self.archive.record(adopted)
+            if retired is not None:
+                self.archive.record(retired[0])
         return final
 
     @staticmethod
@@ -288,7 +300,9 @@ class SignalStore:
                 resp.no_trade_reason = reason
                 resp.evaluated_at = now
             self._save_locked()
-            return True
+        if self.archive is not None:      # outside the lock, like the pushes
+            self.archive.record(card)
+        return True
 
     def reprice_active(
         self, symbol: str, mode: TradingMode, new_entry: float, ladder: dict, now: int,
@@ -346,7 +360,15 @@ class SignalStore:
             if resp is not None:
                 resp.evaluated_at = now
             self._save_locked()
-            return card.model_copy(deep=True)
+            snapshot = card.model_copy(deep=True)
+        # Archive the repriced ladder (outside the lock, like the other
+        # events): without this, a process that dies before the card's
+        # natural retirement leaves the archive holding the STALE pre-reprice
+        # levels forever — the day-scoped store file won't survive to correct
+        # it after the IST rollover.
+        if self.archive is not None:
+            self.archive.record(snapshot)
+        return snapshot
 
     def latest(self, symbol: str, mode: TradingMode) -> SignalResponse | None:
         # Deep-copy: the stored response references the live active card, whose
@@ -361,6 +383,8 @@ class SignalStore:
 
 
 signal_store = SignalStore(store_path=_STORE_PATH)
+from app.signals.archive import signal_archive as _signal_archive  # noqa: E402
+signal_store.archive = _signal_archive
 
 # SHADOW STORE for hollow cards — setups the volume/OI participation floor
 # vetoed from the live feed. They get the same stabilisation (one active per

@@ -39,6 +39,13 @@ log = logging.getLogger("tradewell")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Harvest .signals.json into the append-only archive at APP BOOT — never
+    # at module import. An import-time merge meant collecting the test suite
+    # wrote the live archive file (the .signals.json-pollution lesson again).
+    from app.signals.archive import signal_archive
+
+    signal_archive.merge_store_file()
+
     broadcaster = asyncio.create_task(broadcaster_loop())
     supervisor = asyncio.create_task(feed.supervisor())
     # App-lifetime, NOT feed-lifetime: the watchdog's whole job is to page when
