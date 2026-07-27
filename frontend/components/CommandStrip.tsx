@@ -1,9 +1,75 @@
 "use client";
 
 import { useState } from "react";
-import { MarketStatus, TradingMode } from "@/lib/api";
+import { API_BASE, MarketStatus, TradingMode, api } from "@/lib/api";
 import { signed } from "@/lib/format";
 import { AlertToneMenu } from "./AlertToneMenu";
+
+/**
+ * Full backend PROCESS restart from the dashboard — the recovery for a stale
+ * process (old code after a deploy, e.g. Monday open still on Friday's
+ * snapshot) or a dead ticker socket, neither of which "restart feed" can fix.
+ * Confirms first, then polls until the fresh process answers and reloads the
+ * page so every panel resumes from clean state.
+ */
+function RestartBackendButton() {
+  const [state, setState] = useState<"idle" | "waiting">("idle");
+  const click = async () => {
+    if (
+      !window.confirm(
+        "Restart the backend process?\n\nThe tick feed drops for ~10-20 seconds while it " +
+          "relaunches on the current code. If today's Kite login hasn't been done yet, " +
+          "the login gate appears. Tradewell places no orders either way.",
+      )
+    )
+      return;
+    setState("waiting");
+    try {
+      await api.restartBackend();
+    } catch (e) {
+      // Two very different failures: the old process dying before the response
+      // finishes (success — proceed to poll), vs a clean 404 because the
+      // RUNNING backend predates this endpoint (this code hot-reloads into the
+      // dev frontend before the backend has been restarted onto it once).
+      if (e instanceof Error && /404|not found/i.test(e.message)) {
+        setState("idle");
+        alert(
+          "The running backend predates this button. Restart it once from the " +
+            "terminal (./start.sh, after market close) — from then on the button works.",
+        );
+        return;
+      }
+    }
+    const deadline = Date.now() + 60_000;
+    // First give the OLD process time to actually exit, or an immediate poll
+    // hits it and we reload straight back into the stale backend.
+    await new Promise((r) => setTimeout(r, 3000));
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`${API_BASE}/auth/status`, { cache: "no-store" });
+        if (res.ok) {
+          window.location.reload();
+          return;
+        }
+      } catch {
+        /* still rebinding */
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    setState("idle");
+    alert("Backend did not come back within 60s — check the terminal running start.sh.");
+  };
+  return (
+    <button
+      onClick={click}
+      disabled={state === "waiting"}
+      title="Restart the backend process — picks up deployed code and revives a dead ticker (restart feed cannot). ~10-20s of feed downtime."
+      className="rounded-md border border-edge bg-panel px-2 py-0.5 text-xs text-muted transition hover:text-white disabled:opacity-50"
+    >
+      {state === "waiting" ? "restarting…" : "⟳ backend"}
+    </button>
+  );
+}
 
 function ScoreMeter({ label, value, tone }: { label: string; value: number; tone: "bull" | "bear" }) {
   const bar = tone === "bull" ? "bg-bull" : "bg-bear";
@@ -168,6 +234,7 @@ export function CommandStrip({
             ⚙
           </button>
         )}
+        <RestartBackendButton />
       </span>
     </div>
   );

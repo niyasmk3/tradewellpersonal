@@ -17,6 +17,7 @@ from app.api import (
     routes_kite_basket,
     routes_paper,
     routes_settings,
+    routes_system,
     routes_market,
     routes_news,
     routes_options,
@@ -83,6 +84,7 @@ app.add_middleware(
 )
 
 app.include_router(routes_auth.router)
+app.include_router(routes_system.router)
 app.include_router(routes_market.router)
 app.include_router(routes_options.router)
 app.include_router(routes_signals.router)

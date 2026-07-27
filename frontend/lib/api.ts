@@ -527,6 +527,8 @@ export const api = {
       symbol, mode, lots, entry_premium, signal_id, acknowledge_oversize,
     }),
   restartFeed: () => postJSON<AuthStatus>("/auth/feed/restart", {}),
+  /** Full backend PROCESS restart (fresh code + fresh ticker) — not just the feed. */
+  restartBackend: () => postJSON<{ restarting: boolean; note: string }>("/system/restart", {}),
   paperSummary: () => getJSON<PaperSummary>("/paper/summary"),
   reopenTrade: (tid: string) => postJSON<Trade>(`/trades/${tid}/reopen`, {}),
   ackInvalidation: (tid: string) => postJSON<Trade>(`/trades/${tid}/ack-invalidation`, {}),
