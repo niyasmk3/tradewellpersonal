@@ -115,4 +115,69 @@ def compute_pulse(state: MarketState, symbol: str) -> dict:
     except Exception:
         log.debug("pulse: vix section failed", exc_info=True)
 
+    story = narrate(out)
+    if story:
+        out["story"] = story
     return out
+
+
+def narrate(p: dict) -> str:
+    """The pulse in plain language — deterministic, no model call.
+
+    Fixed rules over the fields above, so the text can never say something the
+    numbers don't, costs nothing at a 3-second cadence, and is unit-testable.
+    Sentences are skipped when their inputs are missing; at most four are
+    composed so it reads like a glance, not a report. Describes the MARKET,
+    never recommends a trade — the score card above owns that judgement.
+    """
+    parts: list[str] = []
+
+    pos, used = p.get("range_pos_pct"), p.get("range_vs_typical_pct")
+    if pos is not None:
+        where = ("near the top of today's range" if pos >= 70
+                 else "near the bottom of today's range" if pos <= 30
+                 else "in the middle of today's range")
+        s = f"The market is trading {where}"
+        if used is not None:
+            if used >= 90:
+                s += ", and it has already covered a full day's worth of movement — further big moves have to come from fresh energy"
+            elif used >= 60:
+                s += f", with a good chunk of a normal day's travel ({used:.0f}%) already done"
+            else:
+                s += ", and the day still has plenty of room to move"
+        parts.append(s + ".")
+
+    stretch = p.get("vwap_dist_atr")
+    if stretch is not None:
+        if abs(stretch) < 0.5:
+            parts.append("Price is hugging its day-average (VWAP) — no real stretch either way.")
+        elif abs(stretch) < 2:
+            side = "above" if stretch > 0 else "below"
+            who = "buyers" if stretch > 0 else "sellers"
+            parts.append(f"Price is holding {side} the day's average price, so {who} have had the upper hand so far.")
+        else:
+            side = "above" if stretch > 0 else "below"
+            parts.append(f"Price is stretched {abs(stretch):.1f} ATRs {side} its average — like the end of a rubber band, chasing from here is expensive.")
+
+    rr = p.get("vol_run_rate")
+    if rr is not None:
+        if rr >= 1.3:
+            parts.append(f"Trading activity is about {rr:.1f}x a normal session — these moves have real participation behind them.")
+        elif rr <= 0.7:
+            parts.append(f"Trading is thin ({rr:.1f}x normal) — moves can reverse easily without follow-through.")
+
+    shift = p.get("pcr_shift")
+    if shift is not None:
+        if shift >= 0.05:
+            parts.append("Option sellers have been building put positions under the market since the morning — usually a sign they expect it to hold up.")
+        elif shift <= -0.05:
+            parts.append("Put support has been unwinding since the morning — option sellers are less willing to stand under the market.")
+
+    chg = p.get("vix_chg_pct")
+    if chg is not None:
+        if chg >= 3:
+            parts.append(f"The fear index is up {chg:.1f}% today, inflating every option premium.")
+        elif chg <= -3:
+            parts.append(f"Fear is draining out (VIX {chg:.1f}%), so premiums are getting cheaper — easier to buy, quicker to decay.")
+
+    return " ".join(parts[:4])

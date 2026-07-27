@@ -375,6 +375,8 @@ export interface MarketPulse {
   pcr_shift?: number;
   vix?: number;
   vix_chg_pct?: number;
+  /** Plain-language read of the numbers above — deterministic rules, no AI. */
+  story?: string;
 }
 
 // ---- Paper trading (simulated; no orders) ----

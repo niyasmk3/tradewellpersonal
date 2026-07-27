@@ -89,6 +89,13 @@ export function MarketPulsePanel({ data, error }: { data: MarketPulse | null; er
           title="India VIX vs its last daily close. Spiking fear inflates every premium you buy — and the one you're already holding."
         />
       </div>
+      {/* The same numbers in plain language — composed by fixed rules on the
+          backend from the fields above, so it can never say what they don't. */}
+      {d?.story && (
+        <p className="mt-2 border-t border-edge/60 pt-1.5 text-[11px] leading-relaxed text-white/70">
+          {d.story}
+        </p>
+      )}
     </div>
   );
 }

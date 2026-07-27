@@ -102,6 +102,30 @@ def test_pcr_shift_anchors_to_first_observation():
     print("  PCRDRF -> anchored at first observation (0.90), drift +0.12")
 
 
+def test_narrative_speaks_the_numbers():
+    """The story must be composed from the SAME fields the grid shows — and
+    say nothing when the inputs are cold."""
+    _pcr_first.clear()
+    s = _state()
+    p = compute_pulse(s, "NIFTY")
+    story = p.get("story", "")
+    assert story, "warm state must narrate"
+    # Fixture: ~76% of range -> "near the top"; 2x volume -> participation.
+    assert "near the top of today's range" in story, story
+    assert "2.0x a normal session" in story, story
+    assert "fear index is up" in story.lower() or "VIX" in story, story
+    # Advisory tone: describes the market, never instructs a trade.
+    for banned in ("buy ", "sell ", "enter ", "exit "):
+        assert banned not in story.lower(), f"story must not advise: {story}"
+
+    from app.market.pulse import narrate
+    assert narrate({}) == "", "cold inputs must yield silence, not filler"
+    # Stretched case reads as a caution, not advice.
+    stretched = narrate({"vwap_dist_atr": 2.4})
+    assert "rubber band" in stretched and "2.4 ATRs" in stretched, stretched
+    print("  STORY  ->", story[:96] + "…")
+
+
 def test_cold_state_returns_nulls_not_errors():
     _pcr_first.clear()
     p = compute_pulse(MarketState(), "NIFTY")
