@@ -221,6 +221,22 @@ export function MarketStatusBar({
               {snapshot.alerts_armed ? "alerts armed" : "alerts unarmed"}
             </span>
           )}
+          {/* Shared guest topic: only shown when one is configured (null hides
+              it). A guest followed a mistyped topic in silence once because the
+              only chip vouched for the owner's phone — this proves the guest
+              pipe the same machine-verified way. */}
+          {wsStatus === "open" && snapshot && snapshot.guest_alerts_armed !== null && (
+            <span
+              className={`tag ${snapshot.guest_alerts_armed ? "bg-accent/15 text-accent" : "bg-yellow-500/15 text-yellow-400"}`}
+              title={
+                snapshot.guest_alerts_armed
+                  ? "Verified this session: the feed pushed a test alert through the shared guest topic (ALERT_WEBHOOK_URL_2) at startup"
+                  : "The shared guest topic (ALERT_WEBHOOK_URL_2) did NOT answer this session — guests will not receive signal cards. Check the URL in backend/.env and restart."
+              }
+            >
+              {snapshot.guest_alerts_armed ? "guest armed" : "guest unarmed"}
+            </span>
+          )}
         </div>
       </div>
     </header>

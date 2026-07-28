@@ -308,6 +308,55 @@ def test_on_result_binds_to_primary_only():
     print("  SHARE  -> on_result rides only the primary send")
 
 
+def test_guest_verify_only_fires_for_a_distinct_topic():
+    """push_guest_verify proves the SHARED topic on startup, the same way the
+    primary is proven — but only when URL_2 is a real, distinct destination.
+    An unset / bad-scheme / primary-identical URL_2 is a no-op: the primary's
+    own verification already covers those, and a duplicate would double-buzz."""
+    real = _capture()
+    try:
+        got = []
+
+        # Distinct guest topic: one ping to URL_2 only, on_result rides it.
+        cfg = _cfg(ALERT_WEBHOOK_URL_2="https://ntfy.example/shared")
+        assert notify.push_guest_verify("live", "cards arrive here", cfg,
+                                        on_result=got.append) is True
+        _drain()
+        assert [s[0] for s in SENT] == ["https://ntfy.example/shared"], [s[0] for s in SENT]
+        assert SENT[0][3] is not None  # the guest chip's delivery callback
+        body = SENT[0][1].decode()
+        # A guest reads this: no sizing, no position — just "channel is live".
+        assert "cards arrive here" in body
+        assert "Suggested" not in body and "lot" not in body
+
+        # No second topic at all -> nothing sent, returns False.
+        SENT.clear()
+        assert notify.push_guest_verify("live", "x", _cfg()) is False
+        assert not SENT
+
+        # URL_2 identical to the primary -> the primary already proves it.
+        SENT.clear()
+        dup = _cfg(ALERT_WEBHOOK_URL_2="https://ntfy.example/tw")
+        assert notify.push_guest_verify("live", "x", dup) is False
+        assert not SENT
+
+        # Bad scheme on URL_2 -> refused, no send.
+        SENT.clear()
+        bad = _cfg(ALERT_WEBHOOK_URL_2="file:///etc/passwd")
+        assert notify.push_guest_verify("live", "x", bad) is False
+        assert not SENT
+
+        # Guest-only setup (no primary) is legal and still gets proven.
+        SENT.clear()
+        only2 = _cfg(ALERT_WEBHOOK_URL="", ALERT_WEBHOOK_URL_2="https://ntfy.example/shared")
+        assert notify.push_guest_verify("live", "x", only2) is True
+        _drain()
+        assert [s[0] for s in SENT] == ["https://ntfy.example/shared"]
+    finally:
+        notify.threading.Thread = real
+    print("  GUEST  -> startup verify fires once for a distinct topic, else no-op")
+
+
 if __name__ == "__main__":
     import sys as _sys
 

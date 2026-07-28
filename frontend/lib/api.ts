@@ -64,6 +64,9 @@ export interface MarketSnapshot {
   feed_stale: boolean;
   /** True only when this feed start verified the alert webhook with a real push. */
   alerts_armed: boolean;
+  /** Shared guest topic (ALERT_WEBHOOK_URL_2): null = none configured; true/false
+   *  = its startup verification push did/didn't land. */
+  guest_alerts_armed: boolean | null;
 }
 
 export interface OptionRow {

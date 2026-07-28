@@ -102,6 +102,10 @@ class MarketSnapshot(BaseModel):
     # dispatched its verification push through the alert webhook. False means
     # a new signal will NOT reach the phone — the header must say so.
     alerts_armed: bool = False
+    # Same observed fact for the SHARED guest topic (ALERT_WEBHOOK_URL_2):
+    # None = no distinct guest topic configured (hide the chip); True/False =
+    # its startup ping did/didn't land. Independent of alerts_armed.
+    guest_alerts_armed: Optional[bool] = None
 
 
 class AuthStatus(BaseModel):

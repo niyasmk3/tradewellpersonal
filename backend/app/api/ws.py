@@ -42,6 +42,7 @@ def build_snapshot() -> MarketSnapshot:
         last_tick_age=age,
         feed_stale=bool(open_now and (age is None or age > _STALE_AFTER_S)),
         alerts_armed=bool(getattr(feed, "alerts_armed", False)),
+        guest_alerts_armed=getattr(feed, "guest_alerts_armed", None),
     )
 
 

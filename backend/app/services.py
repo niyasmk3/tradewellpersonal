@@ -124,6 +124,11 @@ class FeedController:
         # Surfaced in the WS snapshot so the header can show armed/not-armed as
         # an observed fact instead of an assumption.
         self.alerts_armed: bool = False
+        # Same observed-fact treatment for the SHARED guest topic: None when no
+        # distinct ALERT_WEBHOOK_URL_2 is configured (chip hidden), True/False
+        # once its startup ping does/doesn't answer 2xx. Independent of the
+        # primary — a working owner phone never implied a working guest topic.
+        self.guest_alerts_armed: bool | None = None
 
     async def start(self) -> None:
         async with self._lifecycle:
@@ -211,7 +216,8 @@ class FeedController:
         # get_settings() is resolved AT PUSH TIME (not captured): combined with
         # the cache_clear above, a webhook edited into .env is live from the
         # next feed restart, never silently stale again.
-        from app.notify import push_retire, push_signal, push_text
+        from app.notify import (
+            push_guest_verify, push_retire, push_signal, push_text)
 
         signal_store.notify = lambda card: push_signal(card, get_settings())
         # Card lifecycle belongs to everyone following the cards — a guest
@@ -245,6 +251,29 @@ class FeedController:
         )
         if not dispatched:
             log.warning("Alert channel NOT armed — no ALERT_WEBHOOK_URL in .env")
+
+        # SAME PROOF FOR THE GUEST TOPIC. A guest followed the cards on a topic
+        # that was one character off and heard nothing for a whole session; the
+        # owner's green chip said "armed" the entire time because it only ever
+        # vouched for the primary. This pings the shared topic directly and flips
+        # guest_alerts_armed on a 2xx — carrying no sizing and no position, since
+        # a guest reads it. Stays None (chip hidden) when no distinct URL_2 set.
+        def _guest_armed(ok: bool) -> None:
+            self.guest_alerts_armed = ok
+            if ok:
+                log.info("Guest alert channel armed — verification push DELIVERED (2xx)")
+            else:
+                log.warning("Guest alert channel verification FAILED — ALERT_WEBHOOK_URL_2 "
+                            "did not answer 2xx; guests will NOT receive signal cards")
+
+        if push_guest_verify(
+            "Tradewell guest channel live",
+            "You are following Tradewell signal cards on this topic. "
+            "Cards and their expiries arrive here during market hours.",
+            settings,
+            on_result=_guest_armed,
+        ):
+            log.info("Guest alert channel verification dispatched to ALERT_WEBHOOK_URL_2")
         self.trade_monitor = TradeMonitorService(market_state, trade_store)
         # Same live-only wiring as signal pushes: invalidation nags and
         # resting-stop warnings reach the phone only from the real feed.
@@ -452,6 +481,7 @@ class FeedController:
         # A stopped feed cannot deliver alerts; the chip must not keep a stale
         # green from the previous start (finding: failed restart wore it for hours).
         self.alerts_armed = False
+        self.guest_alerts_armed = None
 
 
 feed = FeedController()

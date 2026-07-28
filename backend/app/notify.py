@@ -125,6 +125,35 @@ def _signal_urls(cfg: Settings) -> list[str]:
     return out
 
 
+def _guest_url(cfg: Settings) -> str | None:
+    """The shared signals-only topic, IF it is a *distinct* live destination.
+
+    None when no second topic is set, when it is not http(s), or when it points
+    at the same place as the primary — in that case the primary's own startup
+    verification already proves the pipe, and a separate guest ping would only
+    double-buzz whoever holds that one topic.
+    """
+    guest = _valid_url(getattr(cfg, "alert_webhook_url_2", ""))
+    if guest is None or guest == _webhook_url(cfg):
+        return None
+    return guest
+
+
+def _text_payload(title: str, body: str, cfg: Settings) -> tuple[bytes, dict[str, str]]:
+    """Shape a plain title+body into the wire payload the configured format wants.
+
+    `text` (ntfy) sends the body raw with the title in a header; `json`
+    (Telegram/Slack/Discord/Home Assistant) sends title+text+message aliases.
+    Shared by every plain-text sender so the two formats can never drift apart.
+    """
+    if cfg.alert_webhook_format == "json":
+        return (json.dumps({"title": title, "text": f"{title}\n{body}",
+                            "message": f"{title}\n{body}"}).encode(),
+                {"Content-Type": "application/json"})
+    return (body.encode(),
+            {"Content-Type": "text/plain; charset=utf-8", "Title": title})
+
+
 def push_text(title: str, body: str, cfg: Settings, on_result=None,
               audience: str = "private") -> bool:
     """Fire-and-forget plain push — watchdog pages, armed confirmations, and
@@ -145,19 +174,40 @@ def push_text(title: str, body: str, cfg: Settings, on_result=None,
         [u for u in [_webhook_url(cfg)] if u is not None]
     if not urls:
         return False
-    if cfg.alert_webhook_format == "json":
-        payload = json.dumps({"title": title, "text": f"{title}\n{body}",
-                              "message": f"{title}\n{body}"}).encode()
-        headers = {"Content-Type": "application/json"}
-    else:
-        payload = body.encode()
-        headers = {"Content-Type": "text/plain; charset=utf-8", "Title": title}
+    payload, headers = _text_payload(title, body, cfg)
     primary = _webhook_url(cfg)
     for url in urls:
         threading.Thread(
             target=_post,
             args=(url, payload, headers, on_result if url == primary else None),
             daemon=True, name="tradewell-alert").start()
+    return True
+
+
+def push_guest_verify(title: str, body: str, cfg: Settings, on_result=None) -> bool:
+    """Startup verification for the shared guest topic, mirroring the primary's.
+
+    The owner's channel is proven on every feed start by an armed ping whose 2xx
+    flips `alerts_armed`; the guest topic had no equivalent, so "is the guest
+    actually receiving cards?" stayed unanswerable until a live card happened to
+    fire — one character off in the subscribed topic was invisible for a whole
+    session. This posts ONE bare ping to the signals-only topic and reports its
+    2xx/failure through on_result, arming a guest chip the same machine-verified
+    way the primary is armed.
+
+    No-op (returns False) when no DISTINCT guest topic is configured — an unset,
+    bad-scheme, or primary-identical URL_2 needs no separate proof. Carries no
+    sizing and names no position: a guest reads this, so it says only that the
+    channel is live. Same non-negotiables as the rest of the module — never
+    raises, never blocks.
+    """
+    url = _guest_url(cfg)
+    if url is None:
+        return False
+    payload, headers = _text_payload(title, body, cfg)
+    threading.Thread(
+        target=_post, args=(url, payload, headers, on_result),
+        daemon=True, name="tradewell-alert").start()
     return True
 
 
