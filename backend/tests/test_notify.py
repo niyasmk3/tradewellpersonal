@@ -291,6 +291,37 @@ def test_retire_push_respects_min_score_and_reaches_both():
     print("  SHARE  -> retirements gated like adoptions; unscored cards safe")
 
 
+def test_push_signal_on_result_binds_to_primary_only():
+    """With ALERT_STARTUP_PING=false the FIRST REAL card push is what arms the
+    chip — so push_signal must report the primary topic's delivery outcome,
+    and never a guest's."""
+    real = _capture()
+    try:
+        got = []
+        cfg = _cfg(ALERT_WEBHOOK_URL_2="https://ntfy.example/shared")
+        assert notify.push_signal(_card(), cfg, on_result=got.append) is True
+        _drain()
+        callbacks = [s[3] for s in SENT]
+        assert callbacks[0] is not None and callbacks[1] is None, callbacks
+        # Default stays callback-free (regression guard for existing callers).
+        SENT.clear()
+        assert notify.push_signal(_card(), _cfg()) is True
+        _drain()
+        assert SENT[0][3] is None
+    finally:
+        notify.threading.Thread = real
+    print("  SHARE  -> push_signal on_result rides only the primary send")
+
+
+def test_startup_ping_flag_default():
+    """ALERT_STARTUP_PING defaults ON — the no-ping mode is an explicit opt-in,
+    because the ping is what catches a silently-dead webhook at startup."""
+    from app.config import Settings
+    assert Settings(_env_file=None).alert_startup_ping is True
+    assert Settings(_env_file=None, ALERT_STARTUP_PING=False).alert_startup_ping is False
+    print("  PING   -> startup ping on by default; opt-out honoured")
+
+
 def test_on_result_binds_to_primary_only():
     """The armed chip vouches for YOUR phone: with a secondary configured, the
     delivery callback must fire once, for the primary URL's outcome."""

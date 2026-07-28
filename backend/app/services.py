@@ -219,61 +219,75 @@ class FeedController:
         from app.notify import (
             push_guest_verify, push_retire, push_signal, push_text)
 
-        signal_store.notify = lambda card: push_signal(card, get_settings())
+        # MACHINE-VERIFIED ARMING. "The webhook is configured" was an assumption
+        # three times on 23-Jul and wrong every time. `alerts_armed` flips True
+        # only when the endpoint answers 2xx (a typo'd/unreachable URL must
+        # show UNARMED, not a green chip). With ALERT_STARTUP_PING=true the
+        # proof is a test ping at every feed start; with it false (signal-only
+        # notifications, requested 28-Jul) there is no ping — the FIRST REAL
+        # signal push's delivery arms the chip instead. Verification is
+        # deferred to the first card, never abandoned.
+        self.alerts_armed = False
+
+        def _armed(ok: bool) -> None:
+            self.alerts_armed = ok
+            if ok:
+                log.info("Alert delivery confirmed (2xx) — channel armed")
+            else:
+                log.warning("Alert delivery FAILED — webhook did not answer 2xx; "
+                            "signal pushes will not reach the phone")
+
+        def _guest_armed(ok: bool) -> None:
+            self.guest_alerts_armed = ok
+            if ok:
+                log.info("Guest alert channel armed — delivery confirmed (2xx)")
+            else:
+                log.warning("Guest alert channel verification FAILED — ALERT_WEBHOOK_URL_2 "
+                            "did not answer 2xx; guests will NOT receive signal cards")
+
+        # Every real signal push doubles as delivery verification (primary
+        # topic's outcome only, mirroring push_text's on_result contract).
+        signal_store.notify = lambda card: push_signal(
+            card, get_settings(), on_result=_armed)
         # Card lifecycle belongs to everyone following the cards — a guest
         # acting on a cancelled thesis is exactly the harm this push stops.
         # push_retire carries the audience AND the min-score gate itself.
         signal_store.notify_retire = lambda card, state: push_retire(
             card, state, get_settings())
 
-        # MACHINE-VERIFIED ARMING. "The webhook is configured" was an assumption
-        # three times on 23-Jul and wrong every time. The feed proves it on
-        # every start by pushing through the exact same pipe a signal would use
-        # — and `alerts_armed` flips True only when the endpoint answers 2xx
-        # (a typo'd/unreachable URL must show UNARMED, not a green chip).
-        self.alerts_armed = False
+        if settings.alert_startup_ping:
+            dispatched = push_text(
+                "Tradewell armed",
+                f"Feed starting for {settings.track_underlyings} · "
+                f"paper {'on' if settings.paper_trading else 'off'} · "
+                f"signal alerts will use this channel.",
+                settings,
+                on_result=_armed,
+            )
+            if not dispatched:
+                log.warning("Alert channel NOT armed — no ALERT_WEBHOOK_URL in .env")
 
-        def _armed(ok: bool) -> None:
-            self.alerts_armed = ok
-            if ok:
-                log.info("Alert channel armed — verification push DELIVERED (2xx)")
-            else:
-                log.warning("Alert channel verification FAILED — webhook did not answer 2xx; "
-                            "signal pushes will not reach the phone")
-
-        dispatched = push_text(
-            "Tradewell armed",
-            f"Feed starting for {settings.track_underlyings} · "
-            f"paper {'on' if settings.paper_trading else 'off'} · "
-            f"signal alerts will use this channel.",
-            settings,
-            on_result=_armed,
-        )
-        if not dispatched:
-            log.warning("Alert channel NOT armed — no ALERT_WEBHOOK_URL in .env")
-
-        # SAME PROOF FOR THE GUEST TOPIC. A guest followed the cards on a topic
-        # that was one character off and heard nothing for a whole session; the
-        # owner's green chip said "armed" the entire time because it only ever
-        # vouched for the primary. This pings the shared topic directly and flips
-        # guest_alerts_armed on a 2xx — carrying no sizing and no position, since
-        # a guest reads it. Stays None (chip hidden) when no distinct URL_2 set.
-        def _guest_armed(ok: bool) -> None:
-            self.guest_alerts_armed = ok
-            if ok:
-                log.info("Guest alert channel armed — verification push DELIVERED (2xx)")
-            else:
-                log.warning("Guest alert channel verification FAILED — ALERT_WEBHOOK_URL_2 "
-                            "did not answer 2xx; guests will NOT receive signal cards")
-
-        if push_guest_verify(
-            "Tradewell guest channel live",
-            "You are following Tradewell signal cards on this topic. "
-            "Cards and their expiries arrive here during market hours.",
-            settings,
-            on_result=_guest_armed,
-        ):
-            log.info("Guest alert channel verification dispatched to ALERT_WEBHOOK_URL_2")
+            # SAME PROOF FOR THE GUEST TOPIC. A guest followed the cards on a
+            # topic that was one character off and heard nothing for a whole
+            # session; the owner's green chip said "armed" the entire time
+            # because it only ever vouched for the primary. Sizing-free and
+            # position-free, since a guest reads it. Stays None (chip hidden)
+            # when no distinct URL_2 is set.
+            if push_guest_verify(
+                "Tradewell guest channel live",
+                "You are following Tradewell signal cards on this topic. "
+                "Cards and their expiries arrive here during market hours.",
+                settings,
+                on_result=_guest_armed,
+            ):
+                log.info("Guest alert channel verification dispatched to ALERT_WEBHOOK_URL_2")
+        else:
+            # Signal-only mode: no test pings on any topic. The armed chip
+            # stays grey until the first real card lands; the guest chip stays
+            # hidden (fan-out pushes carry no per-guest callback — the guest
+            # topic proved 2xx when it was set up).
+            log.info("Startup pings disabled (ALERT_STARTUP_PING=false) — armed chip "
+                     "verifies on the first real signal push")
         self.trade_monitor = TradeMonitorService(market_state, trade_store)
         # Same live-only wiring as signal pushes: invalidation nags and
         # resting-stop warnings reach the phone only from the real feed.

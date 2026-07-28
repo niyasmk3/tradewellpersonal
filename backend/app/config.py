@@ -143,6 +143,13 @@ class Settings(BaseSettings):
     alert_webhook_url_2: str = Field(default="", alias="ALERT_WEBHOOK_URL_2")
     # "text" posts a plain body (ntfy); "json" posts {title,text,message,...}.
     alert_webhook_format: str = Field(default="text", alias="ALERT_WEBHOOK_FORMAT")
+    # Send a verification ping to the webhook(s) at every feed start. True is
+    # the safety default (the ping is what proves delivery after 23-Jul's
+    # silently-dead-all-day webhook). false = signal pushes only: no test
+    # pings; the armed chip then stays grey until the FIRST REAL signal push
+    # answers 2xx — delivery is still proven, just on the first card instead
+    # of at startup.
+    alert_startup_ping: bool = Field(default=True, alias="ALERT_STARTUP_PING")
     # Only push cards at or above this score. 0 = every issued card. The default
     # is deliberately below score_valid: the throttle already caps the engine at
     # 4 cards/day, so filtering further would only re-create the missed-signal

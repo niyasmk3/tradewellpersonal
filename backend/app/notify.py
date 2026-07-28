@@ -231,12 +231,16 @@ def push_retire(card: SignalCard, state: str, cfg: Settings) -> bool:
     )
 
 
-def push_signal(card: SignalCard, cfg: Settings) -> bool:
+def push_signal(card: SignalCard, cfg: Settings, on_result=None) -> bool:
     """Fire-and-forget push for a newly adopted card — to the primary topic
     AND the shared signals-only topic when one is configured.
 
     Returns True when a send was dispatched, False when it was suppressed —
     the caller uses this only for logging, never for control flow.
+
+    `on_result` reports the PRIMARY topic's delivery outcome (2xx or not),
+    exactly like push_text: with ALERT_STARTUP_PING=false there is no test
+    ping, so the first real card's delivery is what arms the chip.
     """
     urls = _signal_urls(cfg)
     if not urls:
@@ -268,7 +272,8 @@ def push_signal(card: SignalCard, cfg: Settings) -> bool:
         # Only the owner's own topic carries sizing — see _body.
         payload, headers = _payload(include_sizing=(url == primary))
         threading.Thread(
-            target=_post, args=(url, payload, headers), daemon=True,
-            name="tradewell-alert",
+            target=_post,
+            args=(url, payload, headers, on_result if url == primary else None),
+            daemon=True, name="tradewell-alert",
         ).start()
     return True
