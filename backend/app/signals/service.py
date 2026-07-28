@@ -32,6 +32,20 @@ from app.trades.store import trade_store
 log = logging.getLogger("tradewell.signals")
 
 
+def _parse_hhmm(raw: str) -> int | None:
+    """'14:15' -> IST minutes-of-day (855). Empty/invalid -> None (gate off)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        hh, mm = raw.split(":")
+        v = int(hh) * 60 + int(mm)
+        return v if 0 <= v < 1440 else None
+    except Exception:
+        log.warning("SIGNAL_ENTRY_CUTOFF_IST %r is not HH:MM — cutoff disabled", raw)
+        return None
+
+
 def _option_lot_size(token: int | None) -> int:
     """Lot size of the exact option contract behind `token`, or 0.
 
@@ -170,7 +184,106 @@ class SignalService:
             mins = int((quiet - (now - gap_end)) // 60) + 1
             return (f"Tick feed resumed after a gap — holding new cards ~{mins}m "
                     "while the tape re-establishes")
+        # 3. LATE-ENTRY CUTOFF (intraday/scalp): a card born in the last hour
+        #    runs straight into the 15:20 time exit with no runway — the
+        #    audited week's 14:27+ cards lost 7-for-7 (-Rs1,416), including
+        #    every time_exit loss the book recorded. Positional is exempt: its
+        #    thesis carries overnight.
+        cutoff = _parse_hhmm(self.cfg.signal_entry_cutoff_ist)
+        if (cutoff is not None
+                and fresh.mode.value in ("intraday", "scalp")
+                and ((now + 19800) % 86400) // 60 >= cutoff):
+            return (f"Past the {self.cfg.signal_entry_cutoff_ist} entry cutoff — a fresh "
+                    "card now has no runway before the 15:20 close (last week: "
+                    "7-for-7 losses). Tomorrow's tape will offer new ones.")
         return None
+
+    def _refire_veto(self, card, now: int) -> str | None:
+        """Refuse to re-issue a thesis the tape already rejected today.
+
+        On 28-Jul the engine fired NIFTY 24000 PE three times — the first
+        stopped out, and the two re-fires lost too (-Rs828 combined). The
+        cadence throttle spaces cards in TIME but has no memory of OUTCOME:
+        after a clean fill on the same underlying + direction (strike within
+        2 steps) stops out or invalidates, the same thesis needs the guard
+        window to pass — or a genuinely different setup — before it may speak
+        again. Reads the paper book (always filled) and the live journal;
+        hollow counterfactuals don't count (those cards were never offered).
+        """
+        window = self.cfg.signal_refire_guard_s
+        if window <= 0 or card is None:
+            return None
+        try:
+            for rej in self._recent_rejections(now):
+                sym, direction, strike, exited_at, contract, label = rej
+                if now - exited_at >= window:
+                    continue
+                # Per-symbol strike step (BANKNIFTY steps are 100, not 50) —
+                # a hardcoded 50 would halve its adjacency window silently.
+                from app.kite.instruments import UNDERLYING_CONFIG
+
+                step = float(UNDERLYING_CONFIG.get(card.symbol.upper(), {}).get("step", 50))
+                if (sym == card.symbol.upper()
+                        and direction == card.direction.value
+                        and abs(strike - (card.strike or 0)) <= 2 * step):
+                    mins = int((window - (now - exited_at)) // 60) + 1
+                    return (f"Re-fire guard: {contract} {label} "
+                            f"{int((now - exited_at) // 60)}m ago — the same thesis "
+                            f"waits ~{mins}m (or a different setup) before speaking again.")
+        except Exception:  # a guard bug must never stop the engine
+            log.debug("refire guard failed", exc_info=True)
+        return None
+
+    def _recent_rejections(self, now: int) -> list:
+        """Today's thesis-rejecting closes from both books, cached ~15s.
+
+        WHAT COUNTS AS REJECTION: plan stops/invalidations (paper closes this
+        way), and any LOSING broker-flat or manual live close. The last two
+        matter because a real live stop never carries reason "stop" — once the
+        broker confirms a position, the reconciler closes it as "broker flat"
+        whatever actually happened, so the reason string alone would make the
+        guard blind to exactly the live losses it exists to remember. A losing
+        close on the thesis is the signal; a winning broker-flat (target,
+        profit take) must NOT arm it.
+
+        CACHED because TradeStore.all() deep-copies every row and this runs on
+        the per-mode evaluation cycle — one scan per ~15s bounds the cost no
+        matter how many modes evaluate or how large the journals grow.
+        """
+        cached = getattr(self, "_refire_cache", None)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+        entries: list = []
+        try:
+            from app.paper.service import is_hollow_row
+            from app.services import feed
+            from app.trades.store import trade_store as live_store
+
+            today = (now + 19800) // 86400
+            books = list(live_store.all())
+            paper = getattr(feed, "paper_store", None)
+            if paper is not None:
+                books += [t for t in paper.all() if not is_hollow_row(t)]
+            for t in books:
+                if t.status.value != "exited" or not t.exited_at:
+                    continue
+                if (t.exited_at + 19800) // 86400 != today:
+                    continue
+                reason = t.auto_close_reason
+                loss = (t.realized_pnl or 0.0) < 0
+                if reason in ("stop", "invalidation"):
+                    label = f"{reason}ped out" if reason == "stop" else "invalidated"
+                elif loss and (reason == "broker flat" or not t.auto_closed):
+                    label = "closed at a loss"
+                else:
+                    continue
+                entries.append((t.symbol.upper(), t.direction.value,
+                                float(t.strike or 0), int(t.exited_at),
+                                t.contract, label))
+        except Exception:
+            log.debug("refire scan failed", exc_info=True)
+        self._refire_cache = (now + 15, entries)
+        return entries
 
     def _scalp_friction_veto(self, card) -> str | None:
         """Refuse a scalp card whose target cannot pay its own costs.
@@ -320,7 +433,9 @@ class SignalService:
         # an issued card into a WAIT with the reason shown — the score panel
         # stays live, only the offer is withheld.
         if fresh.signal is not None:
-            veto = self._context_veto(fresh, df, now) or self._scalp_friction_veto(fresh.signal)
+            veto = (self._context_veto(fresh, df, now)
+                    or self._refire_veto(fresh.signal, now)
+                    or self._scalp_friction_veto(fresh.signal))
             if veto is None:
                 # Participation floor LAST, so the shadow book isolates the
                 # floor's own effect — a card the context vetoes would have

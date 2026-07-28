@@ -83,10 +83,12 @@ class TradeMonitorService:
             snap = self.state.underlying_snapshot(trade.symbol)
             spot = snap.ltp if snap else None
             sm = min(stall, 10) if (stall and trade.mode.value == "scalp") else stall
-            monitor.evaluate(trade, current, spot, ist_min, ist_day, stall_minutes=sm)
+            monitor.evaluate(trade, current, spot, ist_min, ist_day, stall_minutes=sm,
+                             early_derisk_pct=cfg.early_derisk_mfe_pct)
 
         self.store.apply_monitor(updater, include_reversible=True)
         self._push_unacked_invalidations()
+        self._nudge_missing_exit_reasons()
 
         # Auto-close runs AFTER the monitor pass and outside the updater, not
         # inside it: apply_monitor holds the store lock while iterating the live
@@ -110,6 +112,45 @@ class TradeMonitorService:
             if closed is not None:
                 log.info("auto-closed %s (%s) @ ₹%s — advisory only, no order placed",
                          trade.contract, reason, px)
+
+    def _nudge_missing_exit_reasons(self) -> None:
+        """One reminder push per broker-flat close left unclassified ~15 min.
+
+        The 'why did you exit?' prompt ships in the Journal tab but the 28-Jul
+        audit found it 9-for-9 unanswered — nothing ever NUDGED, and with
+        startup pings gone the phone only ever hears about signals. One push
+        per trade, ever (the reason_nudge event is the dedupe flag), and only
+        while the question is still open."""
+        import time as _t
+
+        if self.notify is None:
+            return
+        now = _t.time()
+        for t in self.store.all():
+            if t.status.value != "exited" or t.auto_close_reason != "broker flat":
+                continue
+            if getattr(t, "exit_reason", None):
+                continue
+            if not t.exited_at or now - t.exited_at < 900:
+                continue                 # give the dashboard prompt first shot
+            # 24h upper bound: at deploy time the journal already held NINE
+            # unreasoned broker-flat rows from previous days — without this,
+            # the first monitor cycle would burst-push the entire backlog.
+            # Old rows stay visible in the Journal prompt; the phone only
+            # hears about today's.
+            if now - t.exited_at > 86400:
+                continue
+            if any(e.kind == "reason_nudge" for e in t.events):
+                continue
+            pnl = t.realized_pnl or 0.0
+            self._push(
+                "Why did you exit?",
+                (f"{t.contract} closed at the broker ({'+' if pnl >= 0 else ''}"
+                 f"₹{pnl:,.0f}) and has no exit reason yet. One tap in the "
+                 "Journal tab — broker stop / target / fear / better setup — "
+                 "teaches the exit report what actually happened."),
+            )
+            self.store.note_reason_nudge(t.id)
 
     def _push_unacked_invalidations(self) -> None:
         """Phone the broken thesis, and keep phoning every 10 minutes until the

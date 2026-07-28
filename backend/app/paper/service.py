@@ -281,7 +281,8 @@ class PaperTradingService:
             # A scalp thesis is stale in minutes, not three-quarters of an hour.
             sm = min(stall, 10) if (stall and trade.mode.value == "scalp") else stall
             monitor.evaluate(trade, current, spot, ist_min, ist_day,
-                             stall_minutes=sm)
+                             stall_minutes=sm,
+                             early_derisk_pct=self.cfg.early_derisk_mfe_pct)
 
         self.store.apply_monitor(updater)
 

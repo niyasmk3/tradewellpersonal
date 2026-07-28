@@ -105,13 +105,17 @@ def summarize(trades: Iterable[Trade],
             }
         by_type.append(entry)
 
-    # Rows that ended at the broker while the engine still said HOLD and the
-    # user never said why. Until a reason lands, that P&L is unclassifiable —
-    # it could be discipline (a real stop at the broker) or the fear-exit leak
-    # the 22-Jul forensics found. The UI prompts on exactly this list.
+    # Rows whose ending the user never explained. Two flavours, both
+    # unclassifiable until a reason lands: broker-flat closes (discipline or
+    # the fear-exit leak the 22-Jul forensics found?) and MANUAL exits — the
+    # 28-Jul audit found the manual bucket at -4,984/trade expectancy with no
+    # reason-capture at all, while broker-flat at least had the prompt. The
+    # UI prompts on exactly this list, and the monitor nudges the phone once
+    # for stale broker-flat entries.
     needs_reason = [t.id for t in closed
-                    if t.auto_closed and t.auto_close_reason == "broker flat"
-                    and not getattr(t, "exit_reason", None)]
+                    if not getattr(t, "exit_reason", None)
+                    and ((t.auto_closed and t.auto_close_reason == "broker flat")
+                         or not t.auto_closed)]
 
     return {
         "n_closed": len(closed),

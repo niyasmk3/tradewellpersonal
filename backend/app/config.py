@@ -52,6 +52,22 @@ class Settings(BaseSettings):
     # Quiet period after a tick-feed gap ends: the first evaluations after a
     # blackout score a tape the engine never watched form. 0 = off.
     signal_post_gap_quiet_s: int = Field(default=600, ge=0, alias="SIGNAL_POST_GAP_QUIET_S")
+    # --- Week-1 forensics gates (28-Jul) ---
+    # No NEW intraday/scalp cards at/after this IST time: every card issued
+    # 14:27+ in the audited week lost (7-for-7, -Rs1,416) — they run into the
+    # 15:20 time exit with no runway. "HH:MM"; empty = off. Positional exempt.
+    signal_entry_cutoff_ist: str = Field(default="14:15", alias="SIGNAL_ENTRY_CUTOFF_IST")
+    # Re-fire guard: after a clean paper/live fill on the same underlying +
+    # direction (strike within 2 steps) STOPS OUT or invalidates, block a new
+    # card on that thesis for this many seconds (same IST day). The Tue 28
+    # tape re-fired 24000 PE twice after its first stop and lost all three
+    # (-Rs828). 0 = off.
+    signal_refire_guard_s: int = Field(default=7200, ge=0, alias="SIGNAL_REFIRE_GUARD_S")
+    # Early de-risk for intraday/scalp: once MFE reaches this fraction above
+    # entry (before the +12% quick target), move the stop to entry — the
+    # audited week had TEN fills peak between +1.9% and +11.3% and close
+    # negative, every one. Mirrors the positional +5% breakeven rule. 0 = off.
+    early_derisk_mfe_pct: float = Field(default=0.05, ge=0, le=0.2, alias="EARLY_DERISK_MFE_PCT")
     # --- Participation floors (25-Jul). Volume and OI are the only components
     # that measure whether anyone is IN the move; the other four describe the
     # chart, and a chart can look perfect on air. The weighted total lets 45

@@ -399,10 +399,13 @@ function JournalRow({ t, dayKey, onChange }: { t: Trade; dayKey: number; onChang
         </div>
       )}
 
-      {/* A broker-flat close means YOU exited and Tradewell only found out —
-          without your reason the expectancy-by-exit report cannot tell a
-          disciplined broker-side stop from a fear exit. One tap answers it. */}
-      {t.status === "exited" && t.auto_close_reason === "broker flat" && !t.exit_reason && (
+      {/* YOUR exits need YOUR reason: broker-flat closes (Tradewell only
+          found out) and manual exits (historically the costliest bucket, with
+          no reason capture at all until 28-Jul). Without it the exit report
+          cannot tell a disciplined stop from a fear exit. One tap answers it. */}
+      {t.status === "exited" &&
+        !t.exit_reason &&
+        (t.auto_close_reason === "broker flat" || !t.auto_closed) && (
         <div className="mt-1 flex flex-wrap items-center gap-1 rounded bg-accent/10 px-1.5 py-1 text-[10px]">
           <span className="text-white/80">why did you exit?</span>
           {["broker stop", "target hit", "fear / cut early", "better setup"].map((r) => (

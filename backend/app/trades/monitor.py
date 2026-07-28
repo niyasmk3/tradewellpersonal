@@ -165,6 +165,7 @@ def evaluate(
     ist_minutes: int | None,
     ist_date: str | None = None,
     stall_minutes: int | None = None,
+    early_derisk_pct: float | None = None,
 ) -> None:
     if trade.status not in (TradeStatus.ENTERED, TradeStatus.PARTIAL):
         return
@@ -268,6 +269,27 @@ def evaluate(
             trade.trailing_sl = max(trade.trailing_sl, entry)
             _event(trade, "breakeven",
                    f"MFE ₹{trade.mfe_premium} ≥ +5% — SL moved to entry ₹{entry} (positional de-risk)")
+        # EARLY DE-RISK (intraday/scalp, 28-Jul): between entry and the +12%
+        # quick target there was NO de-risking at all — the audited week had
+        # TEN fills peak between +1.9% and +11.3% and close negative, every
+        # single one (+60pp of paper profit became -118pp of realised loss),
+        # while the one fill that crossed +12% was protected to -0.5%. Once
+        # MFE clears the configured fraction (default +5%, same trigger the
+        # positional rule uses), the stop moves to entry. Setting stop_loss
+        # (not just trailing_sl) also retires the disaster backstop, exactly
+        # like the positional rule and the t0 latch.
+        if (
+            early_derisk_pct
+            and trade.mode.value in ("intraday", "scalp")
+            and trade.mfe_premium is not None
+            and trade.mfe_premium >= entry * (1 + early_derisk_pct)
+            and trade.stop_loss < entry
+        ):
+            trade.stop_loss = entry
+            trade.trailing_sl = max(trade.trailing_sl, entry)
+            _event(trade, "early_derisk",
+                   f"MFE ₹{trade.mfe_premium} ≥ +{early_derisk_pct:.0%} — SL to entry "
+                   f"₹{entry} (early de-risk; the +12% trigger was too far to protect this)")
 
     invalidated = _invalidated(trade, spot)
 

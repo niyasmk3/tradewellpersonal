@@ -209,7 +209,9 @@ def test_analytics_groups_and_flags():
     # t3: potential (128-100)*130 = 3640, realised 2600 -> ~71.4% capture.
     assert abs(by["target1"]["capture_pct"] - 71.4) < 0.2, by["target1"]
     # t2 never went positive -> no capture sample for its group.
-    assert s["needs_reason"] == ["t4"], s["needs_reason"]
+    # t4 = unreasoned broker-flat; t6 = unreasoned MANUAL exit — included since
+    # 28-Jul (the manual bucket was the costliest and had no reason capture).
+    assert set(s["needs_reason"]) == {"t4", "t6"}, s["needs_reason"]
     # The recorded reason splits the broker_flat bucket — that split is the
     # entire point of asking. t4 (no answer yet) lands under "unexplained".
     br = by["broker_flat"]["by_reason"]

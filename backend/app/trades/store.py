@@ -415,6 +415,17 @@ class TradeStore:
         t = self._apply(tid, fn)
         return t if t is not None and t.exit_reason == reason[:120] else None
 
+    def note_reason_nudge(self, tid: str) -> None:
+        """Journal that the one-time exit-reason reminder push was sent —
+        the event IS the dedupe flag, so a restart can't re-nag."""
+        def fn(t: Trade) -> None:
+            t.events.append(TradeEvent(
+                ts=_now(), kind="reason_nudge",
+                note="Exit-reason reminder pushed to the phone",
+            ))
+
+        self._apply(tid, fn)
+
     def note_qty_mismatch(self, tid: str, held: int, journal_total: int | None = None) -> None:
         """Journal that the broker's quantity disagrees with the journal.
 
