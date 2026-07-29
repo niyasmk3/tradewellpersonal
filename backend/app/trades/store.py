@@ -205,6 +205,7 @@ class TradeStore:
                 disaster_sl=disaster_sl,
                 quick_target=quick_target,
                 invalidation_level=card.invalidation_level, invalidation_dir=card.invalidation_dir,
+                entry_score=card.confidence,
                 created_at=now, entered_at=now,
                 # Set at creation (not a follow-up update) so a hollow tag is
                 # ATOMIC with the fill — an untagged hollow row would be

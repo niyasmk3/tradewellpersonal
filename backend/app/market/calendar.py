@@ -22,6 +22,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # Session bounds, minutes since IST midnight.
 OPEN_MIN = 9 * 60 + 15          # 09:15
 CLOSE_MIN = 15 * 60 + 30        # 15:30
+# Late-session threshold. An entry at or after this barely trades before the
+# close — its first real test is the NEXT session's open. The overnight-gap
+# caution on positional cards and the paper book's overnight-hold ledger both
+# key off this same minute so the warning and the evidence can never drift.
+EVENING_MIN = 14 * 60 + 30      # 14:30
 
 HOLIDAYS: set[str] = {
     # --- 2026 (source: Zerodha holiday calendar / NSE circular) ---

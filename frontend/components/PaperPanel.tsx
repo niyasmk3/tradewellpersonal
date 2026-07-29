@@ -72,6 +72,40 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* The overnight-hold ledger: positional rows that held through the
+          close. 29-Jul's lesson — the gap is the one move no intraday exit
+          can touch; this line shows whether being on the bus when it leaves
+          actually pays, and whether the deliberate evening entries pay more. */}
+      {data.overnight && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+          <span className="text-muted">overnight:</span>
+          <span
+            className={`tag ${data.overnight.expectancy > 0 ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}
+            title={data.overnight.rows
+              .map(
+                (r) =>
+                  `${r.contract} ${istDayKey(r.entered_at)}→${istDayKey(r.exited_at)}` +
+                  `${r.score != null ? ` score ${r.score}` : ""}` +
+                  `${r.overnight_move_pct != null ? ` gap ${signed(r.overnight_move_pct, 1)}%` : ""}` +
+                  ` net ₹${signed(r.net_pnl, 0)}${r.evening ? " (evening)" : ""}`,
+              )
+              .join("\n")}
+          >
+            held ₹{signed(data.overnight.expectancy, 0)}/trade ({data.overnight.trades},{" "}
+            {data.overnight.win_rate}% wins)
+          </span>
+          {data.overnight.evening && (
+            <span
+              className={`tag ${data.overnight.evening.expectancy > 0 ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}
+              title="Entries at/after 14:30 IST — the deliberate hold-into-the-close gap bets"
+            >
+              evening ₹{signed(data.overnight.evening.expectancy, 0)}/trade (
+              {data.overnight.evening.trades})
+            </span>
+          )}
+        </div>
+      )}
+
       {Object.keys(data.by_reason).length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted">
           <span>exits:</span>

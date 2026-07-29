@@ -83,7 +83,7 @@ def overnight_gap_note(mode_value: str, ist_minutes: int) -> str | None:
     index opened +230 the next morning; a stop cannot fire inside a gap).
     Advisory text only — sizing and gates are untouched.
     """
-    if mode_value != "positional" or ist_minutes < 14 * 60 + 30:
+    if mode_value != "positional" or ist_minutes < mcal.EVENING_MIN:
         return None
     return ("Late-day positional: holds overnight, and tomorrow's gap can open "
             "beyond the stop before it can act — size for gap risk, not just "

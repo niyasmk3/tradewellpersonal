@@ -77,6 +77,11 @@ def _event(trade: Trade, kind: str, note: str) -> None:
     trade.events.append(TradeEvent(ts=int(time.time()), kind=kind, note=note))
 
 
+def _ist_date_of(ts: int) -> str:
+    t = time.gmtime(ts + 19800)
+    return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}"
+
+
 # Advisory transitions worth a journal entry — the moment the monitor FIRST
 # tells the user to act is exactly what a review of the trade needs later.
 _EVENTFUL = {TradeAction.STOPLOSS, TradeAction.INVALIDATED, TradeAction.TARGET2,
@@ -207,6 +212,24 @@ def evaluate(
 
     trade.current_premium = current_premium
     entry = trade.entry_premium
+
+    # NEXT-SESSION FIRST PRINT, latched once. A position that survived an IST
+    # day boundary records the first premium the new session actually trades —
+    # entry -> this print IS the overnight gap, the one component of a hold no
+    # stop can manage (28->29 Jul: +230 index points before any order could
+    # act). Sampled at monitor cadence, so it is the first OBSERVED print, a
+    # few seconds after the true open at worst.
+    if (
+        ist_date is not None
+        and trade.next_open_premium is None
+        and ist_date > _ist_date_of(trade.entered_at)
+    ):
+        trade.next_open_premium = current_premium
+        trade.next_open_at = now_ts
+        gap = (current_premium - entry) / entry * 100 if entry else 0.0
+        _event(trade, "next_open",
+               f"First print of the new session ₹{current_premium} "
+               f"({gap:+.1f}% vs entry ₹{entry}) — the overnight gap, on the record")
     trade.pnl = round((current_premium - entry) * trade.quantity + trade.realized_pnl, 2)
     trade.pnl_pct = round((current_premium - entry) / entry * 100, 1) if entry else None
 

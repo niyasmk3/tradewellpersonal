@@ -439,6 +439,30 @@ export interface PaperSummary {
     verdict?: string;
     note?: string;
   } | null;
+  /** Positional rows that held through an IST day boundary — the overnight-gap
+      bet graded, with the deliberate late-day (≥14:30) entries split out. */
+  overnight?: {
+    trades: number;
+    net_pnl: number;
+    expectancy: number;
+    win_rate: number;
+    evening: { trades: number; net_pnl: number; expectancy: number; win_rate: number } | null;
+    rows: {
+      contract: string;
+      direction: string;
+      /** Card score at fill; null on rows recorded before the field existed. */
+      score: number | null;
+      entered_at: number;
+      exited_at: number;
+      evening: boolean;
+      entry: number;
+      /** First premium print of the next session; null on pre-latch rows. */
+      next_open: number | null;
+      overnight_move_pct: number | null;
+      net_pnl: number;
+      reason: string | null;
+    }[];
+  } | null;
   rows: PaperRow[];
   slippage_pct: number;
   lots: number;

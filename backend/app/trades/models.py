@@ -123,6 +123,19 @@ class Trade(BaseModel):
     # stop from a fear exit, and those two need opposite fixes.
     exit_reason: Optional[str] = None
 
+    # Card's total score at fill. The overnight-hold ledger grades "hold into
+    # close when positional score > X" — without the score ON the row, X could
+    # only ever be guessed. None on rows recorded before the field existed.
+    entry_score: Optional[float] = None
+    # First premium print of the first session AFTER entry, latched once by the
+    # monitor. entry -> next_open isolates the overnight gap — the component no
+    # intraday exit can manage (a gap settles before any stop can act), which
+    # is exactly what the overnight-hold pattern is betting on. Rows that close
+    # same-day never get one; a multi-day hold records only its FIRST morning
+    # (later gaps happen inside the hold, not at the entry decision).
+    next_open_premium: Optional[float] = None
+    next_open_at: Optional[int] = None
+
     # --- excursion, recorded by the monitor while the position is OPEN ---
     # MFE = best premium seen, MAE = worst. Because they stop updating when the
     # trade closes, they are bounded by the trade's own life — so "MFE >= 15%"

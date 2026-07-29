@@ -26,6 +26,7 @@ import logging
 import time
 
 from app.config import Settings
+from app.market.calendar import EVENING_MIN
 from app.paper import charges as chg
 from app.signals.models import SignalCard, TradingMode
 from app.signals.modes import ladder_params
@@ -446,6 +447,51 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "verdict": verdict,
         }
 
+    # ---- THE OVERNIGHT-HOLD LEDGER (positional) -----------------------------
+    # The 29-Jul forensic's honest gap: most of a 58->120 option move happened
+    # in an overnight gap no intraday system can touch — the only way to own a
+    # gap is to be holding when it opens. This block grades exactly that bet:
+    # positional rows that survived an IST day boundary, with the EVENING
+    # subset (entries at/after 14:30, the same minute the gap caution fires)
+    # split out, because "hold into close when positional score > X" is the
+    # candidate pattern. Every fill already cleared the positional gate (72),
+    # so X lives ABOVE it — each row carries its score and its next-session
+    # first print so X gets picked from this ledger, not guessed.
+    def _on_stats(rs: list[dict]) -> dict:
+        return {
+            "trades": len(rs),
+            "net_pnl": round(sum(r["net_pnl"] for r in rs), 2),
+            "expectancy": round(sum(r["net_pnl"] for r in rs) / len(rs), 2),
+            "win_rate": round(100 * sum(1 for r in rs if r["net_pnl"] > 0) / len(rs), 1),
+        }
+
+    on_rows = []
+    for t in closed:
+        if (
+            t.entered_at < HONEST_FILLS_FROM or is_hollow_row(t)
+            or t.mode.value != "positional" or not t.exited_at
+            or _ist_date(t.exited_at) <= _ist_date(t.entered_at)
+        ):
+            continue
+        qty = t.initial_quantity or t.quantity
+        on_rows.append({
+            "contract": t.contract, "direction": t.direction.value,
+            "score": t.entry_score,
+            "entered_at": t.entered_at, "exited_at": t.exited_at,
+            "evening": _ist_minutes(t.entered_at) >= EVENING_MIN,
+            "entry": t.entry_premium,
+            "next_open": t.next_open_premium,
+            # entry -> next-session first print: the gap component in
+            # isolation. None on rows recorded before the latch existed.
+            "overnight_move_pct": (
+                round((t.next_open_premium - t.entry_premium)
+                      / t.entry_premium * 100, 1)
+                if t.next_open_premium and t.entry_premium else None),
+            "net_pnl": chg.net_pnl(t.entry_premium, t.exit_premium, qty),
+            "reason": t.auto_close_reason,
+        })
+    evening_rows = [r for r in on_rows if r["evening"]]
+
     return {
         "trades": len(rows),
         "open": len(open_clean),
@@ -496,6 +542,15 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         } if (hollow_rows or open_hollow) else None,
         # THE EXIT-POLICY A/B (see the block above): same trades, two exits.
         "exit_ab": exit_ab,
+        # THE OVERNIGHT-HOLD LEDGER (see the block above): did holding a
+        # positional thesis through the close pay, and did the late-day
+        # entries — the deliberate gap bets — pay more? None until the first
+        # positional row survives a day boundary in the honest era.
+        "overnight": {
+            **_on_stats(on_rows),
+            "evening": _on_stats(evening_rows) if evening_rows else None,
+            "rows": on_rows,
+        } if on_rows else None,
         # Hollow and inflated rows LAST, visibly flagged — context, not evidence.
         "rows": rows + hollow_rows + inflated,
     }
