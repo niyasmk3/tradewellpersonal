@@ -74,6 +74,22 @@ def _option_lot_size(token: int | None) -> int:
     return 0
 
 
+def overnight_gap_note(mode_value: str, ist_minutes: int) -> str | None:
+    """Caution line for POSITIONAL cards issued late in the session.
+
+    A positional entry after ~14:30 IST barely trades before the close — the
+    position's first real test is tomorrow's OPEN, and a gap settles that test
+    before any stop can act (28->29 Jul: the evening read was bearish, the
+    index opened +230 the next morning; a stop cannot fire inside a gap).
+    Advisory text only — sizing and gates are untouched.
+    """
+    if mode_value != "positional" or ist_minutes < 14 * 60 + 30:
+        return None
+    return ("Late-day positional: holds overnight, and tomorrow's gap can open "
+            "beyond the stop before it can act — size for gap risk, not just "
+            "the stop distance.")
+
+
 class SignalService:
     def __init__(self, cfg: Settings, state: MarketState, store: SignalStore) -> None:
         self.cfg = cfg
@@ -428,6 +444,16 @@ class SignalService:
             fresh.status.notes = [*fresh.status.notes, lead][:6]
 
         self._apply_sizing(fresh, symbol)
+
+        # Late-day positional cards carry the overnight-gap caution (advisory
+        # text; the 28->29 Jul +230-point gap against the evening read is why).
+        if fresh.signal is not None:
+            gap_note = overnight_gap_note(
+                fresh.signal.mode.value, (now + 19800) % 86400 // 60)
+            if gap_note:
+                fresh.signal.event_note = (
+                    f"{fresh.signal.event_note} · {gap_note}"
+                    if fresh.signal.event_note else gap_note)
 
         # Context vetoes that need STATE (or the sizing above). Each converts
         # an issued card into a WAIT with the reason shown — the score panel

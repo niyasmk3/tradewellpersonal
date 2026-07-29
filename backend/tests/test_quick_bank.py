@@ -255,6 +255,44 @@ def test_exit_ab_unmeasurable_when_banking_live():
     print("  ABLIVE -> with banking live, the A/B says so instead of inventing numbers")
 
 
+def test_by_mode_split_in_summary():
+    """The 29-Jul forensic finding, institutionalised: the summary must split
+    expectancy per MODE (the book was positive overall while intraday/scalp
+    ran negative and positional carried everything). Hollow rows stay out."""
+    s = _store()
+    w = _mk(s, "I1")                                   # intraday winner
+    s.auto_close(w.id, 112.0, "target1")
+    pos_card = _card("PW")
+    pos_card.mode = TradingMode.POSITIONAL
+    pw = s.create_from_signal(pos_card, 1, 100.0, 65, quick_pct=0.12)
+    s.auto_close(pw.id, 160.0, "target1")              # positional runner
+    h = _mk(s, "HX")
+    s.update(h.id, notes="hollow: vol floor")
+    s.auto_close(h.id, 90.0, "stop")                   # hollow — excluded
+
+    out = summarize(s)
+    bm = out["by_mode"]
+    assert set(bm) == {"intraday", "positional"}, bm
+    assert bm["intraday"]["trades"] == 1 and bm["intraday"]["expectancy"] > 0
+    assert bm["positional"]["expectancy"] > bm["intraday"]["expectancy"]
+    assert abs(out["net_pnl"] - (bm["intraday"]["net_pnl"] + bm["positional"]["net_pnl"])) < 0.01
+    print("  BYMODE -> per-mode expectancy split; hollow excluded; sums reconcile")
+
+
+def test_overnight_gap_note_scope():
+    """Advisory gap caution: positional after 14:30 IST only — never intraday,
+    never the morning, text only (no sizing/gate coupling to test because none
+    exists by design)."""
+    from app.signals.service import overnight_gap_note
+
+    assert overnight_gap_note("positional", 14 * 60 + 30)
+    assert "gap" in overnight_gap_note("positional", 15 * 60).lower()
+    assert overnight_gap_note("positional", 14 * 60 + 29) is None
+    assert overnight_gap_note("intraday", 15 * 60) is None
+    assert overnight_gap_note("scalp", 15 * 60) is None
+    print("  GAPNOTE-> late positional only; morning and intraday untouched")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

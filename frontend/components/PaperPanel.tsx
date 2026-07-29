@@ -55,6 +55,23 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         <Stat label="Avg loss" value={`₹${signed(data.avg_loss, 0)}`} tone="text-bear" />
       </div>
 
+      {/* The split that decides gates: which MODE earns and which bleeds.
+          (29-Jul: book +2.3k overall while intraday/scalp ran negative and
+          positional carried everything — this line makes that visible.) */}
+      {data.by_mode && Object.keys(data.by_mode).length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+          {Object.entries(data.by_mode).map(([m, s]) => (
+            <span
+              key={m}
+              className={`tag ${s.expectancy > 0 ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}
+              title={`${m}: ${s.trades} closed, net ₹${s.net_pnl.toLocaleString("en-IN")}, ${s.win_rate}% wins — expectancy per trade net of charges`}
+            >
+              {m} ₹{signed(s.expectancy, 0)}/trade ({s.trades})
+            </span>
+          ))}
+        </div>
+      )}
+
       {Object.keys(data.by_reason).length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted">
           <span>exits:</span>

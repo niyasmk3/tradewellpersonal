@@ -357,6 +357,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "return_pct": round(net / deployed * 100, 2) if deployed else 0.0,
             "era": "honest" if honest else "inflated (pre-honest-fill)",
             "hollow": hollow,
+            "mode": t.mode.value,
         }
         # Three books: the system's own decisions (aggregated), the vetoed
         # counterfactual (its own verdict block below), and pre-honest-era
@@ -457,6 +458,18 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         "avg_win": round(sum(r["net_pnl"] for r in wins) / len(wins), 2) if wins else 0.0,
         "avg_loss": round(sum(r["net_pnl"] for r in losses) / len(losses), 2) if losses else 0.0,
         "expectancy": round(net_total / len(rows), 2) if rows else 0.0,
+        "by_mode": {
+            m: {
+                "trades": len(g),
+                "net_pnl": round(sum(r["net_pnl"] for r in g), 2),
+                "expectancy": round(sum(r["net_pnl"] for r in g) / len(g), 2),
+                "win_rate": round(100 * sum(1 for r in g if r["net_pnl"] > 0) / len(g), 1),
+            }
+            for m, g in (
+                (m, [r for r in rows if r["mode"] == m])
+                for m in sorted({r["mode"] for r in rows})
+            )
+        },
         "by_reason": {
             r: sum(1 for x in rows if x["reason"] == r)
             for r in sorted({x["reason"] for x in rows if x["reason"]})

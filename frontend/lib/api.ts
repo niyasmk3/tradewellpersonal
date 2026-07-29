@@ -404,6 +404,7 @@ export interface PaperRow {
   era?: string;
   /** Fill of a card the volume/OI floor vetoed — counterfactual, not evidence. */
   hollow?: boolean;
+  mode?: string;
 }
 
 export interface PaperSummary {
@@ -419,6 +420,8 @@ export interface PaperSummary {
   avg_loss: number;
   expectancy: number;
   by_reason: Record<string, number>;
+  /** Net-of-charges expectancy split by trading mode — the go-live/gate number. */
+  by_mode?: Record<string, { trades: number; net_pnl: number; expectancy: number; win_rate: number }>;
   note: string;
   /** Net verdict on the cards the volume/OI floor vetoed; null until one fills. */
   hollow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
