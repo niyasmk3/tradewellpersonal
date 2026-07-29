@@ -193,6 +193,58 @@ def test_corrupt_lines_are_skipped_not_fatal():
     print("  ARCH   -> a torn line costs one line, not the archive")
 
 
+def test_archived_rows_persist_confidence_and_title():
+    """The history tab's score chip reads these fields; a slim row schema that
+    dropped them would show every past card as scoreless forever (the data
+    cannot be backfilled). Pin the on-disk shape AND the loaded card."""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "a.jsonl"
+        arch = SignalArchive(p)
+        store = SignalStore(store_path=None)
+        store.archive = arch
+        now = int(time.time())
+        store.reconcile(_resp(_card("C1", now), now), now, CFG)
+        raw = json.loads(p.read_text().splitlines()[0])["card"]
+        assert raw["confidence"] == 81.0 and raw["title"] == "t", raw
+        card = arch.load(days=1)[0]
+        assert card.confidence == 81.0 and card.title == "t"
+    print("  ARCH   -> archived rows persist confidence + title")
+
+
+def test_history_endpoints_serve_score_and_title():
+    """/signals/{sym}/archive and /history rows must pass the card's score and
+    title through — the tab renders "score NN" from them and must treat a
+    missing score as "not recorded", so the keys have to exist at the API."""
+    from app.api import routes_signals as rs
+    from app.signals import archive as archive_mod
+    from app.signals import store as store_mod
+    from app.trades import store as trades_mod
+
+    class _NoTrades:
+        def all(self):
+            return []
+
+    with tempfile.TemporaryDirectory() as d:
+        arch = SignalArchive(Path(d) / "a.jsonl")
+        store = SignalStore(store_path=None)
+        store.archive = arch
+        now = int(time.time())
+        store.reconcile(_resp(_card("E1", now - 60), now - 60), now - 60, CFG)
+
+        saved = (archive_mod.signal_archive, store_mod.signal_store, trades_mod.trade_store)
+        archive_mod.signal_archive, store_mod.signal_store = arch, store
+        trades_mod.trade_store = _NoTrades()
+        try:
+            for out in (rs.signal_archive_history("NIFTY", mode="all", days=7),
+                        rs.signal_history("NIFTY", mode="all")):
+                row = next(r for r in out["rows"] if r["id"] == "E1")
+                assert row["score"] == 81.0 and row["title"] == "t", row
+        finally:
+            (archive_mod.signal_archive, store_mod.signal_store,
+             trades_mod.trade_store) = saved
+    print("  ARCH   -> /archive and /history rows carry score + title")
+
+
 def test_stores_without_archive_write_nothing():
     """The isolation rule that burned us with .signals.json: test-constructed
     stores default to archive=None and must stay silent."""

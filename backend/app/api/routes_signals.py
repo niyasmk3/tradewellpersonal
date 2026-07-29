@@ -105,7 +105,7 @@ def signal_history(symbol: str, mode: str = Query("all")) -> dict:
                      else None)
             rows.append({
                 "id": c.id, "mode": m, "direction": c.direction.value,
-                "contract": c.contract, "score": c.confidence,
+                "contract": c.contract, "score": c.confidence, "title": c.title,
                 "state": state, "taken": taken,
                 "created_at": c.created_at, "valid_until": c.valid_until,
                 "entry_low": c.entry_low, "entry_high": c.entry_high,
@@ -170,7 +170,7 @@ def signal_archive_history(symbol: str, mode: str = Query("all"),
                  else None)
         rows.append({
             "id": c.id, "mode": c.mode.value, "direction": c.direction.value,
-            "contract": c.contract, "score": c.confidence,
+            "contract": c.contract, "score": c.confidence, "title": c.title,
             "state": state, "taken": taken,
             "created_at": c.created_at, "valid_until": c.valid_until,
             "entry_low": c.entry_low, "entry_high": c.entry_high,
@@ -232,14 +232,6 @@ def _fresh_ltp(ticks: dict, token: int, cfg, now: int) -> float | None:
         if not ts or now - int(ts) > max_age:
             return None
     return float(ltp)
-
-
-@router.get("/{symbol}/history", response_model=list[SignalCard])
-def signal_history(symbol: str, mode: str = Query("intraday")) -> list[SignalCard]:
-    from app.signals.store import signal_store
-
-    tmode = _resolve(symbol, mode)
-    return signal_store.history(symbol, tmode)
 
 
 class RepriceResult(BaseModel):

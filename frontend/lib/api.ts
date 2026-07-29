@@ -257,7 +257,10 @@ export interface SignalHistoryRow {
   mode: TradingMode;
   direction: "CE" | "PE";
   contract: string;
-  score: number;
+  /** 0-100 confidence at issue. Missing/null means "not recorded" (a row from
+   *  a backend that predates score passthrough) — render nothing, never 0. */
+  score?: number | null;
+  title?: string | null;
   state: SignalState;
   /** Whether you acted on it: journal, paper book, both, or not at all. */
   taken: "live" | "paper" | "both" | null;

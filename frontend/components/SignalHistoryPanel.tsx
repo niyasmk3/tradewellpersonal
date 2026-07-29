@@ -91,7 +91,13 @@ export function SignalHistoryPanel({
               </span>
               <span className="truncate font-mono text-muted">{r.contract}</span>
               <span className="tag bg-panel text-[9px] text-muted">{r.mode}</span>
-              <span className="ml-auto font-mono text-white/80">{r.score.toFixed(0)}</span>
+              {/* A missing score is "not recorded", never 0 — legacy rows can't
+                  be backfilled, so they get silence rather than a fake number. */}
+              {typeof r.score === "number" ? (
+                <span className="ml-auto font-mono text-white/80">score {r.score.toFixed(0)}</span>
+              ) : (
+                <span className="ml-auto" />
+              )}
               <span className={`tag text-[9px] ${STATE_STYLE[r.state] ?? "bg-panel text-muted"}`}>
                 {r.state}
               </span>
