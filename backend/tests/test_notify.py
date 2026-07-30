@@ -130,6 +130,69 @@ def test_non_http_schemes_are_refused():
     print("  NOTIFY -> only http(s) webhooks are dispatched")
 
 
+def _at_ist(hh, mm, base=1_700_000_000):
+    """Epoch for hh:mm IST on base's IST day — deterministic, no wall clock."""
+    midnight = base - (base + 19800) % 86400
+    return midnight + hh * 3600 + mm * 60
+
+
+def test_evening_positional_is_marked():
+    """A positional card born at/after 14:30 IST pushes with the overnight
+    marker in title and body; earlier positional and evening INTRADAY don't.
+    Same minute as the gap caution and the ledger split (EVENING_MIN)."""
+    from app.signals.models import TradingMode
+
+    def _pcard(hh, mm, mode=TradingMode.POSITIONAL):
+        c = _card()
+        c.mode = mode
+        c.created_at = _at_ist(hh, mm)
+        c.valid_until = c.created_at + 6 * 3600
+        return c
+
+    real = _capture()
+    try:
+        notify.push_signal(_pcard(14, 30), _cfg())          # boundary inclusive
+        _drain()
+        _, payload, headers = SENT[0][:3]
+        assert "EVENING POSITIONAL" in headers["Title"]
+        assert "Overnight-hold candidate" in payload.decode()
+
+        SENT.clear()
+        notify.push_signal(_pcard(14, 29), _cfg())          # one minute early
+        notify.push_signal(_pcard(14, 40, TradingMode.INTRADAY), _cfg())
+        _drain()
+        for _, payload, headers, *_ in SENT:
+            assert "EVENING POSITIONAL" not in headers.get("Title", "")
+            assert "Overnight-hold candidate" not in payload.decode()
+    finally:
+        notify.threading.Thread = real
+    print("  NOTIFY -> evening positional pushes carry the overnight marker")
+
+
+def test_evening_positional_json_flag():
+    """json consumers get a routing flag so this pattern can ring its own bell."""
+    import json as _json
+    from app.signals.models import TradingMode
+
+    real = _capture()
+    try:
+        c = _card()
+        c.mode = TradingMode.POSITIONAL
+        c.created_at = _at_ist(15, 5)
+        c.valid_until = c.created_at + 6 * 3600
+        notify.push_signal(c, _cfg(ALERT_WEBHOOK_FORMAT="json"))
+        _drain()
+        data = _json.loads(SENT[0][1].decode())
+        assert data["evening_positional"] is True
+        SENT.clear()
+        notify.push_signal(_card(), _cfg(ALERT_WEBHOOK_FORMAT="json"))
+        _drain()
+        assert _json.loads(SENT[0][1].decode())["evening_positional"] is False
+    finally:
+        notify.threading.Thread = real
+    print("  NOTIFY -> json payload carries the evening_positional routing flag")
+
+
 def test_a_dead_webhook_never_raises():
     """The signal loop must survive an unreachable endpoint."""
     cfg = _cfg(ALERT_WEBHOOK_URL="http://127.0.0.1:9/never-listening")

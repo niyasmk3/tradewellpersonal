@@ -29,6 +29,7 @@ import urllib.parse
 import urllib.request
 
 from app.config import Settings
+from app.market.calendar import EVENING_MIN
 from app.signals.models import SignalCard
 
 log = logging.getLogger("tradewell.notify")
@@ -39,9 +40,25 @@ _TIMEOUT_S = 8
 _ALLOWED_SCHEMES = ("http", "https")
 
 
+def _is_evening_positional(card: SignalCard) -> bool:
+    """A positional card born at/after 14:30 IST — the overnight-hold
+    candidate the paper ledger grades. Derived from the card itself (mode +
+    created_at), the same minute the gap caution keys off, so the phone
+    alert, the card note, and the ledger can never disagree about which
+    cards are "evening"."""
+    if card.mode.value != "positional":
+        return False
+    return (card.created_at + 19800) % 86400 // 60 >= EVENING_MIN
+
+
 def _headline(card: SignalCard) -> str:
     side = "BUY PE" if card.direction.value == "PE" else "BUY CE"
-    return f"{side} {card.contract} · score {card.confidence:.0f}"
+    head = f"{side} {card.contract} · score {card.confidence:.0f}"
+    # The distinct title is the alert: on a lock screen the marker alone says
+    # "this one holds overnight" before the contract is even read.
+    if _is_evening_positional(card):
+        head = f"🌙 EVENING POSITIONAL · {head}"
+    return head
 
 
 def _body(card: SignalCard, include_sizing: bool = True) -> str:
@@ -62,6 +79,9 @@ def _body(card: SignalCard, include_sizing: bool = True) -> str:
         lines.append(f"Suggested {card.suggested_lots} lot(s)")
     if card.underlying_invalidation:
         lines.append(card.underlying_invalidation)
+    if _is_evening_positional(card):
+        lines.append("Overnight-hold candidate — barely trades before the close; "
+                     "tomorrow's gap settles it before any stop can act.")
     # The card's own validity, so a push read late is self-evidently stale.
     lines.append(f"Valid for {max(0, card.valid_until - card.created_at) // 60} min")
     return "\n".join(lines)
@@ -264,6 +284,9 @@ def push_signal(card: SignalCard, cfg: Settings, on_result=None) -> bool:
                 "symbol": card.symbol,
                 "mode": card.mode.value,
                 "score": card.confidence,
+                # Routing flag for json consumers (Telegram bots, HA automations)
+                # so an overnight-hold candidate can ring a different bell.
+                "evening_positional": _is_evening_positional(card),
             }).encode(), {"Content-Type": "application/json"}
         return (f"{title}\n{body}".encode(),
                 {"Content-Type": "text/plain; charset=utf-8", "Title": title})
