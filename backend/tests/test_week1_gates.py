@@ -98,18 +98,19 @@ def test_parse_hhmm():
 
 
 def test_late_entry_cutoff():
+    # P0-2 moved the cutoff to its own method so the late-window shadow
+    # booking can key off it; the semantics are unchanged.
     svc = _svc(SIGNAL_POST_GAP_QUIET_S=0)
     late, early = _ist_epoch("14:20"), _ist_epoch("13:50")
-    # Intraday and scalp are refused at/after the cutoff, with the reason spoken.
     for mode in (TradingMode.INTRADAY, TradingMode.SCALP):
-        v = svc._context_veto(_resp(mode, late), _df(late), late)
+        v = svc._late_cutoff_veto(_resp(mode, late), late)
         assert v and "entry cutoff" in v, (mode, v)
-        assert svc._context_veto(_resp(mode, early), _df(early), early) is None
+        assert svc._late_cutoff_veto(_resp(mode, early), early) is None
     # Positional carries overnight — exempt.
-    assert svc._context_veto(_resp(TradingMode.POSITIONAL, late), _df(late), late) is None
+    assert svc._late_cutoff_veto(_resp(TradingMode.POSITIONAL, late), late) is None
     # Empty setting disables the gate entirely.
     off = _svc(SIGNAL_POST_GAP_QUIET_S=0, SIGNAL_ENTRY_CUTOFF_IST="")
-    assert off._context_veto(_resp(TradingMode.INTRADAY, late), _df(late), late) is None
+    assert off._late_cutoff_veto(_resp(TradingMode.INTRADAY, late), late) is None
     print("  CUTOFF -> 14:15+ intraday/scalp refused; positional exempt; empty=off")
 
 

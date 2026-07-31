@@ -141,6 +141,23 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* The 14:15-cutoff hypothesis: live n=7 said late cards always lose;
+          the 43-session replay said hour-15 is the best hour (theta-blind).
+          These fills pay real theta — they settle it. */}
+      {data.late_shadow && (
+        <div className="mt-2 rounded bg-orange-500/10 px-2 py-1 text-[10px] text-orange-300">
+          Late-window counterfactual (14:15–15:10 vetoed cards): {data.late_shadow.trades} closed
+          {data.late_shadow.open ? ` (+${data.late_shadow.open} open)` : ""}, net ₹
+          {signed(data.late_shadow.net_pnl, 0)} (₹{signed(data.late_shadow.expectancy, 0)}/trade,{" "}
+          {data.late_shadow.win_rate}% wins).{" "}
+          {data.late_shadow.trades < 30
+            ? `Verdict at 30+ fills — ${30 - data.late_shadow.trades} to go.`
+            : data.late_shadow.expectancy > 0
+              ? "Positive at sample size: the cutoff is costing money — consider retiring it."
+              : "Negative at sample size: the cutoff is earning its keep."}
+        </div>
+      )}
+
       {/* Exit-policy A/B: the same recorded fills replayed under "bank the
           whole 1-lot position at the quick target" vs the live ratchet. */}
       {data.exit_ab && (
@@ -172,10 +189,18 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                 <span className="tag bg-panel text-[9px] text-muted">{r.reason}</span>
                 {r.hollow && (
                   <span
-                    className="tag bg-purple-500/15 text-[9px] text-purple-300"
-                    title="Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
+                    className={`tag text-[9px] ${
+                      r.shadow_class === "late"
+                        ? "bg-orange-500/15 text-orange-300"
+                        : "bg-purple-500/15 text-purple-300"
+                    }`}
+                    title={
+                      r.shadow_class === "late"
+                        ? "Counterfactual: this card was vetoed by the 14:15 entry cutoff — paper takes it anyway so the cutoff hypothesis stays auditable. Not counted in any aggregate above."
+                        : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
+                    }
                   >
-                    hollow
+                    {r.shadow_class === "late" ? "late" : "hollow"}
                   </span>
                 )}
                 {r.era?.startsWith("inflated") && (

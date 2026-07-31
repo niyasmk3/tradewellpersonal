@@ -404,6 +404,9 @@ export interface PaperRow {
   era?: string;
   /** Fill of a card the volume/OI floor vetoed — counterfactual, not evidence. */
   hollow?: boolean;
+  /** Which shadow ledger a hollow row belongs to: the participation-floor
+      hypothesis or the 14:15 late-cutoff hypothesis. */
+  shadow_class?: "floor" | "late" | null;
   mode?: string;
 }
 
@@ -425,6 +428,9 @@ export interface PaperSummary {
   note: string;
   /** Net verdict on the cards the volume/OI floor vetoed; null until one fills. */
   hollow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
+  /** The 14:15-cutoff hypothesis ledger: fills of late-vetoed cards (14:15-15:10).
+      Positive expectancy at 30+ fills retires the cutoff. */
+  late_shadow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
   /** 1-lot exit-policy A/B: trailing ratchet vs banking the whole position at
       the quick target — a paired counterfactual on the same recorded fills. */
   exit_ab?: {

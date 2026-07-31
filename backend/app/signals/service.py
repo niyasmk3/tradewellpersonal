@@ -200,18 +200,43 @@ class SignalService:
             mins = int((quiet - (now - gap_end)) // 60) + 1
             return (f"Tick feed resumed after a gap — holding new cards ~{mins}m "
                     "while the tape re-establishes")
-        # 3. LATE-ENTRY CUTOFF (intraday/scalp): a card born in the last hour
-        #    runs straight into the 15:20 time exit with no runway — the
-        #    audited week's 14:27+ cards lost 7-for-7 (-Rs1,416), including
-        #    every time_exit loss the book recorded. Positional is exempt: its
-        #    thesis carries overnight.
+        # 3. VOLUME DATA HEALTH (audit P0-1): "no volume data" used to score
+        #    a neutral 7.0 — numerically equal to the participation floor, so a
+        #    BLIND tape passed the floor while a real at-average tape (6 pts)
+        #    was vetoed. Participation that cannot be verified fails closed,
+        #    with its own reason — it is a data outage, not a measured-weak
+        #    tape, so it does NOT go to the floor's counterfactual book.
+        #    DELIBERATE consequence (review-flagged): a card whose volume is
+        #    unavailable AND whose OI is sub-floor also skips the floor ledger
+        #    — correct, because its outcome would be confounded by the blind
+        #    volume; outage cards belong to no hypothesis's evidence.
+        sig = fresh.signal
+        if sig is not None and sig.score is not None:
+            comp = next((c for c in sig.score.components
+                         if c.name.startswith("Volume")), None)
+            if comp is not None and any(
+                    r.startswith("Volume unavailable") for r in comp.reasons):
+                return ("Volume data unavailable — participation cannot be verified; "
+                        "failing closed (a blind tape must not outrank a measured one)")
+        return None
+
+    def _late_cutoff_veto(self, fresh: SignalResponse, now: int) -> str | None:
+        """LATE-ENTRY CUTOFF (intraday/scalp): a card born in the last hour
+        runs into the 15:20 time exit with little runway — the audited week's
+        14:27+ cards lost 7-for-7. BUT the 43-session replay says hour-15 is
+        the BEST entry hour on the underlying (theta-blind), so this rule is
+        now formally a HYPOTHESIS: the caller shadow-books what it vetoes
+        (audit P0-2) and the paper book — which pays theta — will decide at
+        30+ late-window fills. Positional is exempt: its thesis carries
+        overnight."""
         cutoff = _parse_hhmm(self.cfg.signal_entry_cutoff_ist)
         if (cutoff is not None
                 and fresh.mode.value in ("intraday", "scalp")
                 and ((now + 19800) % 86400) // 60 >= cutoff):
             return (f"Past the {self.cfg.signal_entry_cutoff_ist} entry cutoff — a fresh "
-                    "card now has no runway before the 15:20 close (last week: "
-                    "7-for-7 losses). Tomorrow's tape will offer new ones.")
+                    "card now has little runway before the 15:20 close (live n=7 "
+                    "said always-lose; the replay disagrees — the paper shadow "
+                    "book is settling it).")
         return None
 
     def _refire_veto(self, card, now: int) -> str | None:
@@ -462,20 +487,37 @@ class SignalService:
             veto = (self._context_veto(fresh, df, now)
                     or self._refire_veto(fresh.signal, now)
                     or self._scalp_friction_veto(fresh.signal))
+            shadow_tag = None
             if veto is None:
-                # Participation floor LAST, so the shadow book isolates the
-                # floor's own effect — a card the context vetoes would have
-                # killed anyway must not pollute the counterfactual sample.
-                veto = self._hollow_veto(fresh.signal)
-                if veto:
-                    try:
-                        shadow = fresh.model_copy(deep=True)
-                        shadow.signal.hollow_reason = veto
-                        # Same cadence throttle so the shadow slot stabilises
-                        # one card per window, just like the live feed.
-                        hollow_store.reconcile(shadow, now, self._throttle())
-                    except Exception:
-                        log.debug("hollow shadow reconcile failed", exc_info=True)
+                # BOTH hypothesis vetoes are computed so each ledger stays
+                # pure (review finding): a sub-floor card arriving after 14:15
+                # is confounded by BOTH conditions — booked to whichever
+                # single ledger, it would poison that hypothesis's verdict.
+                # So: both fail -> vetoed (floor reason leads, the more
+                # fundamental refusal) and shadow-booked to NEITHER.
+                late = self._late_cutoff_veto(fresh, now)
+                floor = self._hollow_veto(fresh.signal)
+                if late and floor:
+                    veto = floor + " (also past the entry cutoff)"
+                elif late:
+                    veto = late
+                    # Shadow-book the late would-be card until 15:10 (after
+                    # that there is genuinely no runway to measure). Tag class
+                    # "late:" keeps it OUT of the floor's verdict block.
+                    if ((now + 19800) % 86400) // 60 <= 15 * 60 + 10:
+                        shadow_tag = "late: " + veto
+                elif floor:
+                    veto = floor
+                    shadow_tag = floor
+            if shadow_tag:
+                try:
+                    shadow = fresh.model_copy(deep=True)
+                    shadow.signal.hollow_reason = shadow_tag
+                    # Same cadence throttle so the shadow slot stabilises
+                    # one card per window, just like the live feed.
+                    hollow_store.reconcile(shadow, now, self._throttle())
+                except Exception:
+                    log.debug("shadow reconcile failed", exc_info=True)
             if veto:
                 fresh.signal = None
                 fresh.action = Action.WAIT

@@ -66,6 +66,24 @@ def is_hollow_row(t) -> bool:
     return bool(getattr(t, "notes", None) and t.notes.startswith("hollow:"))
 
 
+def shadow_class(x) -> str | None:
+    """Which counterfactual ledger a row/card belongs to: "late" (14:15-cutoff
+    hypothesis), "floor" (participation-floor hypothesis), or None (clean).
+
+    Works on a Trade (notes tag) or a SignalCard (hollow_reason). The classes
+    must stay independent EVERYWHERE — including the paper capacity buckets:
+    the review caught floor shadows starving late shadows out of fills when
+    both shared one bucket, which biases both 30-fill verdicts.
+    """
+    notes = getattr(x, "notes", None)
+    if notes and notes.startswith("hollow:"):
+        return "late" if notes.startswith("hollow: late:") else "floor"
+    reason = getattr(x, "hollow_reason", None)
+    if reason:
+        return "late" if reason.startswith("late:") else "floor"
+    return None
+
+
 def _ist_minutes(now: int) -> int:
     return (now + 19800) % 86400 // 60
 
@@ -206,13 +224,16 @@ class PaperTradingService:
         # and a 10-minute scalp hold outlives an intraday card's 480s validity
         # — each mode's sample would be thinned, and selection-biased toward
         # quiet tape, by the OTHER modes' holding times.
-        # Hollowness must match too: the counterfactual book and the clean
-        # book each get their own per-mode slots — a hollow fill occupying the
-        # clean cap would let the vetoed feed starve the primary evidence.
+        # Shadow CLASS must match too: clean, floor-counterfactual and
+        # late-counterfactual books each get their own per-mode slots. A
+        # coarser hollow-vs-clean split let floor shadows occupy the bucket
+        # and starve late shadows of fills (review finding) — starving either
+        # hypothesis slows and biases its own 30-fill verdict.
         card_hollow = bool(getattr(card, "hollow_reason", None))
+        card_class = shadow_class(card)
         open_now = [t for t in self.store.all()
                     if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)
-                    and t.mode == card.mode and is_hollow_row(t) == card_hollow]
+                    and t.mode == card.mode and shadow_class(t) == card_class]
         # The runtime override, not the .env default: the live engine reads the
         # same overlay, and a simulation gated tighter than the thing it is
         # meant to model reports fewer trades than the system would have taken.
@@ -341,12 +362,17 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     rows = []
     inflated = []
     hollow_rows = []
+    late_rows = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
         net = chg.net_pnl(t.entry_premium, t.exit_premium, qty)
         deployed = t.entry_premium * qty
         honest = t.entered_at >= HONEST_FILLS_FROM
         hollow = is_hollow_row(t)
+        # Two shadow ledgers, one tag channel: "hollow: late: ..." rows test
+        # the 14:15 cutoff hypothesis; plain "hollow: ..." rows test the
+        # volume/OI participation floor. Each verdict block must stay pure.
+        late = hollow and (t.notes or "").startswith("hollow: late:")
         row = {
             "id": t.id, "contract": t.contract, "direction": t.direction.value,
             "entered_at": t.entered_at, "exited_at": t.exited_at,
@@ -358,12 +384,15 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "return_pct": round(net / deployed * 100, 2) if deployed else 0.0,
             "era": "honest" if honest else "inflated (pre-honest-fill)",
             "hollow": hollow,
+            "shadow_class": ("late" if late else "floor") if hollow else None,
             "mode": t.mode.value,
         }
         # Three books: the system's own decisions (aggregated), the vetoed
         # counterfactual (its own verdict block below), and pre-honest-era
         # history (flagged, counted nowhere).
-        (hollow_rows if (honest and hollow) else rows if honest else inflated).append(row)
+        (late_rows if (honest and late)
+         else hollow_rows if (honest and hollow)
+         else rows if honest else inflated).append(row)
     wins = [r for r in rows if r["net_pnl"] > 0]
     losses = [r for r in rows if r["net_pnl"] < 0]
     net_total = round(sum(r["net_pnl"] for r in rows), 2)
@@ -373,7 +402,9 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     # engine's own counterfactuals, next to a clean-only "Closed" count.
     open_all = [t for t in store.all()
                 if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
-    open_hollow = [t for t in open_all if is_hollow_row(t)]
+    open_late = [t for t in open_all
+                 if (t.notes or "").startswith("hollow: late:")]
+    open_hollow = [t for t in open_all if is_hollow_row(t) and t not in open_late]
     open_clean = [t for t in open_all if not is_hollow_row(t)]
 
     # ---- 1-lot exit-policy A/B: trailing ratchet vs bank-the-quick-target ---
@@ -540,6 +571,20 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "win_rate": (round(100 * sum(1 for r in hollow_rows if r["net_pnl"] > 0)
                                / len(hollow_rows), 1) if hollow_rows else 0.0),
         } if (hollow_rows or open_hollow) else None,
+        # THE 14:15-CUTOFF HYPOTHESIS LEDGER (audit P0-2): fills of cards the
+        # late-entry cutoff vetoed, 14:15-15:10 only. Live n=7 said such cards
+        # always lose; the 43-session replay said hour-15 is the BEST hour on
+        # the underlying (but it cannot see theta). These fills pay theta.
+        # Verdict at 30+ fills: positive expectancy -> retire the cutoff.
+        "late_shadow": {
+            "trades": len(late_rows),
+            "open": len(open_late),
+            "net_pnl": round(sum(r["net_pnl"] for r in late_rows), 2),
+            "expectancy": (round(sum(r["net_pnl"] for r in late_rows) / len(late_rows), 2)
+                           if late_rows else 0.0),
+            "win_rate": (round(100 * sum(1 for r in late_rows if r["net_pnl"] > 0)
+                               / len(late_rows), 1) if late_rows else 0.0),
+        } if (late_rows or open_late) else None,
         # THE EXIT-POLICY A/B (see the block above): same trades, two exits.
         "exit_ab": exit_ab,
         # THE OVERNIGHT-HOLD LEDGER (see the block above): did holding a
@@ -551,6 +596,6 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "evening": _on_stats(evening_rows) if evening_rows else None,
             "rows": on_rows,
         } if on_rows else None,
-        # Hollow and inflated rows LAST, visibly flagged — context, not evidence.
-        "rows": rows + hollow_rows + inflated,
+        # Shadow and inflated rows LAST, visibly flagged — context, not evidence.
+        "rows": rows + hollow_rows + late_rows + inflated,
     }

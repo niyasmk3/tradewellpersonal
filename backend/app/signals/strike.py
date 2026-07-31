@@ -6,10 +6,14 @@ depth) and explains why the chosen strike beat the alternatives.
 """
 from __future__ import annotations
 
+import logging
+
 from typing import Optional
 
 from app.models.schemas import OptionChain
 from app.signals.models import Direction, StrikePick
+
+log = logging.getLogger("tradewell.signals")
 
 
 def _compact(n: float | None) -> str:
@@ -107,18 +111,28 @@ def select(
         chosen_m, chosen = m, info
         break
 
-    # Fallback: take ATM even if guards fail, so we still surface *something*.
+    # Fallback: take ATM even if guards fail, so we still surface *something*
+    # — but LOUDLY (audit P0-3): the silent version shipped illiquid strikes
+    # as normal cards. The warning must be rationale[0] because the card only
+    # carries the first rationale line.
+    guards_bypassed = False
     if chosen is None:
         atm_info = leg(atm)
         if not atm_info or atm_info["ltp"] is None or atm_info["ltp"] <= 0:
             return None
         chosen_m, chosen = "ATM", atm_info
+        guards_bypassed = True
+        log.warning("strike guards bypassed for %s: ATM fallback (oi=%s, spread unverified)",
+                    symbol, atm_info.get("oi"))
 
     strike = candidates[chosen_m]
     rationale = [
         f"{chosen_m} strike selected"
         + (" (strong momentum → OTM)" if chosen_m == "OTM" and strong_momentum else ""),
     ]
+    if guards_bypassed:
+        rationale.insert(0, "⚠ Liquidity guards NOT met — ATM fallback; OI/spread "
+                            "unverified, expect worse fills")
     if chosen["oi"] is not None:
         rationale.append(f"OI {_compact(chosen['oi'])}")
     _, spread_note = _spread_ok(chosen["token"], chosen["ltp"], ticks, max_spread_pct)
