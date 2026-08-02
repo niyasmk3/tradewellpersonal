@@ -125,7 +125,14 @@ samples is a multiple-comparisons machine — the "winner" is usually noise
 4. ideas pre-listed per run — the agent works a queue, not an open-ended
    metric hunt.
 
-Build this only after the ~100-card gate is met and backfill has run.
+**Status: BUILT (02-Aug-2026)** — see `experiment/`: `PROGRAM.md` is the
+charter, `harness.py` the fixed evaluator (selftest proves the loop on
+synthetic data), `experiment.py` the one agent-editable file, and
+`dataset.py` produces `data/dataset.csv` + the locked holdout. The harness
+refuses to run until the data gates are met (walk-forward needs 2+ usable
+monthly folds), so it simply waits for the recorder + paper book to feed it.
+Run a research loop only after the ~100-card gate; the mechanics are ready
+today.
 
 ## Rules of the game (worth re-reading before every experiment)
 

@@ -49,5 +49,15 @@ for training joins.
   spot indices + INDIA VIX daily) into the same DB. Needs Kite keys plus one
   day's dashboard login. Idempotent.
 - `analyze.py` — one-screen summary of every evidence file.
+- `dataset.py` — builds the training table: one row per graded card, joining
+  card score + paper outcome + at-birth market state. Writes `data/dataset.csv`
+  and the LOCKED `data/dataset_holdout.csv` (newest 28 days — experiments must
+  never read it).
+- `experiment/` — the autoresearch-style research harness: `PROGRAM.md` (the
+  agent charter with the anti-overfitting rules), `experiment.py` (the one
+  file the agent edits), `harness.py` (fixed walk-forward evaluation,
+  `--selftest` proves the loop on synthetic data today). This folder is its
+  own git repo (keep/discard branch mechanics), invisible to the upstream app
+  repo.
 - `TRAINING.md` — the full guide: data → features → walk-forward training →
   shadow deployment, plus the improvement roadmap.
