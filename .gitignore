@@ -1,0 +1,6 @@
+# inner repo for the experiment harness (upstream repo excludes recorder/
+# entirely via .git/info/exclude — this .gitignore is for the INNER repo)
+data/
+__pycache__/
+*.pyc
+experiment/results*.tsv
