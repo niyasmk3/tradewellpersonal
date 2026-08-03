@@ -359,6 +359,49 @@ def test_level_broke_fires_the_protective_alert_once():
     print("  ALARM  -> level break alerts within minutes, exactly once")
 
 
+def test_ceiling_books_the_earlier_buy():
+    """04-Aug user catch: the ceiling quoted a fresh ATM strike, which read
+    as a DIFFERENT trade. With a BUY earlier today, the ceiling must talk
+    about that bought strike and its live value; a broken buy is excluded."""
+    chain = _Chain([_Row(24600, 104.5)])
+    svc = _svc(spot=24610.0, chain=chain)
+    svc._levels = [_level(24600.0), _level(24775.0, days=25, hold=0.82)]
+    base = int(time.time()) - 5000
+    svc.check(now=base)                        # prime above 24600
+    svc.state.spot = 24602.0
+    svc.check(now=base + 5)                    # BUY @ 24600, quotes ₹104.5
+    assert len(svc.pushes) == 1
+
+    # Price rallies to the ceiling; the bought contract now trades ₹142.3.
+    svc.state.ticks[901] = {"last_price": 142.3, "ts": base + 3000}
+    svc.state.spot = 24700.0                   # travel up (re-arms 24600 too)
+    svc.check(now=base + 2400)
+    svc.state.spot = 24772.0                   # into the ceiling from below
+    svc.check(now=base + 3000)
+    ceil = [p for p in svc.pushes if "CEILING" in p[0]]
+    assert ceil, [t for t, _, _ in svc.pushes]
+    _, body, _ = ceil[0]
+    assert "NIFTY 24600 CE @ ₹104.5" in body and "now ₹142.3" in body, body
+    assert "+36%" in body
+    a = next(x for x in svc.alerts if x["side"] == "sell")
+    assert a["ref_buy"]["strike"] == 24600 and a["ref_buy"]["pct"] == 36.2
+
+    # A BROKEN buy must not be "booked" by a later ceiling.
+    svc2 = _svc(spot=24610.0, chain=_Chain([_Row(24600, 104.5)]))
+    svc2._levels = [_level(24600.0), _level(24775.0)]
+    svc2.check(now=base)
+    svc2.state.spot = 24602.0
+    svc2.check(now=base + 5)
+    list(svc2.alerts)[0]["outcomes"]["broke"] = True
+    svc2.state.spot = 24700.0
+    svc2.check(now=base + 2400)
+    svc2.state.spot = 24772.0
+    svc2.check(now=base + 3000)
+    ceil2 = [p for p in svc2.pushes if "CEILING" in p[0]]
+    assert ceil2 and "Your" not in ceil2[0][1], "a broken buy is not bookable"
+    print("  LINK   -> the ceiling books the strike the BUY named")
+
+
 def test_callout_history_persists_across_restart():
     """Yesterday's lesson (the 14:21 callout vanished in a restart): alerts
     and their grades round-trip through the store file."""

@@ -170,6 +170,25 @@ class LevelWatchService:
             levels.sort(key=lambda lv: abs(lv["level"] - spot))
         return levels[:MAX_WATCHED]
 
+    def _link_earlier_buy(self, now: int):
+        """Today's most recent un-broken BUY callout + its contract's live
+        premium — so a CEILING callout can talk about THE STRIKE THE BUY
+        NAMED (04-Aug user catch: the ceiling quoted a fresh ATM strike,
+        which read as a different trade). Returns (buy_alert, live_premium);
+        either may be None."""
+        today = (now + 19800) // 86400
+        with self._lock:
+            buys = [a for a in self.alerts
+                    if a["side"] == "buy"
+                    and (a["ts"] + 19800) // 86400 == today
+                    and not (a.get("outcomes") or {}).get("broke")
+                    and a.get("ce_ltp") and a.get("token")]
+        if not buys:
+            return None, None
+        b = max(buys, key=lambda a: a["ts"])
+        lp = ((getattr(self.state, "ticks", {}) or {}).get(b["token"]) or {}).get("last_price")
+        return b, (float(lp) if lp else None)
+
     def _next_ceiling(self, level: float) -> dict | None:
         """The nearest strong level ABOVE `level` — the BUY callout's sell
         side. From the same watched ladder, so the number quoted at buy time
@@ -264,6 +283,7 @@ class LevelWatchService:
         exp = _fmt_expiry(quote["expiry"])
         px = f" @ ₹{quote['ce_ltp']:g}" if quote["ce_ltp"] else ""
         contract = f"NIFTY {quote['strike']} CE{px} · exp {exp}"
+        ref_buy = ref_now = None          # set by the resistance branch only
 
         if side == "support":
             title = f"📍 LEVEL BUY setup · {contract}"
@@ -291,10 +311,32 @@ class LevelWatchService:
             )
         else:
             title = f"📍 LEVEL CEILING {level:,.0f} — consider booking"
+            # When today had a BUY callout, the ceiling talks about THAT
+            # contract — buy and sell must read as one story, not two
+            # different strikes (04-Aug user catch). The fresh ATM quote
+            # stays as reference for anyone without a position.
+            ref_buy, ref_now = self._link_earlier_buy(now)
+            if ref_buy is not None:
+                when = time.strftime("%H:%M", time.gmtime(ref_buy["ts"] + 19800))
+                if ref_now:
+                    pct = (ref_now - ref_buy["ce_ltp"]) / ref_buy["ce_ltp"] * 100
+                    buy_line = (
+                        f"Your {when} BUY — NIFTY {ref_buy['strike']} CE @ "
+                        f"₹{ref_buy['ce_ltp']:g} — is now ₹{ref_now:g} "
+                        f"({pct:+.0f}%). THIS is the level history says to "
+                        "book it at.\n")
+                else:
+                    buy_line = (
+                        f"Your {when} BUY — NIFTY {ref_buy['strike']} CE @ "
+                        f"₹{ref_buy['ce_ltp']:g} — THIS is the level history "
+                        "says to book it at.\n")
+            else:
+                buy_line = ""
             body = (
                 f"Spot {spot:,.0f} is at resistance {level:,.0f} — {held} "
-                f"({lv.get('total_touches', '?')} touches). If long calls "
-                f"({contract}), history says this is where rallies stalled.\n"
+                f"({lv.get('total_touches', '?')} touches).\n"
+                f"{buy_line}"
+                f"(Reference ATM here: {contract}.)\n"
                 "Frequency, not prophecy — a break past it invalidates this note."
             )
 
@@ -311,6 +353,14 @@ class LevelWatchService:
             "next_ceiling": (float(self._next_ceiling(level)["level"])
                              if side == "support" and self._next_ceiling(level)
                              else None),
+            # CEILING only: the earlier BUY this call is booking, if one
+            # exists today — strike, entry, live value at the ceiling.
+            "ref_buy": (
+                {"ts": ref_buy["ts"], "strike": ref_buy["strike"],
+                 "entry": ref_buy["ce_ltp"], "now": ref_now,
+                 "pct": (round((ref_now - ref_buy["ce_ltp"]) / ref_buy["ce_ltp"] * 100, 1)
+                         if ref_now else None)}
+                if side == "resistance" and ref_buy is not None else None),
             "title": title,
             # Filled in by _grade over the next hour — the callout's own
             # report card, persisted with it.
