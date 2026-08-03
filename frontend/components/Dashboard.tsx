@@ -184,6 +184,26 @@ export function Dashboard() {
     ...(symbol === "NIFTY"
       ? [{ key: "backtest", label: "Backtest", node: <BacktestPanel symbol={symbol} /> }]
       : []),
+    {
+      key: "patterns",
+      label: "Patterns",
+      // The Patterns Lab is a standalone research page (3y of 5-min history) —
+      // too wide for this rail, so the tab just links out.
+      node: (
+        <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+          <p className="text-xs text-muted">
+            Day-of-week tendencies, time-of-day heatmaps, candlestick frequencies and
+            S/R levels from 3 years of NIFTY 5-minute data.
+          </p>
+          <a
+            href="/patterns"
+            className="rounded bg-accent/20 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/30"
+          >
+            Open Patterns Lab ↗
+          </a>
+        </div>
+      ),
+    },
     // Lot/qty affordability calculator (the "tradewell Qty.xlsx" sheet, live).
     { key: "calc", label: "Calc", node: <QtyCalculator /> },
   ];

@@ -528,6 +528,90 @@ export interface BacktestResult {
   note: string;
 }
 
+// ---- Patterns Module (standalone research: 3y NIFTY 5-min) ----
+export interface PatternsStatus {
+  bars: number;
+  last_sync: string | null;
+  results_available: boolean;
+  results_generated_at: string | null;
+}
+
+export interface DayOfWeekStats {
+  n_days: number;
+  open_to_close_bps: { mean: number; median: number };
+  up_days: number;
+  up_day_rate: number;
+  gap_bps: { mean: number; abs_mean: number };
+  gap_up_days: number;
+  gap_up_faded_rate: number | null;
+  gap_down_days: number;
+  gap_down_faded_rate: number | null;
+  avg_range_bps: number;
+  first_hour_range_share: number;
+  trend_day_rate: number;
+}
+
+export interface TimeOfDaySlot {
+  slot: string;
+  n_days: number;
+  mean_ret_bps: number;
+  up_rate: number;
+  mean_abs_ret_bps: number;
+  vol_proxy_share: number | null;
+}
+
+export interface PatternOutcome {
+  count: number;
+  direction?: "bullish" | "bearish" | "neutral";
+  n_scored?: number;
+  hit_rate_30m?: number;
+  avg_fwd_30m_bps?: number;
+}
+
+export interface CandleFrequency {
+  overall: PatternOutcome & { direction: "bullish" | "bearish" | "neutral" };
+  by_weekday: Record<string, PatternOutcome>;
+}
+
+export interface LevelRow {
+  level: number;
+  days_touched: number;
+  total_touches: number;
+  as_resistance: number;
+  as_support: number;
+  held: number;
+  broke: number;
+  hold_rate: number;
+  first_touch: string;
+  last_touch: string;
+}
+
+export interface PatternsResults {
+  disclaimer: string;
+  generated_at: string;
+  data: {
+    bars: number;
+    days: number;
+    from: string;
+    to: string;
+    last_close: number;
+    volume_note: string;
+    has_volume_proxy: boolean;
+  };
+  day_of_week: Record<string, DayOfWeekStats>;
+  time_of_day: Record<string, TimeOfDaySlot[]>;
+  candlestick_frequency: Record<string, CandleFrequency>;
+  levels: {
+    method: string;
+    pivot_count: number;
+    levels: LevelRow[];
+    round_number_stats: Record<
+      string,
+      { pivots_at_round: number; share: number; expected_share_if_random: number }
+    >;
+  };
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${path}`);
@@ -641,4 +725,10 @@ export const api = {
 
   backtest: (symbol: string, mode: TradingMode, days: number) =>
     postJSON<BacktestResult>("/backtest", { symbol, mode, days }),
+
+  patternsStatus: () => getJSON<PatternsStatus>("/patterns/status"),
+  /** 404s until the first analyze — callers treat that as "no results yet". */
+  patternsResults: () => getJSON<PatternsResults>("/patterns/results"),
+  patternsSync: (years = 3) => postJSON<{ total_bars: number }>(`/patterns/sync?years=${years}`, {}),
+  patternsAnalyze: () => postJSON<PatternsResults>("/patterns/analyze", {}),
 };
