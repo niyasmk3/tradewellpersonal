@@ -155,5 +155,5 @@ export function PatternsTapeChart({
     );
   }, [levels]);
 
-  return <div ref={containerRef} className="h-72 w-full" />;
+  return <div ref={containerRef} className="h-[36rem] w-full" />;
 }

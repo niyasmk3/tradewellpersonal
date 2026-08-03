@@ -25,7 +25,7 @@ import { patternInfo } from "@/lib/patternInfo";
 // lightweight-charts touches the DOM — client-side only, same as PriceChart.
 const PatternsTapeChart = dynamic(
   () => import("./PatternsTapeChart").then((m) => m.PatternsTapeChart),
-  { ssr: false, loading: () => <div className="h-72 w-full animate-pulse bg-panel2" /> },
+  { ssr: false, loading: () => <div className="h-[36rem] w-full animate-pulse bg-panel2" /> },
 );
 import { usePolling } from "@/lib/usePolling";
 
