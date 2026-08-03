@@ -317,6 +317,48 @@ def test_callout_break_marks_the_level_failed():
     print("  BREAK  -> failed levels and premium-less callouts grade honestly")
 
 
+def test_buy_callout_names_both_exits():
+    """04-Aug user questions: the BUY push must name the failure line (the
+    stop, = the grader's own break threshold) AND the first strong ceiling
+    above (the sell side) at fire time — no waiting for a 30m verdict."""
+    chain = _Chain([_Row(24600, 104.5)])
+    svc = _svc(spot=24610.0, chain=chain)
+    svc._levels = [_level(24600.0), _level(24675.0, days=35, hold=0.88)]
+    base = int(time.time()) - 5000
+    svc.check(now=base)
+    svc.state.spot = 24602.0
+    svc.check(now=base + 5)
+    assert len(svc.pushes) == 1
+    _, body, _ = svc.pushes[0]
+    assert "FAILS below 24,585" in body, body
+    assert "first strong ceiling above is 24,675" in body
+    assert "held 88% of 35d" in body
+    a = list(svc.alerts)[0]
+    assert a["fails_below"] == 24585.0 and a["next_ceiling"] == 24675.0
+    print("  EXITS  -> buy callout carries its stop AND its sell side")
+
+
+def test_level_broke_fires_the_protective_alert_once():
+    """The moment a BUY level breaks, say so — minutes, not the report card.
+    Once per callout; a persisted broke flag cannot re-buzz after restart."""
+    svc = _svc(spot=24650.0, chain=None)
+    svc._levels = [_level(24600.0)]
+    base = int(time.time()) - 5000
+    svc.check(now=base)
+    svc.state.spot = 24602.0
+    svc.check(now=base + 5)                   # BUY callout
+    assert len(svc.pushes) == 1
+    svc.state.spot = 24580.0                  # 20 pts through: broke
+    svc.check(now=base + 300)
+    titles = [t for t, _, _ in svc.pushes]
+    assert any("LEVEL BROKE" in t for t in titles), titles
+    assert len(svc.pushes) == 2
+    svc.state.spot = 24575.0                  # still broken: no re-buzz
+    svc.check(now=base + 400)
+    assert len(svc.pushes) == 2, "broke alert must fire exactly once"
+    print("  ALARM  -> level break alerts within minutes, exactly once")
+
+
 def test_callout_history_persists_across_restart():
     """Yesterday's lesson (the 14:21 callout vanished in a restart): alerts
     and their grades round-trip through the store file."""

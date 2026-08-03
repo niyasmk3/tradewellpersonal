@@ -170,6 +170,15 @@ class LevelWatchService:
             levels.sort(key=lambda lv: abs(lv["level"] - spot))
         return levels[:MAX_WATCHED]
 
+    def _next_ceiling(self, level: float) -> dict | None:
+        """The nearest strong level ABOVE `level` — the BUY callout's sell
+        side. From the same watched ladder, so the number quoted at buy time
+        is exactly the level whose touch will fire the CEILING callout."""
+        above = [lv for lv in self._levels if float(lv["level"]) > level + 1]
+        if not above:
+            return None
+        return min(above, key=lambda lv: float(lv["level"]))
+
     # ---- live contract enrichment -------------------------------------------
     def _atm_quote(self, spot: float, now: int) -> dict:
         """Nearest-strike CE quote from the live chain — the 'what would I
@@ -258,10 +267,25 @@ class LevelWatchService:
 
         if side == "support":
             title = f"📍 LEVEL BUY setup · {contract}"
+            # BOTH exits are named at BUY time (04-Aug, user questions): the
+            # failure line below (same threshold the grader calls "broke",
+            # backed by the LEVEL BROKE alert) and the first strong ceiling
+            # above (where a CEILING callout will fire — the sell side).
+            # There is no clock on the sell: it is price, not time.
+            up = self._next_ceiling(level)
+            sell_line = (
+                f"Sell side: first strong ceiling above is {up['level']:,.0f} "
+                f"(held {up['hold_rate']:.0%} of {up['days_touched']}d) — a "
+                "CEILING callout fires if price gets there.\n"
+                if up else "")
             body = (
                 f"Spot {spot:,.0f} touched support {level:,.0f} — {held} "
                 f"({lv.get('total_touches', '?')} touches).\n"
                 f"{contract}\n"
+                f"If you trade this: the thesis FAILS below "
+                f"{level - BREAK_TOL_PTS:,.0f} — decide that exit before "
+                "entering. You'll get a LEVEL BROKE alert if it happens.\n"
+                f"{sell_line}"
                 "Level context with its own odds — NOT a scored card; the "
                 "engine's gate still applies."
             )
@@ -280,6 +304,13 @@ class LevelWatchService:
             "hold_rate": lv.get("hold_rate"), "days_touched": lv.get("days_touched"),
             "strike": quote["strike"], "expiry": quote["expiry"],
             "ce_ltp": quote["ce_ltp"], "token": quote.get("token"),
+            # The two exits named at fire time: the failure line below and
+            # the first strong ceiling above (None when no ceiling is near).
+            "fails_below": (round(level - BREAK_TOL_PTS, 2)
+                            if side == "support" else None),
+            "next_ceiling": (float(self._next_ceiling(level)["level"])
+                             if side == "support" and self._next_ceiling(level)
+                             else None),
             "title": title,
             # Filled in by _grade over the next hour — the callout's own
             # report card, persisted with it.
@@ -320,6 +351,29 @@ class LevelWatchService:
                 if broke:
                     o["broke"] = True
                     self._dirty = True
+                    # THE PROTECTIVE ALERT (04-Aug): the moment the reason
+                    # for a BUY callout dies, say so — minutes, not the 30m
+                    # report card. Once per callout (broke latches, and it
+                    # persists, so a restart cannot re-buzz it). CEILING
+                    # breaks matter too: a broken ceiling means the booking
+                    # call was early and the rally is running.
+                    mins = max(1, (now - a["ts"]) // 60)
+                    if a["side"] == "buy":
+                        self._push(
+                            f"⚠ LEVEL BROKE — {a['level']:,.0f} failed",
+                            (f"Spot {spot:,.0f} has traded through support "
+                             f"{a['level']:,.0f} ({mins}m after the BUY callout). "
+                             "The reason for that entry is GONE — if you took it, "
+                             "this is the exit the callout named."),
+                            self.cfg, audience="private")
+                    else:
+                        self._push(
+                            f"LEVEL BROKE UP — {a['level']:,.0f} gave way",
+                            (f"Spot {spot:,.0f} pushed through resistance "
+                             f"{a['level']:,.0f} ({mins}m after the CEILING "
+                             "callout). If you booked there, the rally kept "
+                             "going — the ceiling call was early this time."),
+                            self.cfg, audience="private", priority="min")
             prem = None
             tok = a.get("token")
             if tok is not None:
