@@ -190,9 +190,13 @@ def main() -> int:
         if not futs:
             log(f"{name}: no future found in NFO dump — skipped"); continue
         tok = futs[0]["instrument_token"]
+        # Kite's continuous=1 stitching works for DAY candles only — intraday
+        # intervals reject it ("invalid interval for continuous data", learned
+        # 03-Aug). Intraday pulls therefore use the current contract directly,
+        # which limits history to its listing (~3 months) — the practical max.
         for interval, tf, chunk in INTRADAY_PULLS:
             n = save(db, sym, tf, fetch_chunked(
-                kite, tok, interval, args.days, chunk, True, True))
+                kite, tok, interval, min(args.days, 95), chunk, False, True))
             total += n
             log(f"{sym} {tf}: {n:,} bars")
         interval, tf, chunk = DAY_PULL

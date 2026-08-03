@@ -62,9 +62,11 @@ def load_jsonl_final(path: Path) -> dict[str, dict]:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        cid = row.get("id")
+        # Archive lines wrap the card: {"archived_at": ..., "card": {...}}
+        card = row.get("card") if isinstance(row.get("card"), dict) else row
+        cid = card.get("id")
         if cid:
-            final[str(cid)] = row
+            final[str(cid)] = card
     return final
 
 

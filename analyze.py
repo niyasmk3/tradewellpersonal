@@ -64,9 +64,11 @@ def summarize_cards(rows: list[dict], label: str) -> None:
     if not rows:
         print(f"{label}: nothing yet")
         return
-    # Archive semantics: last line per card id is its final state.
+    # Archive semantics: last line per card id is its final state. Lines wrap
+    # the card: {"archived_at": ..., "card": {...}}.
     final: dict[str, dict] = {}
     for r in rows:
+        r = r.get("card") if isinstance(r.get("card"), dict) else r
         cid = str(r.get("id") or r.get("card_id") or len(final))
         final[cid] = r
     cards = list(final.values())
@@ -86,13 +88,19 @@ def summarize_trades(trades: list[dict], label: str) -> None:
     status = Counter(str(t.get("status")) for t in trades if t.get("status"))
     if status:
         print(f"  by status: {', '.join(f'{k}:{n}' for k, n in status.most_common())}")
-    pnls = [t.get("realized_pnl") or t.get("pnl") for t in trades]
+    # Ignored rows are dismissed bookkeeping mistakes — never count their P&L.
+    graded = [t for t in trades if str(t.get("status", "")).lower() != "ignored"]
+    reasons = Counter(str(t.get("exit_reason")) for t in graded if t.get("exit_reason"))
+    if reasons:
+        print(f"  by exit: {', '.join(f'{k}:{n}' for k, n in reasons.most_common())}")
+    pnls = [t.get("realized_pnl") or t.get("pnl") for t in graded]
     pnls = [p for p in pnls if isinstance(p, (int, float))]
     if pnls:
         wins = [p for p in pnls if p > 0]
         print(
-            f"  closed with P&L: {len(pnls)}  |  win-rate {len(wins)}/{len(pnls)}"
-            f"  |  net total {sum(pnls):,.0f}  |  avg {sum(pnls)/len(pnls):,.0f}"
+            f"  closed with P&L (gross, pre-charges): {len(pnls)}  |  "
+            f"win-rate {len(wins)}/{len(pnls)}  |  total {sum(pnls):,.0f}  |  "
+            f"avg {sum(pnls)/len(pnls):,.0f}"
         )
 
 
