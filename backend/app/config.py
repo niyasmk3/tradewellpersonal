@@ -101,6 +101,13 @@ class Settings(BaseSettings):
     # RR_TARGET1 ladder stands. The advertised +27% T1 has never been hit
     # intraday; the +12% quick target is what lands. false = static only.
     signal_t1_from_excursions: bool = Field(default=True, alias="SIGNAL_T1_FROM_EXCURSIONS")
+    # Level-touch callouts: BUY/CEILING pushes when live spot tests one of the
+    # Patterns Module's strongest S/R levels (>=5 distinct touch-days, >=60%
+    # hold rate). Context alerts with their own odds attached — never cards.
+    level_alerts_enabled: bool = Field(default=True, alias="LEVEL_ALERTS_ENABLED")
+    # Per-level re-fire spacing; the edge trigger + re-arm band do the fine
+    # de-bouncing, this stops a level camped on all afternoon from repeating.
+    level_alert_cooldown_s: int = Field(default=1800, ge=0, alias="LEVEL_ALERT_COOLDOWN_S")
     # Blind-spot instrumentation (audit P1-2): one JSONL line per closed bar
     # per mode with both directions' scores, the regime vote and any veto —
     # the dataset that classifies missed moves (36/41 had NO candidate; 27 of

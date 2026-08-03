@@ -5,18 +5,20 @@
 // Read-mostly: results come from backend/.patterns_results.json; the two
 // buttons re-fetch Kite data and re-run the analysis.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CandleFrequency,
   ConditionalCell,
   ConditionalOutcome,
   DayOfWeekStats,
+  LevelAlertsResponse,
   LevelRow,
   PatternsLiveRead,
   PatternsResults,
   TimeOfDaySlot,
   api,
 } from "@/lib/api";
+import { chime } from "@/lib/alerts";
 import { usePolling } from "@/lib/usePolling";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -27,6 +29,141 @@ const blueBg = (a: number) => `rgba(59,130,246,${a.toFixed(3)})`;
 
 function signCls(v: number, zero = 0) {
   return v > zero ? "text-bull" : v < zero ? "text-bear" : "text-muted";
+}
+
+// ------------------------------------------------------------- level watch
+
+function LevelWatchCard() {
+  const [data, setData] = useState<LevelAlertsResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  // Chime once per new callout while this page is open; first payload only
+  // primes the seen-set so a reload doesn't replay the day.
+  const seenTs = useRef<number | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    const load = async () => {
+      try {
+        const d = await api.levelAlerts();
+        if (!live) return;
+        setData(d);
+        setErr(null);
+        const rows = d.alerts ?? [];
+        const maxTs = rows.reduce((m, a) => Math.max(m, a.ts), 0);
+        if (seenTs.current === null) seenTs.current = maxTs;
+        else if (maxTs > seenTs.current) {
+          const fresh = rows.filter((a) => a.ts > (seenTs.current as number));
+          seenTs.current = maxTs;
+          if (fresh.length) chime(fresh.some((a) => a.side === "sell") ? "urgent" : "good");
+        }
+      } catch (e) {
+        if (live) setErr(e instanceof Error ? e.message : String(e));
+      }
+    };
+    load();
+    const t = setInterval(load, 10_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  return (
+    <section className="card p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Level watch — live callouts on the strongest S/R
+        </h2>
+        {data?.spot != null && (
+          <span className="font-mono text-[10px] text-muted">spot {data.spot.toLocaleString()}</span>
+        )}
+        {data && !data.enabled && (
+          <span className="tag bg-yellow-500/15 text-[9px] text-yellow-400">disabled</span>
+        )}
+      </div>
+
+      {err && (
+        <p className="text-[11px] text-muted">
+          {err.includes("404")
+            ? "The backend hasn't loaded the level watch yet — it arrives with the next backend restart."
+            : err}
+        </p>
+      )}
+
+      {data && !err && (
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <div>
+            <p className="mb-1 text-[10px] uppercase text-muted">
+              on watch ({data.watched.length}) — ≥5 touch-days & ≥60% hold only
+            </p>
+            {data.watched.length === 0 ? (
+              <p className="text-[11px] text-muted">
+                No strong level within 1.5% of spot right now.
+              </p>
+            ) : (
+              <div className="space-y-0.5">
+                {data.watched.map((l) => (
+                  <div key={l.level} className="flex items-center gap-2 font-mono text-[11px]">
+                    <span className={data.spot && l.level > data.spot ? "text-bear" : "text-bull"}>
+                      {l.level.toFixed(0)}
+                    </span>
+                    <span className="text-muted">
+                      held {Math.round(l.hold_rate * 100)}% of {l.days_touched}d ·{" "}
+                      {l.total_touches} touches
+                    </span>
+                    {data.spot != null && (
+                      <span className="ml-auto text-[10px] text-muted">
+                        {(l.level - data.spot > 0 ? "+" : "") + (l.level - data.spot).toFixed(0)} pts
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <p className="mb-1 text-[10px] uppercase text-muted">today&apos;s callouts</p>
+            {(data.alerts ?? []).length === 0 ? (
+              <p className="text-[11px] text-muted">None yet — a callout fires when a bar
+                touches a watched level (phone push + this list).</p>
+            ) : (
+              <div className="space-y-1">
+                {[...data.alerts].reverse().map((a, i) => (
+                  <div key={`${a.ts}-${a.level}-${i}`} className="rounded border border-edge/60 bg-panel2 px-2 py-1">
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span className={`tag text-[9px] ${
+                        a.side === "buy" ? "bg-bull/15 text-bull" : "bg-yellow-500/15 text-yellow-400"
+                      }`}>
+                        {a.side === "buy" ? "BUY setup" : "CEILING"}
+                      </span>
+                      <span className="font-mono">{a.level.toFixed(0)}</span>
+                      <span className="text-muted">
+                        {Math.round((a.hold_rate ?? 0) * 100)}% of {a.days_touched}d
+                      </span>
+                      <span className="ml-auto font-mono text-[10px] text-muted">
+                        {new Date(a.ts * 1000).toLocaleTimeString("en-IN", {
+                          hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata",
+                        })}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 font-mono text-[10px] text-muted">
+                      NIFTY {a.strike} CE{a.ce_ltp ? ` @ ₹${a.ce_ltp}` : ""}
+                      {a.expiry ? ` · exp ${a.expiry}` : ""} · spot was {a.spot.toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      <p className="mt-2 text-[10px] leading-relaxed text-muted">
+        Context with its own odds attached — a level&apos;s hold rate is a historical
+        frequency, not a promise. Callouts are never scored cards; the engine&apos;s
+        gate is separate.
+      </p>
+    </section>
+  );
 }
 
 // ---------------------------------------------------------------- live read
@@ -608,6 +745,9 @@ export function PatternsLab() {
 
       {results && (
         <>
+          {/* live level-touch callouts — kept HERE, off the trading screens */}
+          <LevelWatchCard />
+
           {/* today's tape vs the conditional table */}
           <LiveReadCard />
 

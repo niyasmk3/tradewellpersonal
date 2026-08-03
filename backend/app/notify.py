@@ -40,6 +40,23 @@ _TIMEOUT_S = 8
 _ALLOWED_SCHEMES = ("http", "https")
 
 
+def _header_safe(title: str) -> str:
+    """A Title that http.client can actually send.
+
+    Header VALUES are encoded latin-1 by http.client; any character above
+    U+00FF raises UnicodeEncodeError inside urlopen — swallowed by _post's
+    catch-all, so the push silently never left the machine. The 🌙 evening
+    marker had been doing exactly that to every evening-positional push
+    (review catch, 03-Aug). Common symbols map to ASCII words; anything else
+    non-latin-1 is dropped. Bodies are unaffected — they travel as UTF-8
+    payload bytes, not headers.
+    """
+    out = (title.replace("₹", "Rs ")
+                .replace("🌙", "[NIGHT]")
+                .replace("📍", "[LEVEL]"))
+    return out.encode("latin-1", "ignore").decode("latin-1").strip()
+
+
 def _is_evening_positional(card: SignalCard) -> bool:
     """A positional card born at/after 14:30 IST — the overnight-hold
     candidate the paper ledger grades. Derived from the card itself (mode +
@@ -203,7 +220,7 @@ def _text_payload(title: str, body: str, cfg: Settings,
             headers["Priority"] = priority
         return (json.dumps({"title": title, "text": f"{title}\n{body}",
                             "message": f"{title}\n{body}"}).encode(), headers)
-    headers = {"Content-Type": "text/plain; charset=utf-8", "Title": title}
+    headers = {"Content-Type": "text/plain; charset=utf-8", "Title": _header_safe(title)}
     if priority:
         headers["Priority"] = priority
     return (body.encode(), headers)
@@ -332,7 +349,7 @@ def push_signal(card: SignalCard, cfg: Settings, on_result=None) -> bool:
                 "evening_positional": _is_evening_positional(card),
             }).encode(), {"Content-Type": "application/json"}
         return (f"{title}\n{body}".encode(),
-                {"Content-Type": "text/plain; charset=utf-8", "Title": title})
+                {"Content-Type": "text/plain; charset=utf-8", "Title": _header_safe(title)})
 
     for url in urls:
         # Only the owner's own topic carries sizing — see _body.

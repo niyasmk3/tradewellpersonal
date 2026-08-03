@@ -638,6 +638,28 @@ export interface PatternsLiveRead {
   note: string;
 }
 
+/** A level-touch callout fired by the live watch (backend level_watch.py). */
+export interface LevelAlert {
+  ts: number;
+  side: "buy" | "sell";
+  level: number;
+  spot: number;
+  hold_rate: number | null;
+  days_touched: number | null;
+  strike: number;
+  expiry: string | null;
+  ce_ltp: number | null;
+  title: string;
+}
+
+export interface LevelAlertsResponse {
+  enabled: boolean;
+  spot?: number | null;
+  /** Strong levels currently on watch (index-space; add basis for futures charts). */
+  watched: LevelRow[];
+  alerts: LevelAlert[];
+}
+
 export interface PatternsResults {
   disclaimer: string;
   generated_at: string;
@@ -796,4 +818,5 @@ export const api = {
   patternsSync: (years = 3) => postJSON<{ total_bars: number }>(`/patterns/sync?years=${years}`, {}),
   patternsAnalyze: () => postJSON<PatternsResults>("/patterns/analyze", {}),
   patternsLiveRead: () => getJSON<PatternsLiveRead>("/patterns/live-read"),
+  levelAlerts: () => getJSON<LevelAlertsResponse>("/patterns/level-alerts"),
 };

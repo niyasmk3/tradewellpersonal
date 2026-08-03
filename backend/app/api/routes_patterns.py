@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -94,6 +95,29 @@ async def live_read() -> dict:
     except Exception as exc:  # pragma: no cover - Kite/network
         log.exception("Patterns live read failed")
         raise HTTPException(status_code=500, detail=f"Live read error: {exc}")
+
+
+@router.get("/level-alerts")
+async def level_alerts() -> dict:
+    """Recent level-touch callouts + the levels currently on watch — the
+    dashboard's chart overlay and alert banner read this. The watch itself
+    lives in the feed loop; this only reports its state."""
+    from app.services import feed
+
+    lw = getattr(feed, "level_watch", None)
+    if lw is None:
+        return {"enabled": False, "watched": [], "alerts": []}
+    from app.state import market_state
+
+    snap = market_state.underlying_snapshot("NIFTY")
+    spot = float(snap.ltp) if snap and snap.ltp else None
+    lw.refresh_levels(time.time())
+    return {
+        "enabled": bool(getattr(lw.cfg, "level_alerts_enabled", True)),
+        "spot": spot,
+        "watched": lw.watched(spot),
+        "alerts": lw.recent(),
+    }
 
 
 @router.get("/levels")

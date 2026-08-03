@@ -108,6 +108,7 @@ class FeedController:
         self.trade_monitor: TradeMonitorService | None = None
         self.paper: "PaperTradingService | None" = None
         self.news_service: NewsService | None = None
+        self.level_watch = None
         self.running: bool = False
         self._tasks: list[asyncio.Task] = []
         # One lock serialises start/stop/restart. Without it, two concurrent
@@ -309,6 +310,16 @@ class FeedController:
             self.paper = PaperTradingService(settings, market_state, paper_store)
             log.warning("PAPER TRADING ON — simulated fills only, no orders are placed")
 
+        if settings.level_alerts_enabled:
+            # Level-touch callouts: live spot vs the Patterns Module's
+            # strongest S/R levels. Context pushes, never cards — see
+            # app/patterns/level_watch.py.
+            from app.patterns.level_watch import LevelWatchService
+
+            self.level_watch = LevelWatchService(settings, market_state)
+            self._tasks.append(asyncio.create_task(
+                self._level_loop(settings.signal_eval_seconds)))
+
         self._tasks.append(asyncio.create_task(self._option_loop(settings.option_poll_seconds)))
         self._tasks.append(asyncio.create_task(self._signal_loop(settings.signal_eval_seconds)))
         self._tasks.append(asyncio.create_task(self._trade_loop(settings.signal_eval_seconds)))
@@ -417,6 +428,19 @@ class FeedController:
                 log.warning("signal loop error: %s", exc)
             await asyncio.sleep(interval)
 
+    async def _level_loop(self, interval: float) -> None:
+        """Watch live spot against the strong S/R ladder (level_watch.py)."""
+        from app.market import calendar as mcal
+
+        while True:
+            try:
+                lw = getattr(self, "level_watch", None)
+                if lw is not None and mcal.is_market_open():
+                    lw.check()
+            except Exception as exc:  # pragma: no cover
+                log.warning("level watch loop error: %s", exc)
+            await asyncio.sleep(interval)
+
     async def _paper_loop(self, interval: float) -> None:
         """Simulate entries on new signals and exits on plan triggers."""
         while True:
@@ -504,6 +528,9 @@ class FeedController:
         self.signal_service = None
         self.trade_monitor = None
         self.news_service = None
+        # Cleared with the rest (review catch): a stale watcher surviving a
+        # stop/restart would keep serving old cfg/state to the alerts route.
+        self.level_watch = None
         self._token_in_use = None
         self.running = False
         # A stopped feed cannot deliver alerts; the chip must not keep a stale
