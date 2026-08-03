@@ -181,9 +181,6 @@ export function Dashboard() {
           Date.now() / 1000 - r.created_at < 3600,
       ),
     },
-    ...(symbol === "NIFTY"
-      ? [{ key: "backtest", label: "Backtest", node: <BacktestPanel symbol={symbol} /> }]
-      : []),
     {
       key: "patterns",
       label: "Patterns",
@@ -206,6 +203,10 @@ export function Dashboard() {
     },
     // Lot/qty affordability calculator (the "tradewell Qty.xlsx" sheet, live).
     { key: "calc", label: "Calc", node: <QtyCalculator /> },
+    // Backtest stays LAST — occasional research, not session-time context.
+    ...(symbol === "NIFTY"
+      ? [{ key: "backtest", label: "Backtest", node: <BacktestPanel symbol={symbol} /> }]
+      : []),
   ];
 
   return (

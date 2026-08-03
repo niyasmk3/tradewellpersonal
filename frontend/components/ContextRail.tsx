@@ -37,7 +37,9 @@ export function ContextRail({
 
   return (
     <div className={`card flex min-h-0 flex-col overflow-hidden ${className}`}>
-      <div className="flex shrink-0 items-center gap-1 border-b border-edge px-1.5 py-1">
+      {/* flex-wrap: eight tabs overflow the rail's fixed width, and an
+          overflow-hidden card silently amputates whatever renders last. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-edge px-1.5 py-1">
         {tabs.map((t) => {
           const active = t.key === tab;
           return (
