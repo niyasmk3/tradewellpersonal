@@ -181,6 +181,25 @@ def signal_archive_history(symbol: str, mode: str = Query("all"),
     return {"rows": rows, "count": len(rows), "days": days}
 
 
+@router.get("/{symbol}/eval-trace")
+def signal_eval_trace(symbol: str, mode: str = Query("all"),
+                      days: int = Query(1, ge=1, le=90)) -> dict:
+    """The per-bar evaluation trace (audit P1-2) — every bar's bull/bear
+    scores, regime vote and veto, whether or not a card was offered. This is
+    the raw dataset for classifying missed moves; it has no UI, it exists so
+    the next audit reads measurements instead of reconstructing hindsight.
+    """
+    from app.signals.eval_trace import eval_trace
+
+    cfg = get_settings()
+    if symbol.upper() not in cfg.signal_symbols:
+        raise HTTPException(status_code=404, detail=f"Signals not enabled for {symbol}")
+    m = None if mode == "all" else _resolve(symbol, mode).value
+    rows = eval_trace.load(days=days, symbol=symbol.upper(), mode=m)
+    return {"rows": rows, "count": len(rows), "days": days,
+            "retention_days": cfg.eval_trace_days}
+
+
 @router.get("/{symbol}", response_model=SignalResponse)
 def current_signal(symbol: str, mode: str = Query("intraday")) -> SignalResponse:
     # Import here to avoid a circular import at module load.

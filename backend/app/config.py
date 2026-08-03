@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     # RR_TARGET1 ladder stands. The advertised +27% T1 has never been hit
     # intraday; the +12% quick target is what lands. false = static only.
     signal_t1_from_excursions: bool = Field(default=True, alias="SIGNAL_T1_FROM_EXCURSIONS")
+    # Blind-spot instrumentation (audit P1-2): one JSONL line per closed bar
+    # per mode with both directions' scores, the regime vote and any veto —
+    # the dataset that classifies missed moves (36/41 had NO candidate; 27 of
+    # those are unattributable without this). Retention in days; 0 disables
+    # recording and prunes the file at the next boot.
+    eval_trace_days: int = Field(default=30, ge=0, alias="EVAL_TRACE_DAYS")
     # A card may only be issued on a premium quote at most this old. Added after
     # 21/22-Jul, when 5 of 9 cards priced their entry zone off a stale premium —
     # one literally at the previous day's close while the market opened 10%
@@ -258,6 +264,11 @@ class Settings(BaseSettings):
     # The backstop, as a fraction of YOUR fill. Only reached when the premium
     # collapses without the index invalidating — i.e. theta/IV, not direction.
     premium_disaster_pct: float = Field(default=0.45, gt=0, lt=1, alias="PREMIUM_DISASTER_PCT")
+    # STOP-BASIS PAIRED A/B (audit P1-5). STOP_PRIMARY has been flipped twice
+    # on single-trade evidence; this books a shadow twin of every clean paper
+    # fill running the OPPOSITE stop basis, so the choice gets the same
+    # 30-diverged-fill discipline as the exit-policy A/B. Costs nothing live.
+    stop_ab_paired: bool = Field(default=True, alias="STOP_AB_PAIRED")
     rr_target1: float = Field(default=1.5, alias="RR_TARGET1")
     rr_target2: float = Field(default=2.5, alias="RR_TARGET2")
     # Strike liquidity guards

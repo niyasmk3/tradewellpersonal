@@ -175,6 +175,20 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* Stop-basis A/B: every clean fill's twin runs the OTHER stop basis
+          (premium stop vs underlying invalidation + disaster backstop).
+          STOP_PRIMARY was flipped twice on n=1 — this settles it at 30. */}
+      {data.stop_ab && (
+        <div className="mt-2 rounded bg-teal-500/10 px-2 py-1 text-[10px] text-teal-300">
+          Stop-basis A/B ({data.stop_ab.n} pair{data.stop_ab.n === 1 ? "" : "s"},{" "}
+          {data.stop_ab.n_diverged} diverged
+          {data.stop_ab.pending ? `, ${data.stop_ab.pending} still open` : ""}):
+          premium stop ₹{signed(data.stop_ab.premium_stop?.expectancy ?? 0, 0)}/trade vs
+          underlying stop ₹{signed(data.stop_ab.underlying_stop?.expectancy ?? 0, 0)}/trade
+          (Δ ₹{signed(data.stop_ab.delta_net ?? 0, 0)} total). {data.stop_ab.verdict}
+        </div>
+      )}
+
       <div className="mt-2 space-y-1">
         {data.rows
           .slice()
@@ -192,15 +206,19 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                     className={`tag text-[9px] ${
                       r.shadow_class === "late"
                         ? "bg-orange-500/15 text-orange-300"
-                        : "bg-purple-500/15 text-purple-300"
+                        : r.shadow_class === "stopb"
+                          ? "bg-teal-500/15 text-teal-300"
+                          : "bg-purple-500/15 text-purple-300"
                     }`}
                     title={
                       r.shadow_class === "late"
                         ? "Counterfactual: this card was vetoed by the 14:15 entry cutoff — paper takes it anyway so the cutoff hypothesis stays auditable. Not counted in any aggregate above."
-                        : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
+                        : r.shadow_class === "stopb"
+                          ? "Stop-basis A/B twin: the same fill run under the OTHER stop basis. Graded only against its paired clean row — not counted in any aggregate above."
+                          : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
                     }
                   >
-                    {r.shadow_class === "late" ? "late" : "hollow"}
+                    {r.shadow_class === "late" ? "late" : r.shadow_class === "stopb" ? "stop A/B" : "hollow"}
                   </span>
                 )}
                 {r.era?.startsWith("inflated") && (

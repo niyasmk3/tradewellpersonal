@@ -55,32 +55,43 @@ HONEST_FILLS_FROM = int(_dt(2026, 7, 23, tzinfo=_tz(_td(hours=5, minutes=30))).t
 
 
 def is_hollow_row(t) -> bool:
-    """A paper fill of a card the volume/OI participation floor vetoed.
+    """A counterfactual paper fill — any shadow class (floor, late, stopb).
 
     Tagged via the notes field at fill time. These rows are the COUNTERFACTUAL
     — the road not taken — so every consumer that grades the system's own
     decisions (summary aggregates, T1 calibration, exit analytics, excursion
-    evidence) must exclude them; their own bucket in summarize() is where the
-    floor itself gets judged.
+    evidence, the refire guard) must exclude them; each class's own block in
+    summarize() is where its hypothesis gets judged.
     """
     return bool(getattr(t, "notes", None) and t.notes.startswith("hollow:"))
 
 
 def shadow_class(x) -> str | None:
     """Which counterfactual ledger a row/card belongs to: "late" (14:15-cutoff
-    hypothesis), "floor" (participation-floor hypothesis), or None (clean).
+    hypothesis), "floor" (participation-floor hypothesis), "stopb" (the
+    stop-basis A/B twin, audit P1-5), or None (clean).
 
     Works on a Trade (notes tag) or a SignalCard (hollow_reason). The classes
     must stay independent EVERYWHERE — including the paper capacity buckets:
     the review caught floor shadows starving late shadows out of fills when
-    both shared one bucket, which biases both 30-fill verdicts.
+    both shared one bucket, which biases both 30-fill verdicts. (stopb rows
+    are exempt from capacity by construction: they only exist 1:1 with a
+    clean fill that already cleared its own bucket.)
     """
     notes = getattr(x, "notes", None)
     if notes and notes.startswith("hollow:"):
-        return "late" if notes.startswith("hollow: late:") else "floor"
+        if notes.startswith("hollow: late:"):
+            return "late"
+        if notes.startswith("hollow: stopb:"):
+            return "stopb"
+        return "floor"
     reason = getattr(x, "hollow_reason", None)
     if reason:
-        return "late" if reason.startswith("late:") else "floor"
+        if reason.startswith("late:"):
+            return "late"
+        if reason.startswith("stopb:"):
+            return "stopb"
+        return "floor"
     return None
 
 
@@ -278,6 +289,36 @@ class PaperTradingService:
         )
         log.info("paper: entered %s%s %d lot(s) @ Rs%s (signal %s)",
                  "HOLLOW " if card_hollow else "", card.contract, lots, fill, card.id)
+
+        # STOP-BASIS PAIRED A/B (audit P1-5). STOP_PRIMARY was flipped twice on
+        # single-trade evidence while the codebase's own rule demands 30. Every
+        # CLEAN fill books a twin that differs in exactly one way: the OTHER
+        # stop basis (disaster backstop present vs absent — the monitor derives
+        # the whole premium-vs-underlying semantics from that one field). Same
+        # entry, same ladder, same exit policy; the pair diverges only when the
+        # 18% premium stop and the wide backstop disagree — which is precisely
+        # the question. Twins ride the hollow: notes channel so every consumer
+        # that grades the system's own decisions already excludes them, and
+        # they bypass the capacity bucket by construction (1:1 with a clean
+        # fill that already cleared it). Failure here must never undo the
+        # clean fill — the twin is evidence, not the trade.
+        if not card_hollow and self.cfg.stop_ab_paired and self.cfg.trading_capital > 0:
+            other = "underlying" if self.cfg.stop_primary != "underlying" else "premium"
+            try:
+                self.store.create_from_signal(
+                    card, lots, fill, lot, product=None,
+                    disaster_pct=(self.cfg.premium_disaster_pct
+                                  if other == "underlying" else None),
+                    quick_pct=self.cfg.quick_target_pct or None,
+                    sl_pct=sl_pct, rr1=rr1, rr2=rr2,
+                    notes=(f"hollow: stopb: {other} — stop-basis A/B twin "
+                           f"(live basis: {self.cfg.stop_primary})"),
+                )
+                log.info("paper: stop-A/B twin booked for %s (%s-primary arm)",
+                         card.contract, other)
+            except Exception:
+                log.warning("paper: stop-A/B twin failed for %s — pair skipped",
+                            card.contract, exc_info=True)
         return t
 
     # ---- exit --------------------------------------------------------------
@@ -363,16 +404,19 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     inflated = []
     hollow_rows = []
     late_rows = []
+    stopb_rows = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
         net = chg.net_pnl(t.entry_premium, t.exit_premium, qty)
         deployed = t.entry_premium * qty
         honest = t.entered_at >= HONEST_FILLS_FROM
         hollow = is_hollow_row(t)
-        # Two shadow ledgers, one tag channel: "hollow: late: ..." rows test
-        # the 14:15 cutoff hypothesis; plain "hollow: ..." rows test the
-        # volume/OI participation floor. Each verdict block must stay pure.
-        late = hollow and (t.notes or "").startswith("hollow: late:")
+        # Three shadow ledgers, one tag channel: "hollow: late: ..." rows test
+        # the 14:15 cutoff hypothesis, "hollow: stopb: ..." rows are the
+        # stop-basis A/B twins (paired below, never aggregated alone), plain
+        # "hollow: ..." rows test the volume/OI participation floor. Each
+        # verdict block must stay pure.
+        cls = shadow_class(t)
         row = {
             "id": t.id, "contract": t.contract, "direction": t.direction.value,
             "entered_at": t.entered_at, "exited_at": t.exited_at,
@@ -384,13 +428,14 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "return_pct": round(net / deployed * 100, 2) if deployed else 0.0,
             "era": "honest" if honest else "inflated (pre-honest-fill)",
             "hollow": hollow,
-            "shadow_class": ("late" if late else "floor") if hollow else None,
+            "shadow_class": cls,
             "mode": t.mode.value,
         }
-        # Three books: the system's own decisions (aggregated), the vetoed
-        # counterfactual (its own verdict block below), and pre-honest-era
-        # history (flagged, counted nowhere).
-        (late_rows if (honest and late)
+        # The books: the system's own decisions (aggregated), each shadow
+        # class (its own verdict block below), and pre-honest-era history
+        # (flagged, counted nowhere).
+        (late_rows if (honest and cls == "late")
+         else stopb_rows if (honest and cls == "stopb")
          else hollow_rows if (honest and hollow)
          else rows if honest else inflated).append(row)
     wins = [r for r in rows if r["net_pnl"] > 0]
@@ -402,10 +447,9 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     # engine's own counterfactuals, next to a clean-only "Closed" count.
     open_all = [t for t in store.all()
                 if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
-    open_late = [t for t in open_all
-                 if (t.notes or "").startswith("hollow: late:")]
-    open_hollow = [t for t in open_all if is_hollow_row(t) and t not in open_late]
-    open_clean = [t for t in open_all if not is_hollow_row(t)]
+    open_late = [t for t in open_all if shadow_class(t) == "late"]
+    open_hollow = [t for t in open_all if shadow_class(t) == "floor"]
+    open_clean = [t for t in open_all if shadow_class(t) is None]
 
     # ---- 1-lot exit-policy A/B: trailing ratchet vs bank-the-quick-target ---
     # The two policies are IDENTICAL until the quick target trades, so the
@@ -474,6 +518,87 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
                         "win_rate": round(100 * sum(1 for a, _, _ in pairs if a > 0) / n, 1)},
             "quick_bank": {"net_pnl": v_tot, "expectancy": round(v_tot / n, 2),
                            "win_rate": round(100 * sum(1 for _, v, _ in pairs if v > 0) / n, 1)},
+            "delta_net": delta,
+            "verdict": verdict,
+        }
+
+    # ---- STOP-BASIS PAIRED A/B (audit P1-5) ---------------------------------
+    # STOP_PRIMARY was flipped twice on single-trade evidence (underlying ->
+    # premium -> ... , 21-Jul, n=1 both times) while the codebase's own rule
+    # demands 30 samples for far smaller decisions. Every clean fill books a
+    # twin identical except for the stop basis (see consider()); pairing them
+    # by signal id compares the two bases on the SAME trades — no sampling
+    # noise between arms. A pair settles when BOTH legs close (the wide-
+    # backstop arm can outlive the premium-stop arm by hours); it diverges
+    # when the two stops actually produced different exits. Verdict at 30+
+    # DIVERGED pairs — agreeing pairs carry no information about the choice.
+    stopb_closed = [t for t in closed if shadow_class(t) == "stopb"
+                    and t.entered_at >= HONEST_FILLS_FROM and t.signal_id]
+    twin_by_signal = {}
+    for t in stopb_closed:
+        twin_by_signal.setdefault(t.signal_id, t)
+    stop_ab = None
+    ab_pairs = []
+    for c in closed:
+        if shadow_class(c) is not None or c.entered_at < HONEST_FILLS_FROM:
+            continue
+        tw = twin_by_signal.get(c.signal_id) if c.signal_id else None
+        if tw is None:
+            continue
+        c_net = chg.net_pnl(c.entry_premium, c.exit_premium,
+                            c.initial_quantity or c.quantity)
+        t_net = chg.net_pnl(tw.entry_premium, tw.exit_premium,
+                            tw.initial_quantity or tw.quantity)
+        # The twin's notes record which basis IT ran, so pairs stay correctly
+        # labelled even across a future STOP_PRIMARY flip mid-history.
+        twin_is_underlying = (tw.notes or "").startswith("hollow: stopb: underlying")
+        prem_net, und_net = (c_net, t_net) if twin_is_underlying else (t_net, c_net)
+        ab_pairs.append({
+            "premium": prem_net, "underlying": und_net,
+            "diverged": (c.auto_close_reason != tw.auto_close_reason
+                         or abs((c.exit_premium or 0.0) - (tw.exit_premium or 0.0)) > 0.01),
+        })
+    # Twins whose pair has not settled yet (either leg still open) stay
+    # visible — a backstop arm still riding must not vanish from the count.
+    # Same honest-era universe as the settled set (review catch): if the
+    # cutoff is ever re-baselined, a pre-cutoff pair must drop out of BOTH
+    # sets, not linger as a phantom "pending" that can never clear.
+    settled_twins = {t.signal_id for t in stopb_closed
+                     if any(c.signal_id == t.signal_id and shadow_class(c) is None
+                            for c in closed)}
+    all_twin_ids = {t.signal_id for t in store.all()
+                    if shadow_class(t) == "stopb" and t.signal_id
+                    and t.entered_at >= HONEST_FILLS_FROM}
+    ab_pending = len(all_twin_ids - settled_twins)
+    if ab_pairs or ab_pending:
+        n_pairs, n_div = len(ab_pairs), sum(1 for p in ab_pairs if p["diverged"])
+        p_tot = round(sum(p["premium"] for p in ab_pairs), 2)
+        u_tot = round(sum(p["underlying"] for p in ab_pairs), 2)
+        delta = round(u_tot - p_tot, 2)
+        if not ab_pairs:
+            verdict = "First pair(s) still open — a pair settles when both arms close."
+        elif n_div < 30:
+            verdict = (f"{n_div} diverged pair(s) — evidence gathering. The 30-pair "
+                       "rule applies to THIS knob especially: it was flipped on "
+                       "n=1 twice.")
+        elif delta > 0:
+            verdict = "Underlying-primary wins this sample — consider STOP_PRIMARY=underlying."
+        elif delta < 0:
+            verdict = "Premium-primary wins this sample — consider STOP_PRIMARY=premium."
+        else:
+            verdict = "Dead heat on this sample."
+        stop_ab = {
+            "n": n_pairs, "n_diverged": n_div, "pending": ab_pending,
+            "premium_stop": {
+                "net_pnl": p_tot,
+                "expectancy": round(p_tot / n_pairs, 2) if n_pairs else 0.0,
+                "win_rate": (round(100 * sum(1 for p in ab_pairs if p["premium"] > 0)
+                                   / n_pairs, 1) if n_pairs else 0.0)},
+            "underlying_stop": {
+                "net_pnl": u_tot,
+                "expectancy": round(u_tot / n_pairs, 2) if n_pairs else 0.0,
+                "win_rate": (round(100 * sum(1 for p in ab_pairs if p["underlying"] > 0)
+                                   / n_pairs, 1) if n_pairs else 0.0)},
             "delta_net": delta,
             "verdict": verdict,
         }
@@ -587,6 +712,10 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         } if (late_rows or open_late) else None,
         # THE EXIT-POLICY A/B (see the block above): same trades, two exits.
         "exit_ab": exit_ab,
+        # THE STOP-BASIS A/B (audit P1-5, see the block above): same trades,
+        # premium stop vs underlying-invalidation-with-disaster-backstop.
+        # None until the first twin books.
+        "stop_ab": stop_ab,
         # THE OVERNIGHT-HOLD LEDGER (see the block above): did holding a
         # positional thesis through the close pay, and did the late-day
         # entries — the deliberate gap bets — pay more? None until the first
@@ -597,5 +726,5 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "rows": on_rows,
         } if on_rows else None,
         # Shadow and inflated rows LAST, visibly flagged — context, not evidence.
-        "rows": rows + hollow_rows + late_rows + inflated,
+        "rows": rows + hollow_rows + late_rows + stopb_rows + inflated,
     }

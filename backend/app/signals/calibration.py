@@ -10,6 +10,13 @@ static lie it replaces:
   * needs >= 30 clean intraday samples (paper book: honest tape fills only);
   * clamped to [8%, 27%] — never looser than the static plan, never tighter
     than the quick target's neighbourhood;
+  * floored at 1.5x the quick target (audit P1-6): price_ladder DROPS a quick
+    target that is not strictly below T1, so an unguarded calibration landing
+    at the P75 MFE (~+10%) would silently null the +12% quick target and
+    collapse the two-stage exit the ratchet depends on. The floor lifts T1
+    off the quick target but never past the 27% ceiling — the clamp stays
+    the hard bound (review catch: an operator raising QUICK_TARGET_PCT past
+    18% must not silently push T1 looser than the static plan);
   * cached for 5 minutes — the distribution moves per trade, not per tick;
   * any failure returns None and the static profile stands.
 """
@@ -81,6 +88,21 @@ def intraday_rr1(profile, cfg) -> float | None:
         if p75 is None:
             return None
         t1_pct = max(_CLAMP_LO, min(_CLAMP_HI, p75))
+        # P1-6 GUARD. T1 must clear the quick target by enough that the
+        # two-stage exit survives calibration: price_ladder nulls any quick
+        # target >= T1, so a T1 calibrated into the quick target's
+        # neighbourhood would trade the banked +12% for nothing. The floor
+        # is itself capped at _CLAMP_HI — the 27% ceiling stays the hard
+        # bound, so a QUICK_TARGET_PCT raised past 18% cannot silently issue
+        # a T1 looser than the static plan (review catch).
+        qt = float(getattr(cfg, "quick_target_pct", 0.0) or 0.0)
+        floor = min(1.5 * qt, _CLAMP_HI) if qt > 0 else 0.0
+        if t1_pct < floor:
+            log.info("T1 calibration %.1f%% floored to %.1f%% (1.5x quick target"
+                     " %.0f%%, capped at the %.0f%% ceiling) — preserving the"
+                     " two-stage exit",
+                     t1_pct * 100, floor * 100, qt * 100, _CLAMP_HI * 100)
+            t1_pct = floor
         return round(t1_pct / profile.premium_sl_pct, 3)
     except Exception:  # calibration must never stop a signal
         log.debug("T1 calibration failed — static ladder stands", exc_info=True)

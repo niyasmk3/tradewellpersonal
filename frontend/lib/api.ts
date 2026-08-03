@@ -405,8 +405,8 @@ export interface PaperRow {
   /** Fill of a card the volume/OI floor vetoed — counterfactual, not evidence. */
   hollow?: boolean;
   /** Which shadow ledger a hollow row belongs to: the participation-floor
-      hypothesis or the 14:15 late-cutoff hypothesis. */
-  shadow_class?: "floor" | "late" | null;
+      hypothesis, the 14:15 late-cutoff hypothesis, or the stop-basis A/B twin. */
+  shadow_class?: "floor" | "late" | "stopb" | null;
   mode?: string;
 }
 
@@ -444,6 +444,19 @@ export interface PaperSummary {
     delta_net?: number;
     verdict?: string;
     note?: string;
+  } | null;
+  /** Stop-basis paired A/B (audit P1-5): every clean fill's twin runs the
+      OTHER stop basis. Verdict at 30+ diverged pairs — STOP_PRIMARY was
+      flipped twice on single-trade evidence. */
+  stop_ab?: {
+    n: number;
+    n_diverged: number;
+    /** Pairs with either leg still open — not yet settled. */
+    pending: number;
+    premium_stop?: { net_pnl: number; expectancy: number; win_rate: number };
+    underlying_stop?: { net_pnl: number; expectancy: number; win_rate: number };
+    delta_net?: number;
+    verdict?: string;
   } | null;
   /** Positional rows that held through an IST day boundary — the overnight-gap
       bet graded, with the deliberate late-day (≥14:30) entries split out. */

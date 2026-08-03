@@ -22,6 +22,7 @@ from app.signals.models import (
     SignalResponse,
 )
 from app.signals import calibration
+from app.signals.eval_trace import eval_trace
 from app.signals.score_history import score_history
 from app.signals.sizing import apply_fund_sizing
 from app.signals.store import SignalStore, ThrottleConfig, hollow_store
@@ -483,11 +484,11 @@ class SignalService:
         # Context vetoes that need STATE (or the sizing above). Each converts
         # an issued card into a WAIT with the reason shown — the score panel
         # stays live, only the offer is withheld.
+        veto = shadow_tag = None
         if fresh.signal is not None:
             veto = (self._context_veto(fresh, df, now)
                     or self._refire_veto(fresh.signal, now)
                     or self._scalp_friction_veto(fresh.signal))
-            shadow_tag = None
             if veto is None:
                 # BOTH hypothesis vetoes are computed so each ledger stays
                 # pure (review finding): a sub-floor card arriving after 14:15
@@ -531,7 +532,52 @@ class SignalService:
             fresh.score.direction.value if fresh.score else None,
             {c.name: c.points for c in fresh.score.components} if fresh.score else None,
         )
-        return self.store.reconcile(fresh, now, self._throttle())
+        final = self.store.reconcile(fresh, now, self._throttle())
+        self._trace_bar(symbol, profile, df, fresh, final, veto, shadow_tag, now)
+        return final
+
+    def _trace_bar(self, symbol, profile, df, fresh, final, veto, shadow_tag, now) -> None:
+        """Blind-spot instrumentation (audit P1-2): one trace line per closed
+        bar with BOTH directions' scores, the regime vote, and whatever
+        stopped a card — engine reason, service veto, or (visible by
+        comparing `card` to `held`) the cadence/slot layer in reconcile.
+        The audit could not attribute 27 of 41 missed moves because exactly
+        this record did not exist. Must never stop a signal — swallows all.
+        """
+        try:
+            if self.cfg.eval_trace_days <= 0 or df is None or not len(df):
+                return
+            bar = int(df["ts"].iloc[-1])
+            # The single-candle frame right after the open is the FORMING bar
+            # (the trim above deliberately keeps it). Recording it would burn
+            # the dedupe key on partial-bar scores and the closed bar's real
+            # line would never land — wait until the bar has actually closed.
+            if bar + TIMEFRAME_SECONDS.get(profile.timeframe, 180) > now:
+                return
+            eval_trace.record({
+                "ts": now,
+                "bar": bar,
+                "symbol": symbol,
+                "mode": profile.mode.value,
+                "regime": fresh.status.regime.value,
+                "bias": fresh.status.bias.value,
+                "bull": fresh.status.bull_score,
+                "bear": fresh.status.bear_score,
+                "close": round(float(df["close"].iloc[-1]), 2),
+                # Post-veto outcome of THIS evaluation...
+                "action": fresh.action.value,
+                "reason": fresh.no_trade_reason,
+                "veto": veto,
+                "shadow": (("late" if shadow_tag.startswith("late:") else "floor")
+                           if shadow_tag else None),
+                "card": fresh.signal.id if fresh.signal else None,
+                # ...and what the slot is actually SERVING after the cadence
+                # rules: card set but held different/absent = throttled away.
+                "held": (final.signal.id
+                         if final is not None and final.signal is not None else None),
+            })
+        except Exception:
+            log.debug("eval trace hook failed", exc_info=True)
 
     def evaluate_all(self) -> None:
         for symbol in self.cfg.signal_symbols:

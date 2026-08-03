@@ -46,6 +46,14 @@ async def lifespan(app: FastAPI):
 
     signal_archive.merge_store_file()
 
+    # Same at-boot-never-at-import rule for the eval trace's retention prune
+    # (audit P1-2): the file grows ~500 lines/session; the prune keeps
+    # EVAL_TRACE_DAYS of it, and 0 empties it.
+    from app.config import get_settings
+    from app.signals.eval_trace import eval_trace
+
+    eval_trace.prune(get_settings().eval_trace_days)
+
     broadcaster = asyncio.create_task(broadcaster_loop())
     supervisor = asyncio.create_task(feed.supervisor())
     # App-lifetime, NOT feed-lifetime: the watchdog's whole job is to page when
