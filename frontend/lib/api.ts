@@ -406,7 +406,9 @@ export interface PaperRow {
   hollow?: boolean;
   /** Which shadow ledger a hollow row belongs to: the participation-floor
       hypothesis, the 14:15 late-cutoff hypothesis, or the stop-basis A/B twin. */
-  shadow_class?: "floor" | "late" | "refire" | "stopb" | null;
+  shadow_class?: "floor" | "late" | "refire" | "stopb" | "setup" | null;
+  /** Which setup detector booked this row (setup-class rows only). */
+  setup?: string;
   mode?: string;
 }
 
@@ -434,6 +436,16 @@ export interface PaperSummary {
   /** The re-fire guard's hypothesis ledger: fills of cards the guard refused.
       Positive expectancy at 30+ fills shortens or retires the guard. */
   refire_shadow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
+  /** Setup detectors' ledger (P1-4): structural candidates the score engine
+      cannot see, per-setup verdicts at 30+ fills each. */
+  setup_shadow?: {
+    trades: number;
+    open: number;
+    net_pnl: number;
+    expectancy: number;
+    win_rate: number;
+    by_setup: Record<string, { trades: number; net_pnl: number; expectancy: number; win_rate: number }>;
+  } | null;
   /** 1-lot exit-policy A/B: trailing ratchet vs banking the whole position at
       the quick target — a paired counterfactual on the same recorded fills. */
   exit_ab?: {

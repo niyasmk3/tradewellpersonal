@@ -404,16 +404,20 @@ signal_store.archive = _signal_archive
 hollow_store = SignalStore(store_path=_STORE_PATH.with_name(".hollow_signals.json"))
 late_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".late_signals.json"))
 refire_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".refire_signals.json"))
+setup_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".setup_signals.json"))
 
 
 def shadow_store_for(tag: str) -> SignalStore:
     """Route a shadow candidate to its hypothesis class's own store.
 
     `tag` is the shadow_tag the veto resolution produced: "late: ...",
-    "refire: ...", or the participation-floor reason verbatim (no prefix).
+    "refire: ...", "setup: ..." (P1-4 detectors), or the participation-floor
+    reason verbatim (no prefix).
     """
     if tag.startswith("late:"):
         return late_shadow_store
     if tag.startswith("refire:"):
         return refire_shadow_store
+    if tag.startswith("setup:"):
+        return setup_shadow_store
     return hollow_store

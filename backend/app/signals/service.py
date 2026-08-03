@@ -17,9 +17,13 @@ from app.signals.modes import ModeProfile, build_profiles
 from app.signals.models import (
     Action,
     Bias,
+    Direction,
     MarketStatus,
     Regime,
+    SignalCard,
     SignalResponse,
+    SignalState,
+    TradingMode,
 )
 from app.signals import calibration
 from app.signals.eval_trace import eval_trace
@@ -179,8 +183,11 @@ class SignalService:
             + (f" · HALVED for {card.event_note}" if halved else "")
         )
 
-    def _context_veto(self, fresh: SignalResponse, df, now: int) -> str | None:
-        """State-aware reasons an otherwise-issuable card must wait.
+    def _frame_integrity_veto(self, df, now: int) -> str | None:
+        """Data-integrity refusals shared by EVERY candidate source — the
+        engine's cards and the setup detectors alike (review catch: a setup
+        fired happily on yesterday's frame that _context_veto would have
+        refused for the engine's own card).
 
         1. CURRENT-SESSION FRAME: the last closed candle must belong to
            today's session. The 22-Jul 09:15 card was scored 46/75 on
@@ -191,7 +198,7 @@ class SignalService:
            23-Jul reawakening minted a score-87 card 14s after a 77-minute
            blackout, five minutes after the top.
         """
-        if len(df):
+        if df is not None and len(df):
             last_day = (int(df["ts"].iloc[-1]) + 19800) // 86400
             if last_day != (now + 19800) // 86400:
                 return "Waiting for today's first closed candle — refusing to score yesterday's tape"
@@ -201,6 +208,17 @@ class SignalService:
             mins = int((quiet - (now - gap_end)) // 60) + 1
             return (f"Tick feed resumed after a gap — holding new cards ~{mins}m "
                     "while the tape re-establishes")
+        return None
+
+    def _context_veto(self, fresh: SignalResponse, df, now: int) -> str | None:
+        """State-aware reasons an otherwise-issuable card must wait.
+
+        Frame integrity (session-currentness, post-gap quiet) lives in
+        _frame_integrity_veto so the setup detectors share it verbatim.
+        """
+        veto = self._frame_integrity_veto(df, now)
+        if veto:
+            return veto
         # 3. VOLUME DATA HEALTH (audit P0-1): "no volume data" used to score
         #    a neutral 7.0 — numerically equal to the participation floor, so a
         #    BLIND tape passed the floor while a real at-average tape (6 pts)
@@ -528,6 +546,11 @@ class SignalService:
         # an issued card into a WAIT with the reason shown — the score panel
         # stays live, only the offer is withheld.
         veto = shadow_tag = None
+        # Whether the ENGINE formed a card at all, before any veto: the setup
+        # detectors run only in the genuinely-empty case (review catch —
+        # gating on the post-veto signal let a setup double-book the same bar
+        # a floor/late shadow was already measuring, confounding both).
+        engine_had_card = fresh.signal is not None
         if fresh.signal is not None:
             # Integrity vetoes first — session frame, volume-data health and
             # scalp friction are "this card is not viable" refusals, with no
@@ -556,6 +579,14 @@ class SignalService:
                 fresh.signal = None
                 fresh.action = Action.WAIT
                 fresh.no_trade_reason = veto
+        # Setup detectors (audit P1-4): structural candidates the score cannot
+        # see, shadow-booked into their OWN ledger. Only when the engine
+        # formed NO card at all — a card that existed and was vetoed belongs
+        # to that veto's ledger, and a second fill off the same bar would
+        # confound both books.
+        setup_name = None
+        if not engine_had_card:
+            setup_name = self._maybe_setup_shadow(symbol, profile, df, fresh, now)
         # Score trend, recorded from the PRE-throttle evaluation: the throttle
         # shapes what is OFFERED, not what the market scored. record() swallows
         # its own failures — the trend feature must never stop a signal.
@@ -566,10 +597,169 @@ class SignalService:
             {c.name: c.points for c in fresh.score.components} if fresh.score else None,
         )
         final = self.store.reconcile(fresh, now, self._throttle())
-        self._trace_bar(symbol, profile, df, fresh, final, veto, shadow_tag, now)
+        self._trace_bar(symbol, profile, df, fresh, final, veto, shadow_tag, now,
+                        setup=setup_name)
         return final
 
-    def _trace_bar(self, symbol, profile, df, fresh, final, veto, shadow_tag, now) -> None:
+    def _maybe_setup_shadow(self, symbol, profile, df, fresh, now) -> str | None:
+        """P1-4: run the registered setup detector and shadow-book its card.
+
+        Fires only when the engine offered NO clean card, intraday only (the
+        sized frame), never past the entry cutoff, one booking per bar and
+        per-direction spacing per the registered DEDUPE_S. The card is built
+        through the SAME strike-liquidity and premium-freshness gates as a
+        real card — a bypassed liquidity guard or stale quote books nothing,
+        so the ledger measures trades the system could actually have offered.
+        Returns the setup name for the eval trace, or None. Never raises.
+        """
+        try:
+            from app.signals import setups
+
+            if profile.mode is not TradingMode.INTRADAY:
+                return None
+            if not getattr(self.cfg, "paper_trading", True):
+                return None               # the ledger IS the product; no book, no point
+            # The engine's own data-integrity refusals apply verbatim (review
+            # catch: without this, a setup fired on yesterday's frame and
+            # inside the post-gap quiet window the engine itself distrusts).
+            if self._frame_integrity_veto(df, now):
+                return None
+            if self._late_cutoff_veto(fresh, now):
+                return None
+            if df is None or len(df) < 2:
+                return None
+            hit = setups.vwap_cross(df)
+            if hit is None:
+                return None
+            fired = getattr(self, "_setup_fired", None)
+            if fired is None:
+                fired = self._setup_fired = {}
+            key = (symbol.upper(), hit.name, hit.direction.value)
+            last_bar, last_at = fired.get(key, (None, 0))
+            if hit.bar_ts == last_bar or now - last_at < setups.DEDUPE_S:
+                return None
+            card = self._setup_card(symbol, profile, df, hit, now)
+            if card is None:
+                return None
+            card.hollow_reason = f"setup: {hit.name} — {hit.note}"
+            shadow = fresh.model_copy(deep=True)
+            shadow.signal = card
+            shadow.action = card.action
+            # The store displaces an incumbent only on a bias flip, and the
+            # engine's bias is exactly what setups must not inherit (third
+            # door for the direction lockout): the setup's own direction IS
+            # its bias claim, so an opposite setup can displace a stale one.
+            shadow.status.bias = (Bias.BULLISH if card.direction is Direction.CE
+                                  else Bias.BEARISH)
+            # The detector's OWN dedupe is the cadence control — the live
+            # feed's throttle must not gate this store (review catch: its
+            # flip-guard would have blocked a PE setup within 30min of a CE
+            # one, silently re-importing the direction lockout the detectors
+            # exist to escape).
+            # max_per_day is a >= check in the store — 0 would block EVERY
+            # booking, so "effectively unlimited" is spelled as a big number.
+            res = shadow_store_for("setup:").reconcile(
+                shadow, now,
+                ThrottleConfig(max_per_day=10000, min_gap_s=0, cooldown_s=0,
+                               flip_guard_s=0))
+            adopted = (res is not None and res.signal is not None
+                       and res.signal.id == card.id)
+            if not adopted:
+                # Slot still held by a live prior setup card — retry next
+                # cycle; the dedupe is NOT burned for a booking that never
+                # happened (review catch: "booked" was logged either way).
+                log.debug("setup candidate held (slot busy): %s", card.contract)
+                return None
+            fired[key] = (hit.bar_ts, now)
+            log.info("setup shadow booked: %s %s %s", hit.name,
+                     hit.direction.value, card.contract)
+            return hit.name
+        except Exception:
+            log.debug("setup shadow failed", exc_info=True)
+            return None
+
+    def _setup_card(self, symbol, profile, df, hit, now):
+        """A full SignalCard for a setup hit, through the real machinery:
+        liquidity-guarded strike pick, freshness-gated premium, the mode's
+        own ladder. Mirrors the engine's tradeable branch minus the score
+        (a setup has none — confidence 0, empty breakdown, tagged title)."""
+        from app.signals import risk as risk_mod
+        from app.signals import strike as strike_mod
+        from app.signals.engine import premium_quote
+        from app.signals.models import ScoreBreakdown
+
+        chain = self.state.get_option_chain(chain_key(symbol, profile.expiry_key))
+        snap = self.state.underlying_snapshot(symbol)
+        spot = float(snap.ltp) if snap and snap.ltp else None
+        if chain is None or not spot:
+            return None
+        direction = hit.direction
+        pick = strike_mod.select(
+            symbol, direction, chain, spot, False,
+            self.cfg.strike_min_oi, self.cfg.strike_max_spread_pct,
+            self.state.ticks, strike_bias=profile.strike_bias,
+        )
+        if pick is None or pick.ltp is None:
+            return None
+        # A guards-bypassed ATM fallback is loud on a real card; for a SETUP
+        # ledger it is disqualifying — participation is half the hypothesis.
+        if getattr(pick, "guards_bypassed", False):
+            return None
+        entry_px, age = premium_quote(self.state.ticks, pick.token, pick.ltp, now)
+        max_age = self.cfg.signal_max_premium_age_s
+        if max_age > 0 and (age is None or age > max_age):
+            return None
+        price_fut = float(df["close"].iloc[-1])
+        basis = ((snap.fut_ltp - snap.ltp)
+                 if snap and snap.fut_ltp and snap.ltp else 0.0)
+        ind = compute_snapshot(df)
+        plan = risk_mod.build(
+            direction, entry_px, df, ind, price_fut, symbol,
+            profile.timeframe, profile.premium_sl_pct, profile.rr_target1,
+            profile.rr_target2, basis,
+            disaster_pct=(self.cfg.premium_disaster_pct
+                          if self.cfg.stop_primary == "underlying"
+                          and self.cfg.trading_capital > 0 else None),
+            quick_pct=self.cfg.quick_target_pct or None,
+        )
+        bullish = direction is Direction.CE
+        card = SignalCard(
+            id=f"{symbol}-setup-{hit.name}-{now}-{direction.value}",
+            symbol=symbol, mode=profile.mode,
+            title=f"{symbol} VWAP {'RECLAIM' if bullish else 'REJECT'} (setup)",
+            action=Action.BUY_CE if bullish else Action.BUY_PE,
+            direction=direction, state=SignalState.ACTIVE,
+            contract=pick.tradingsymbol or f"{symbol} {int(pick.strike)} {direction.value}",
+            strike=pick.strike, token=pick.token,
+            expiry=chain.expiry if chain else None,
+            entry_low=plan.entry_low, entry_high=plan.entry_high,
+            premium_sl=plan.premium_sl, disaster_sl=plan.disaster_sl,
+            quick_target=plan.quick_target,
+            target1=plan.target1, target2=plan.target2,
+            trailing_sl_rule=plan.trailing_sl_rule,
+            risk_reward=plan.risk_reward,
+            confidence=0.0,
+            underlying_invalidation=plan.underlying_invalidation,
+            invalidation_note=plan.invalidation_note,
+            invalidation_level=plan.invalidation_level,
+            invalidation_dir=plan.invalidation_dir,
+            reasons=[hit.note, *pick.rationale[:1]],
+            created_at=now, valid_until=now + profile.validity_seconds,
+            score=ScoreBreakdown(direction=direction, components=[], total=0.0),
+            ref_spot=spot, ref_entry_premium=entry_px,
+        )
+        # Same fallback chain as _apply_sizing (review catch): a transient
+        # 0/stale per-contract lot in the instrument dump must fall back to
+        # the underlying's futures lot, not mint a permanently unfillable
+        # card that silently starves the 30-fill ledger.
+        meta = self.state.underlyings.get(symbol.upper()) \
+            if hasattr(self.state, "underlyings") else None
+        card.lot_size = (_option_lot_size(pick.token)
+                         or (meta.lot_size if meta and meta.lot_size else 0)) or None
+        return card
+
+    def _trace_bar(self, symbol, profile, df, fresh, final, veto, shadow_tag, now,
+                   setup=None) -> None:
         """Blind-spot instrumentation (audit P1-2): one trace line per closed
         bar with BOTH directions' scores, the regime vote, and whatever
         stopped a card — engine reason, service veto, or (visible by
@@ -610,6 +800,8 @@ class SignalService:
                 # rules: card set but held different/absent = throttled away.
                 "held": (final.signal.id
                          if final is not None and final.signal is not None else None),
+                # P1-4: which setup detector (if any) fired on this bar.
+                "setup": setup,
             })
         except Exception:
             log.debug("eval trace hook failed", exc_info=True)

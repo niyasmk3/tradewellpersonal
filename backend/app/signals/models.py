@@ -104,6 +104,11 @@ class StrikePick(BaseModel):
     moneyness: str = "ATM"          # ITM / ATM / OTM
     rationale: list[str] = []
     considered: list[str] = []      # human-readable "why not the others"
+    # True when the OI/spread liquidity guards were BYPASSED by the ATM
+    # fallback (P0-3 makes the card loud about it; the setup ledger refuses
+    # such picks outright — review catch: the refusal read this flag off the
+    # model while only a local variable in strike.py ever knew).
+    guards_bypassed: bool = False
 
 
 class RiskPlan(BaseModel):

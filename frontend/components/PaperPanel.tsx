@@ -191,6 +191,26 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* Setup detectors' ledger (P1-4): structural candidates the score
+          engine cannot see — per-setup verdicts, parameters frozen. */}
+      {data.setup_shadow && (
+        <div className="mt-2 rounded bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300">
+          Setup detectors: {data.setup_shadow.trades} closed
+          {data.setup_shadow.open ? ` (+${data.setup_shadow.open} open)` : ""}, net ₹
+          {signed(data.setup_shadow.net_pnl, 0)} (₹{signed(data.setup_shadow.expectancy, 0)}/trade,{" "}
+          {data.setup_shadow.win_rate}% wins).{" "}
+          {Object.entries(data.setup_shadow.by_setup ?? {}).map(([name, s]) => (
+            <span key={name} className="mr-2">
+              {name.replace(/_/g, " ")}: {s.trades < 30
+                ? `${s.trades}/30 fills (₹${signed(s.expectancy, 0)}/trade so far)`
+                : s.expectancy > 0
+                  ? `POSITIVE at sample size (₹${signed(s.expectancy, 0)}/trade) — promotion case open.`
+                  : `negative at sample size — retire it.`}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Stop-basis A/B: every clean fill's twin runs the OTHER stop basis
           (premium stop vs underlying invalidation + disaster backstop).
           STOP_PRIMARY was flipped twice on n=1 — this settles it at 30. */}
@@ -226,7 +246,9 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                           ? "bg-rose-500/15 text-rose-300"
                           : r.shadow_class === "stopb"
                             ? "bg-teal-500/15 text-teal-300"
-                            : "bg-purple-500/15 text-purple-300"
+                            : r.shadow_class === "setup"
+                              ? "bg-indigo-500/15 text-indigo-300"
+                              : "bg-purple-500/15 text-purple-300"
                     }`}
                     title={
                       r.shadow_class === "late"
@@ -235,7 +257,9 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                           ? "Counterfactual: this card was vetoed by the re-fire guard (same thesis stopped/invalidated within 2h) — paper takes it anyway so the guard stays auditable. Not counted in any aggregate above."
                           : r.shadow_class === "stopb"
                             ? "Stop-basis A/B twin: the same fill run under the OTHER stop basis. Graded only against its paired clean row — not counted in any aggregate above."
-                            : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
+                            : r.shadow_class === "setup"
+                              ? "Setup-detector candidate (P1-4): a structural setup the score engine cannot see, paper-only until its own 30-fill verdict. Not counted in any aggregate above."
+                              : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
                     }
                   >
                     {r.shadow_class === "late"
@@ -244,7 +268,9 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                         ? "refire"
                         : r.shadow_class === "stopb"
                           ? "stop A/B"
-                          : "hollow"}
+                          : r.shadow_class === "setup"
+                            ? (r.setup ?? "setup").replace(/_/g, " ")
+                            : "hollow"}
                   </span>
                 )}
                 {r.era?.startsWith("inflated") && (

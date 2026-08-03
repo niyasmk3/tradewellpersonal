@@ -87,6 +87,8 @@ def shadow_class(x) -> str | None:
             return "refire"
         if notes.startswith("hollow: stopb:"):
             return "stopb"
+        if notes.startswith("hollow: setup:"):
+            return "setup"
         return "floor"
     reason = getattr(x, "hollow_reason", None)
     if reason:
@@ -96,6 +98,8 @@ def shadow_class(x) -> str | None:
             return "refire"
         if reason.startswith("stopb:"):
             return "stopb"
+        if reason.startswith("setup:"):
+            return "setup"
         return "floor"
     return None
 
@@ -411,6 +415,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     late_rows = []
     refire_rows = []
     stopb_rows = []
+    setup_rows = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
         net = chg.net_pnl(t.entry_premium, t.exit_premium, qty)
@@ -438,12 +443,22 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "shadow_class": cls,
             "mode": t.mode.value,
         }
+        if cls == "setup":
+            # Per-setup grouping key, parsed from the atomic fill tag
+            # ("hollow: setup: vwap_cross — ..."). The audit demands
+            # per-setup expectancy from day one — a blended setups number
+            # would hide which detector earns its keep.
+            try:
+                row["setup"] = (t.notes or "").split("setup:", 1)[1].strip().split(" ", 1)[0]
+            except Exception:
+                row["setup"] = "unknown"
         # The books: the system's own decisions (aggregated), each shadow
         # class (its own verdict block below), and pre-honest-era history
         # (flagged, counted nowhere).
         (late_rows if (honest and cls == "late")
          else refire_rows if (honest and cls == "refire")
          else stopb_rows if (honest and cls == "stopb")
+         else setup_rows if (honest and cls == "setup")
          else hollow_rows if (honest and hollow)
          else rows if honest else inflated).append(row)
     wins = [r for r in rows if r["net_pnl"] > 0]
@@ -457,6 +472,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
                 if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
     open_late = [t for t in open_all if shadow_class(t) == "late"]
     open_refire = [t for t in open_all if shadow_class(t) == "refire"]
+    open_setup = [t for t in open_all if shadow_class(t) == "setup"]
     open_hollow = [t for t in open_all if shadow_class(t) == "floor"]
     open_clean = [t for t in open_all if shadow_class(t) is None]
 
@@ -734,6 +750,32 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "win_rate": (round(100 * sum(1 for r in refire_rows if r["net_pnl"] > 0)
                                / len(refire_rows), 1) if refire_rows else 0.0),
         } if (refire_rows or open_refire) else None,
+        # THE SETUP DETECTORS' LEDGER (audit P1-4): fills of cards the
+        # structural detectors booked — candidates the score engine cannot
+        # see. Per-setup verdicts at 30+ fills each; parameters are frozen
+        # at registration, and changing them resets a setup's count.
+        # None until the first setup fill.
+        "setup_shadow": {
+            "trades": len(setup_rows),
+            "open": len(open_setup),
+            "net_pnl": round(sum(r["net_pnl"] for r in setup_rows), 2),
+            "expectancy": (round(sum(r["net_pnl"] for r in setup_rows) / len(setup_rows), 2)
+                           if setup_rows else 0.0),
+            "win_rate": (round(100 * sum(1 for r in setup_rows if r["net_pnl"] > 0)
+                               / len(setup_rows), 1) if setup_rows else 0.0),
+            "by_setup": {
+                s: {
+                    "trades": len(g),
+                    "net_pnl": round(sum(r["net_pnl"] for r in g), 2),
+                    "expectancy": round(sum(r["net_pnl"] for r in g) / len(g), 2),
+                    "win_rate": round(100 * sum(1 for r in g if r["net_pnl"] > 0) / len(g), 1),
+                }
+                for s, g in (
+                    (s, [r for r in setup_rows if r.get("setup") == s])
+                    for s in sorted({r.get("setup") or "unknown" for r in setup_rows})
+                ) if g
+            },
+        } if (setup_rows or open_setup) else None,
         # THE EXIT-POLICY A/B (see the block above): same trades, two exits.
         "exit_ab": exit_ab,
         # THE STOP-BASIS A/B (audit P1-5, see the block above): same trades,
@@ -750,5 +792,5 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "rows": on_rows,
         } if on_rows else None,
         # Shadow and inflated rows LAST, visibly flagged — context, not evidence.
-        "rows": rows + hollow_rows + late_rows + refire_rows + stopb_rows + inflated,
+        "rows": rows + hollow_rows + late_rows + refire_rows + setup_rows + stopb_rows + inflated,
     }

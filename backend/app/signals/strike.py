@@ -149,4 +149,5 @@ def select(
         moneyness=chosen_m,
         rationale=rationale,
         considered=considered,
+        guards_bypassed=guards_bypassed,
     )

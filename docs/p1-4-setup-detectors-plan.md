@@ -45,9 +45,11 @@ re-sized offline before any wiring.
 
 - `app/signals/setups.py`: pure detector on the intraday 3m closed-candle
   frame. Fire when ≥8 consecutive closes sat on one side of session VWAP and
-  the current close crosses it on volume ≥1.2× the 20-bar median. Both
-  directions always — **no regime lockout** (the lockout is the #1 measured
-  blind-spot cause). 30-min per-direction dedupe.
+  the current close crosses it on volume ≥1.2× the np.median of the last
+  ≤20 session bars (minimum 5 — the window grows through the first hour,
+  EXACTLY matching the sized instrument's `med_vol`; precision added after
+  review). Both directions always — **no regime lockout** (the lockout is
+  the #1 measured blind-spot cause). 30-min per-direction dedupe.
 - Wiring in `SignalService.evaluate_symbol`: when the engine offers no clean
   card, run the detector on the same df. A hit builds a card through the
   EXISTING machinery (strike.select liquidity guards, risk ladder, freshness
