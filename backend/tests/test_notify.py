@@ -451,6 +451,48 @@ def test_guest_verify_only_fires_for_a_distinct_topic():
     print("  GUEST  -> startup verify fires once for a distinct topic, else no-op")
 
 
+def test_silent_priority_split():
+    """The 31-Jul contract: the phone SOUNDS only for signal cards. Armed and
+    guest verification pings and card retirements are delivered at ntfy's
+    "min" priority (silent — the 2xx proof survives, the buzz does not);
+    cards and watchdog pages carry no priority header (audible default)."""
+    real = _capture()
+    two = {"ALERT_WEBHOOK_URL_2": "https://ntfy.example/shared"}
+    try:
+        # Armed-style ping with priority=min -> Priority header on the send.
+        assert notify.push_text("Tradewell armed", "feed starting", _cfg(),
+                                priority="min") is True
+        _drain()
+        assert SENT[0][2].get("Priority") == "min", SENT[0][2]
+
+        # Retirements: silent on BOTH topics.
+        SENT.clear()
+        assert notify.push_retire(_card(score=92.9), "expired", _cfg(**two)) is True
+        _drain()
+        assert len(SENT) == 2 and all(s[2].get("Priority") == "min" for s in SENT)
+
+        # Guest verification: silent.
+        SENT.clear()
+        assert notify.push_guest_verify("guest live", "hello", _cfg(**two)) is True
+        _drain()
+        assert SENT[0][2].get("Priority") == "min", SENT[0][2]
+
+        # Signal cards: NO priority header — this is the buzz that remains.
+        SENT.clear()
+        assert notify.push_signal(_card(), _cfg(**two)) is True
+        _drain()
+        assert all("Priority" not in s[2] for s in SENT), [s[2] for s in SENT]
+
+        # Watchdog-style default push_text: audible too.
+        SENT.clear()
+        assert notify.push_text("TRADEWELL FEED SILENT", "180s", _cfg()) is True
+        _drain()
+        assert "Priority" not in SENT[0][2]
+    finally:
+        notify.threading.Thread = real
+    print("  QUIET  -> pings/retires silent (min); cards and pages keep the buzz")
+
+
 if __name__ == "__main__":
     import sys as _sys
 

@@ -256,6 +256,9 @@ class FeedController:
             card, state, get_settings())
 
         if settings.alert_startup_ping:
+            # Silent (min-priority) on purpose: the ping's job is the 2xx
+            # that arms the chip, not a morning buzz — the phone only SOUNDS
+            # for signal cards (31-Jul: "ntfy needs only the signals").
             dispatched = push_text(
                 "Tradewell armed",
                 f"Feed starting for {settings.track_underlyings} · "
@@ -263,6 +266,7 @@ class FeedController:
                 f"signal alerts will use this channel.",
                 settings,
                 on_result=_armed,
+                priority="min",
             )
             if not dispatched:
                 log.warning("Alert channel NOT armed — no ALERT_WEBHOOK_URL in .env")

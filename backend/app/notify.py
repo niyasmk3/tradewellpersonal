@@ -159,23 +159,34 @@ def _guest_url(cfg: Settings) -> str | None:
     return guest
 
 
-def _text_payload(title: str, body: str, cfg: Settings) -> tuple[bytes, dict[str, str]]:
+def _text_payload(title: str, body: str, cfg: Settings,
+                  priority: str | None = None) -> tuple[bytes, dict[str, str]]:
     """Shape a plain title+body into the wire payload the configured format wants.
 
     `text` (ntfy) sends the body raw with the title in a header; `json`
     (Telegram/Slack/Discord/Home Assistant) sends title+text+message aliases.
     Shared by every plain-text sender so the two formats can never drift apart.
+
+    `priority="min"` marks a SILENT delivery (ntfy: delivered, listed in the
+    app, but no sound/banner). This is how the armed chips keep their 2xx
+    delivery proof while the phone only ever SPEAKS for signal cards — the
+    31-Jul request: "ntfy needs only the signals". Other webhook services
+    ignore the unknown header, which degrades to the old audible behaviour.
     """
     if cfg.alert_webhook_format == "json":
+        headers = {"Content-Type": "application/json"}
+        if priority:
+            headers["Priority"] = priority
         return (json.dumps({"title": title, "text": f"{title}\n{body}",
-                            "message": f"{title}\n{body}"}).encode(),
-                {"Content-Type": "application/json"})
-    return (body.encode(),
-            {"Content-Type": "text/plain; charset=utf-8", "Title": title})
+                            "message": f"{title}\n{body}"}).encode(), headers)
+    headers = {"Content-Type": "text/plain; charset=utf-8", "Title": title}
+    if priority:
+        headers["Priority"] = priority
+    return (body.encode(), headers)
 
 
 def push_text(title: str, body: str, cfg: Settings, on_result=None,
-              audience: str = "private") -> bool:
+              audience: str = "private", priority: str | None = None) -> bool:
     """Fire-and-forget plain push — watchdog pages, armed confirmations, and
     anything else that must reach the phone without being a signal card.
 
@@ -194,7 +205,7 @@ def push_text(title: str, body: str, cfg: Settings, on_result=None,
         [u for u in [_webhook_url(cfg)] if u is not None]
     if not urls:
         return False
-    payload, headers = _text_payload(title, body, cfg)
+    payload, headers = _text_payload(title, body, cfg, priority=priority)
     primary = _webhook_url(cfg)
     for url in urls:
         threading.Thread(
@@ -224,7 +235,9 @@ def push_guest_verify(title: str, body: str, cfg: Settings, on_result=None) -> b
     url = _guest_url(cfg)
     if url is None:
         return False
-    payload, headers = _text_payload(title, body, cfg)
+    # Verification is proof, not news: silent priority — the guest's phone
+    # must only ever sound for an actual card.
+    payload, headers = _text_payload(title, body, cfg, priority="min")
     threading.Thread(
         target=_post, args=(url, payload, headers, on_result),
         daemon=True, name="tradewell-alert").start()
@@ -244,10 +257,12 @@ def push_retire(card: SignalCard, state: str, cfg: Settings) -> bool:
     score = f"score {card.confidence:.0f}" if card.confidence is not None else "unscored"
     reason = ("thesis flipped, do not chase the old plan."
               if state == "cancelled" else "entry window closed.")
+    # Lifecycle is worth a RECORD, not a buzz: retirements arrive silently
+    # (min priority) so the phone only sounds when there is something to DO.
     return push_text(
         f"Tradewell: {card.mode.value} card {state}",
         f"{card.contract} ({score}) is {state} — {reason}",
-        cfg, audience="signals",
+        cfg, audience="signals", priority="min",
     )
 
 
