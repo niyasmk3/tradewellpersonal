@@ -425,6 +425,9 @@ def test_trade_codes_correlate_buy_book_and_exit():
     svc.check(now=base + 3000)
     ceil = next(p for p in svc.pushes if "CEILING" in p[0])
     assert "book #B1" in ceil[0] and "#B1 BUY" in ceil[1], ceil[0]
+    # The chart marker payload carries the code too (BOOK #B1 @ level).
+    sell_alert = next(x for x in svc.alerts if x["side"] == "sell")
+    assert sell_alert["ref_buy"]["code"] == "#B1"
 
     # A second buy the same day gets #B2; the broke alert quotes ITS code.
     svc2 = _svc(spot=24650.0, chain=None)

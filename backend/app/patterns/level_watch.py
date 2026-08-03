@@ -379,6 +379,7 @@ class LevelWatchService:
             # exists today — strike, entry, live value at the ceiling.
             "ref_buy": (
                 {"ts": ref_buy["ts"], "strike": ref_buy["strike"],
+                 "code": ref_buy.get("code"),
                  "entry": ref_buy["ce_ltp"], "now": ref_now,
                  "pct": (round((ref_now - ref_buy["ce_ltp"]) / ref_buy["ce_ltp"] * 100, 1)
                          if ref_now else None)}

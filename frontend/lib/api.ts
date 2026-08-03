@@ -690,6 +690,14 @@ export interface LevelAlert {
   expiry: string | null;
   ce_ltp: number | null;
   token?: number | null;
+  /** BUY exits named at fire time (support side only). */
+  fails_below?: number | null;
+  next_ceiling?: number | null;
+  /** CEILING only: the earlier BUY this call is booking. */
+  ref_buy?: {
+    ts: number; strike: number; code?: string | null;
+    entry: number; now: number | null; pct: number | null;
+  } | null;
   title: string;
   outcomes?: LevelAlertOutcome;
 }

@@ -124,7 +124,14 @@ export function PatternsTapeChart({
         position: a.side === "buy" ? "belowBar" : "aboveBar",
         shape: a.side === "buy" ? "arrowUp" : "arrowDown",
         color: a.side === "buy" ? "#22d3ee" : "#facc15",
-        text: a.side === "buy" ? `BUY ${a.strike}CE` : `BOOK @ ${a.level.toFixed(0)}`,
+        // The trade code rides the marker too — the chart, the push and the
+        // Lab list all name the same trade the same way (#B1 everywhere).
+        text:
+          a.side === "buy"
+            ? `${a.code ? a.code + " " : ""}BUY ${a.strike}CE`
+            : a.ref_buy?.code
+              ? `BOOK ${a.ref_buy.code} @ ${a.level.toFixed(0)}`
+              : `BOOK @ ${a.level.toFixed(0)}`,
         size: 2,
       });
     }
