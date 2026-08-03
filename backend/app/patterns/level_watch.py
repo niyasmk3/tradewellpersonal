@@ -230,5 +230,10 @@ class LevelWatchService:
         self._push(title, body, self.cfg, audience="private")
 
     def recent(self) -> list:
+        """Today's callouts only (review catch): the ring buffer survives
+        across sessions on a long-running process, and a stale alert served
+        to the tape chart would get pinned onto today's opening candle —
+        a touch that never happened."""
+        today = (int(time.time()) + 19800) // 86400
         with self._lock:
-            return list(self.alerts)
+            return [a for a in self.alerts if (a["ts"] + 19800) // 86400 == today]

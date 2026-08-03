@@ -619,6 +619,9 @@ export interface PatternsLiveRead {
   last_close?: number;
   patterns: {
     bar: string;
+    /** Epoch of the bar's open — chart markers anchor to this. Absent on
+        payloads from a backend that predates the tape chart. */
+    bar_ts?: number;
     pattern: string;
     direction: "bullish" | "bearish";
     volume_regime: "high" | "normal" | "low" | null;
@@ -627,6 +630,8 @@ export interface PatternsLiveRead {
     conditioned: boolean;
     horizons: Record<string, ConditionalCell> | null;
   }[];
+  /** Today's closed 5-min bars (index-space) for the Lab's tape chart. */
+  candles?: { ts: number; open: number; high: number; low: number; close: number }[];
   volume: {
     current_regime: "high" | "normal" | "low" | null;
     pace_vs_typical: number | null;

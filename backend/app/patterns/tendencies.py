@@ -201,6 +201,8 @@ def assemble_live_read(today: pd.DataFrame, tail: pd.DataFrame, results: dict) -
             cond = (h30.get("by_volume") or {}).get(reg) if reg else None
             fired.append({
                 "bar": hhmm.at[idx],
+                # Epoch of the bar's open — what a chart marker anchors to.
+                "bar_ts": int(det.at[idx, "ts"]),
                 "pattern": name,
                 "direction": "bullish" if direction > 0 else "bearish",
                 "volume_regime": reg,
@@ -244,6 +246,14 @@ def assemble_live_read(today: pd.DataFrame, tail: pd.DataFrame, results: dict) -
         "last_close": float(det["close"].iloc[-1]),
         "patterns": fired,
         "volume": vol,
+        # Today's closed bars, verbatim — the Lab's tape chart draws these and
+        # pins each pattern/callout marker to its bar_ts. Index-space, so the
+        # S/R ladder overlays exactly (no futures-basis fudge).
+        "candles": [
+            {"ts": int(r.ts), "open": float(r.open), "high": float(r.high),
+             "low": float(r.low), "close": float(r.close)}
+            for r in today.itertuples()
+        ],
         "note": (
             "Historical conditional frequencies, not predictions — a 52% cell "
             "is a coin. Volume is the NIFTYBEES proxy (relative shape only)."

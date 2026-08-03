@@ -170,9 +170,14 @@ def test_live_read_joins_the_matching_cell():
 
     read = assemble_live_read(today, tail, results)
     assert read["bars_today"] == 24
+    # The tape chart's contract: every closed bar rides along, and each fired
+    # pattern carries the epoch of ITS bar so markers pin to the right candle.
+    assert len(read["candles"]) == 24
+    assert read["candles"][-1]["close"] == 103.0
     hits = [p for p in read["patterns"] if p["pattern"] == "bull_marubozu"]
     assert hits, read["patterns"]
     p = hits[0]
+    assert p["bar_ts"] == int(today["ts"].iloc[-1]), "marker must anchor to its own bar"
     assert p["volume_regime"] == "high" and p["conditioned"]
     assert p["historical_30m"]["hit_rate"] == 0.58
     assert p["historical_30m_all"]["hit_rate"] == 0.5

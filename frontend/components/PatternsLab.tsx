@@ -6,6 +6,7 @@
 // buttons re-fetch Kite data and re-run the analysis.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   CandleFrequency,
   ConditionalCell,
@@ -19,6 +20,12 @@ import {
   api,
 } from "@/lib/api";
 import { chime } from "@/lib/alerts";
+
+// lightweight-charts touches the DOM — client-side only, same as PriceChart.
+const PatternsTapeChart = dynamic(
+  () => import("./PatternsTapeChart").then((m) => m.PatternsTapeChart),
+  { ssr: false, loading: () => <div className="h-72 w-full animate-pulse bg-panel2" /> },
+);
 import { usePolling } from "@/lib/usePolling";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -191,19 +198,21 @@ function CellStat({ c }: { c: ConditionalCell | null | undefined }) {
 
 function LiveReadCard() {
   const [read, setRead] = useState<PatternsLiveRead | null>(null);
+  // Level ladder + today's callouts, fetched on the same cadence purely for
+  // the tape chart's overlay/markers (the LevelWatchCard keeps its own
+  // faster poll for the list + chime).
+  const [lw, setLw] = useState<LevelAlertsResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setBusy(true);
     setErr(null);
-    try {
-      setRead(await api.patternsLiveRead());
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    const [r, l] = await Promise.allSettled([api.patternsLiveRead(), api.levelAlerts()]);
+    if (r.status === "fulfilled") setRead(r.value);
+    else setErr(r.reason instanceof Error ? r.reason.message : String(r.reason));
+    if (l.status === "fulfilled") setLw(l.value);
+    setBusy(false);
   }, []);
 
   useEffect(() => {
@@ -249,6 +258,21 @@ function LiveReadCard() {
 
       {read && !err && (
         <>
+          {(read.candles?.length ?? 0) > 0 && (
+            <div className="mb-2">
+              <PatternsTapeChart
+                read={read}
+                levels={lw?.watched ?? []}
+                alerts={lw?.alerts ?? []}
+              />
+              <p className="mt-1 text-[10px] text-muted">
+                Today&apos;s 5m tape (index). Green/red arrows = candlestick patterns on
+                their own bar; cyan/yellow arrows = level callouts (BUY setup / BOOK at
+                ceiling) pinned to the bar they fired on; dotted lines = the strong S/R
+                ladder (purple = 10+ touch-days).
+              </p>
+            </div>
+          )}
           {vol && (
             <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
               <span>

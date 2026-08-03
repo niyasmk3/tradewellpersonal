@@ -98,7 +98,7 @@ def test_support_touch_fires_buy_with_contract():
     assert "exp 04-Aug" in title
     assert "held 70%" in body and "NOT a scored card" in body
     assert kw.get("audience") == "private", "level context never reaches the guest"
-    a = svc.recent()[0]
+    a = list(svc.alerts)[0]      # raw buffer: recent() date-scopes (own test)
     assert a["side"] == "buy" and a["strike"] == 24600 and a["ce_ltp"] == 104.5
     print("  BUY    -> support touch calls out strike/expiry/premium")
 
@@ -114,7 +114,7 @@ def test_resistance_touch_fires_ceiling():
     title, body, _ = svc.pushes[0]
     assert "CEILING" in title and "booking" in title
     assert "held 68% of 19 days" in body and "not prophecy" in body
-    assert svc.recent()[0]["side"] == "sell"
+    assert list(svc.alerts)[0]["side"] == "sell"
     print("  SELL   -> ceiling touch calls out booking context")
 
 
@@ -237,6 +237,20 @@ def test_disabled_flag_and_missing_chain():
     title, _, _ = svc2.pushes[0]
     assert "24600 CE" in title and "₹" not in title, "no premium without a chain"
     print("  GUARD  -> flag silences; missing chain degrades, never kills")
+
+
+def test_recent_is_scoped_to_today():
+    """Review catch: the ring buffer outlives sessions on a long-running
+    process — yesterday's callout must never be served to today's chart."""
+    svc = _svc(spot=24650.0)
+    now = int(time.time())
+    svc.alerts.append({"ts": now - 86400, "side": "buy", "level": 24500.0,
+                       "title": "yesterday"})
+    svc.alerts.append({"ts": now, "side": "sell", "level": 24600.0,
+                       "title": "today"})
+    got = svc.recent()
+    assert [a["title"] for a in got] == ["today"], got
+    print("  TODAY  -> prior-session callouts never reach the chart")
 
 
 def test_watched_is_near_spot_only():
