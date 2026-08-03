@@ -51,9 +51,27 @@ def _is_evening_positional(card: SignalCard) -> bool:
     return (card.created_at + 19800) % 86400 // 60 >= EVENING_MIN
 
 
+def _fmt_expiry(iso: str | None) -> str | None:
+    """'2026-08-04' -> '04-Aug'. The push must say WHICH series: the same
+    strike trades in several expiries at once, and a push reading only
+    "NIFTY 24250 CE" invites buying the wrong one in Kite. ASCII, so it is
+    safe inside the latin-1 Title header. Unparseable input passes through
+    verbatim — a strange expiry string is still better shown than dropped."""
+    if not iso:
+        return None
+    try:
+        from datetime import date
+        d = date.fromisoformat(iso)
+        return d.strftime("%d-%b")
+    except Exception:
+        return iso
+
+
 def _headline(card: SignalCard) -> str:
     side = "BUY PE" if card.direction.value == "PE" else "BUY CE"
-    head = f"{side} {card.contract} · score {card.confidence:.0f}"
+    exp = _fmt_expiry(card.expiry)
+    tail = f" · exp {exp}" if exp else ""
+    head = f"{side} {card.contract}{tail} · score {card.confidence:.0f}"
     # The distinct title is the alert: on a lock screen the marker alone says
     # "this one holds overnight" before the contract is even read.
     if _is_evening_positional(card):
@@ -71,10 +89,16 @@ def _body(card: SignalCard, include_sizing: bool = True) -> str:
     Sizing derives from the owner's money, not from the signal, so it never
     leaves the primary topic.
     """
+    exp = _fmt_expiry(card.expiry)
     lines = [
         f"Entry ₹{card.entry_low}–{card.entry_high}",
         f"SL ₹{card.premium_sl} · T1 ₹{card.target1} · T2 ₹{card.target2}",
     ]
+    if exp:
+        # Strike is already in the contract name; the expiry is what the
+        # notification was missing — the wrong-series trade is the mistake
+        # this line prevents.
+        lines.append(f"Strike {card.strike:g} · expiry {exp}")
     if card.suggested_lots and include_sizing:
         lines.append(f"Suggested {card.suggested_lots} lot(s)")
     if card.underlying_invalidation:
@@ -255,13 +279,15 @@ def push_retire(card: SignalCard, state: str, cfg: Settings) -> bool:
     if cfg.alert_min_score > 0 and (card.confidence or 0) < cfg.alert_min_score:
         return False
     score = f"score {card.confidence:.0f}" if card.confidence is not None else "unscored"
+    exp = _fmt_expiry(card.expiry)
+    series = f"{card.contract} (exp {exp}, {score})" if exp else f"{card.contract} ({score})"
     reason = ("thesis flipped, do not chase the old plan."
               if state == "cancelled" else "entry window closed.")
     # Lifecycle is worth a RECORD, not a buzz: retirements arrive silently
     # (min priority) so the phone only sounds when there is something to DO.
     return push_text(
         f"Tradewell: {card.mode.value} card {state}",
-        f"{card.contract} ({score}) is {state} — {reason}",
+        f"{series} is {state} — {reason}",
         cfg, audience="signals", priority="min",
     )
 
@@ -299,6 +325,8 @@ def push_signal(card: SignalCard, cfg: Settings, on_result=None) -> bool:
                 "symbol": card.symbol,
                 "mode": card.mode.value,
                 "score": card.confidence,
+                "strike": card.strike,
+                "expiry": card.expiry,
                 # Routing flag for json consumers (Telegram bots, HA automations)
                 # so an overnight-hold candidate can ring a different bell.
                 "evening_positional": _is_evening_positional(card),

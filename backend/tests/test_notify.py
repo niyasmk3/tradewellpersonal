@@ -83,6 +83,10 @@ def test_push_carries_everything_needed_to_act():
         assert "SL ₹117.4" in body and "T1 ₹181.8" in body
         assert "Suggested 3 lot(s)" in body
         assert "Valid for 8 min" in body          # 480s validity, stale-evident
+        # The wrong-series trade is the mistake these two lines prevent: the
+        # fixture's 2026-07-28 expiry must appear in title AND body.
+        assert "exp 28-Jul" in headers["Title"], headers["Title"]
+        assert "Strike 23950 · expiry 28-Jul" in body, body
     finally:
         notify.threading.Thread = real
     print("  NOTIFY -> push is actionable without opening the dashboard")
@@ -491,6 +495,34 @@ def test_silent_priority_split():
     finally:
         notify.threading.Thread = real
     print("  QUIET  -> pings/retires silent (min); cards and pages keep the buzz")
+
+
+def test_expiry_reaches_every_push_shape():
+    """Expiry in the json payload, in retirements, and in the SANITIZED guest
+    copy (series identity is card data, not the owner's sizing)."""
+    import json as _json
+
+    real = _capture()
+    two = {"ALERT_WEBHOOK_URL_2": "https://ntfy.example/shared"}
+    try:
+        notify.push_signal(_card(), _cfg(ALERT_WEBHOOK_FORMAT="json"))
+        _drain()
+        data = _json.loads(SENT[0][1].decode())
+        assert data["expiry"] == "2026-07-28" and data["strike"] == 23950.0
+
+        SENT.clear()
+        assert notify.push_retire(_card(score=92.9), "cancelled", _cfg(**two)) is True
+        _drain()
+        assert b"exp 28-Jul" in SENT[0][1], SENT[0][1]
+
+        SENT.clear()
+        notify.push_signal(_card(), _cfg(**two))
+        _drain()
+        shared = SENT[1][1].decode()
+        assert "expiry 28-Jul" in shared and "Suggested" not in shared
+    finally:
+        notify.threading.Thread = real
+    print("  EXPIRY -> in json fields, retirements, and the guest copy (sans sizing)")
 
 
 if __name__ == "__main__":
