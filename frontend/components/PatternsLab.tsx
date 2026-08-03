@@ -5,7 +5,7 @@
 // Read-mostly: results come from backend/.patterns_results.json; the two
 // buttons re-fetch Kite data and re-run the analysis.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   CandleFrequency,
@@ -20,6 +20,7 @@ import {
   api,
 } from "@/lib/api";
 import { chime } from "@/lib/alerts";
+import { patternInfo } from "@/lib/patternInfo";
 
 // lightweight-charts touches the DOM — client-side only, same as PriceChart.
 const PatternsTapeChart = dynamic(
@@ -315,20 +316,39 @@ function LiveReadCard() {
                 </tr>
               </thead>
               <tbody>
-                {read.patterns.map((p, i) => (
-                  <tr key={i} className="border-t border-edge/50">
-                    <td className="py-1 pr-2 font-mono text-muted">{p.bar}</td>
-                    <td className={`py-1 pr-2 ${p.direction === "bullish" ? "text-bull" : "text-bear"}`}>
-                      {p.pattern.replace(/_/g, " ")}
-                    </td>
-                    <td className="py-1 pr-2 font-mono text-muted">{p.volume_regime ?? "—"}</td>
-                    <td className="py-1 pr-2">
-                      <CellStat c={p.historical_30m} />
-                      {!p.conditioned && <span className="text-[9px] text-muted"> (no vol match)</span>}
-                    </td>
-                    <td className="py-1"><CellStat c={p.historical_30m_all} /></td>
-                  </tr>
-                ))}
+                {read.patterns.map((p, i) => {
+                  const info = patternInfo(p.pattern);
+                  return (
+                    <Fragment key={i}>
+                      <tr className="border-t border-edge/50">
+                        <td className="py-1 pr-2 font-mono text-muted">{p.bar}</td>
+                        <td className={`py-1 pr-2 ${p.direction === "bullish" ? "text-bull" : "text-bear"}`}>
+                          {p.pattern.replace(/_/g, " ")}
+                          <span className="ml-1 text-[9px] text-muted">
+                            {p.direction === "bullish" ? "(textbook: up)" : "(textbook: down)"}
+                          </span>
+                        </td>
+                        <td className="py-1 pr-2 font-mono text-muted">{p.volume_regime ?? "—"}</td>
+                        <td className="py-1 pr-2">
+                          <CellStat c={p.historical_30m} />
+                          {!p.conditioned && <span className="text-[9px] text-muted"> (no vol match)</span>}
+                        </td>
+                        <td className="py-1"><CellStat c={p.historical_30m_all} /></td>
+                      </tr>
+                      {info && (
+                        <tr>
+                          <td />
+                          <td colSpan={4} className="pb-1.5 pr-2 text-[10px] leading-relaxed text-muted">
+                            {info.desc} <span className="text-white/60">Whether that worked HERE is
+                            the &ldquo;history says&rdquo; number: above 55% = the textbook move
+                            usually followed; 45–55% = coin flip; below 45% = NIFTY usually went
+                            the opposite way.</span>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -365,7 +385,10 @@ function ConditionalTable({ table }: { table: Record<string, ConditionalOutcome>
             if (!h) return null;
             return (
               <tr key={name} className="border-t border-edge/50">
-                <td className={`py-1 pr-2 ${p.direction === "bullish" ? "text-bull" : "text-bear"}`}>
+                <td
+                  className={`py-1 pr-2 ${p.direction === "bullish" ? "text-bull" : "text-bear"}`}
+                  title={patternInfo(name)?.desc}
+                >
                   {name.replace(/_/g, " ")}
                 </td>
                 <td className="py-1 pr-2 font-mono text-muted">{p.n_total}</td>
@@ -576,7 +599,9 @@ function PatternTable({ freq }: { freq: Record<string, CandleFrequency> }) {
             const busiest = Object.entries(f.by_weekday).sort((a, b) => b[1].count - a[1].count)[0];
             return (
               <tr key={name} className="border-t border-edge/60 [&>td]:py-1.5 [&>td]:pr-3">
-                <td className="font-medium">{name.replace(/_/g, " ")}</td>
+                <td className="font-medium" title={patternInfo(name)?.desc}>
+                  {name.replace(/_/g, " ")}
+                </td>
                 <td>
                   <span
                     className={`tag ${
