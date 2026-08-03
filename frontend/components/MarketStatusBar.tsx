@@ -4,6 +4,7 @@ import { useState } from "react";
 import { MarketMood, MarketSnapshot, NewsResponse, UnderlyingSnapshot, api } from "@/lib/api";
 import { fmt, signed, istTime } from "@/lib/format";
 import { Logo } from "./Logo";
+import { ModuleSwitcher } from "./ModuleSwitcher";
 
 function zoneTone(zone: string): string {
   switch (zone) {
@@ -146,6 +147,8 @@ export function MarketStatusBar({
           <span className="text-base font-semibold tracking-tight">
             Trade<span className="text-[#2dd4bf]">well</span>
           </span>
+          {/* Pulse | Patterns — one click juggles the two modules. */}
+          <ModuleSwitcher />
         </div>
 
         {/* index selectors inline — the second header row is gone */}

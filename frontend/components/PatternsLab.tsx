@@ -5,6 +5,7 @@
 // Read-mostly: results come from backend/.patterns_results.json; the two
 // buttons re-fetch Kite data and re-run the analysis.
 
+import { ModuleSwitcher } from "./ModuleSwitcher";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
@@ -789,6 +790,7 @@ export function PatternsLab() {
       {/* header */}
       <header className="card flex flex-wrap items-center gap-3 px-4 py-3">
         <a href="/" className="text-xs text-muted hover:text-white">← Dashboard</a>
+        <ModuleSwitcher />
         <h1 className="text-sm font-semibold">Patterns Lab · NIFTY 50 · 5m</h1>
         {d && (
           <span className="text-[11px] text-muted">
