@@ -24,6 +24,8 @@ venv/
 .eval_trace.jsonl
 .news_seen.json
 .instruments_cache.json
+.patterns_candles.db
+.patterns_results.json
 
 # Node / Next
 node_modules/
