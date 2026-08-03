@@ -90,6 +90,30 @@ function LevelWatchCard() {
         )}
       </div>
 
+      {/* The scoreboard: is following the callouts making money? Win = the
+          quoted option moved the called direction within 30 minutes. */}
+      {data?.grades && Object.keys(data.grades).length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5 text-[10px]">
+          {(["buy", "sell"] as const).map((side) => {
+            const g = data.grades?.[side];
+            if (!g) return null;
+            return (
+              <span
+                key={side}
+                className={`tag ${g.win_rate >= 55 ? "bg-bull/15 text-bull" : g.win_rate <= 45 ? "bg-bear/15 text-bear" : "bg-panel2 text-muted"}`}
+                title={`${g.n} graded callout(s), 14-day window. Win = ${side === "buy" ? "premium UP" : "premium DOWN (booking avoided a give-back)"} 30 minutes after the callout. Held = spot never travelled 15+ pts through the level within the hour.`}
+              >
+                {side === "buy" ? "BUY callouts" : "CEILING callouts"}: {g.win_rate}% right ·{" "}
+                level held {g.held_rate}%
+                {g.avg_prem_move_30m_pct != null &&
+                  ` · prem ${g.avg_prem_move_30m_pct > 0 ? "+" : ""}${g.avg_prem_move_30m_pct}% @30m`}{" "}
+                (n={g.n})
+              </span>
+            );
+          })}
+        </div>
+      )}
+
       {err && (
         <p className="text-[11px] text-muted">
           {err.includes("404")
@@ -158,6 +182,23 @@ function LevelWatchCard() {
                       NIFTY {a.strike} CE{a.ce_ltp ? ` @ ₹${a.ce_ltp}` : ""}
                       {a.expiry ? ` · exp ${a.expiry}` : ""} · spot was {a.spot.toLocaleString()}
                     </div>
+                    {a.outcomes && (a.outcomes.win != null || a.outcomes.broke) && (
+                      <div className="mt-0.5 flex flex-wrap gap-1 text-[9px]">
+                        {a.outcomes.win != null && (
+                          <span className={`tag ${a.outcomes.win ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
+                            {a.outcomes.win ? "✓ right" : "✗ wrong"} @30m
+                          </span>
+                        )}
+                        {a.outcomes["30m"]?.prem != null && a.ce_ltp != null && (
+                          <span className="tag bg-panel2 text-muted">
+                            prem ₹{a.ce_ltp} → ₹{a.outcomes["30m"]!.prem}
+                          </span>
+                        )}
+                        <span className={`tag ${a.outcomes.broke ? "bg-bear/15 text-bear" : "bg-panel2 text-muted"}`}>
+                          {a.outcomes.broke ? "level broke" : "level held"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

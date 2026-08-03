@@ -117,6 +117,9 @@ async def level_alerts() -> dict:
         "spot": spot,
         "watched": lw.watched(spot),
         "alerts": lw.recent(),
+        # The scoreboard: every callout graded an hour after it fired —
+        # win = the quoted option moved the called direction by 30 minutes.
+        "grades": lw.summary(),
     }
 
 

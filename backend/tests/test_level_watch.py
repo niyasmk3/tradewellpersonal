@@ -59,7 +59,10 @@ class _State:
 
 
 def _svc(spot=24600.0, chain=None, **over):
-    svc = LevelWatchService(Settings(_env_file=None, **over), _State(spot, chain))
+    # alerts_path=None: a test instance must never read or WRITE the live
+    # callout ledger (the persistence upgrade made the default path live).
+    svc = LevelWatchService(Settings(_env_file=None, **over), _State(spot, chain),
+                            alerts_path=None)
     svc._levels_at = time.time() + 10**6      # ladder injected, never re-read
     svc.pushes = []
     svc._push = lambda title, body, cfg, **kw: svc.pushes.append((title, body, kw))
@@ -251,6 +254,92 @@ def test_recent_is_scoped_to_today():
     got = svc.recent()
     assert [a["title"] for a in got] == ["today"], got
     print("  TODAY  -> prior-session callouts never reach the chart")
+
+
+def test_callout_outcomes_graded_and_summarised():
+    """The scoreboard: a BUY callout followed for an hour — horizons filled,
+    break detection, and the 30m premium verdict; summary() aggregates it."""
+    chain = _Chain([_Row(24600, 100.0)])
+    chain.rows[0].ce_token = 901
+    svc = _svc(spot=24610.0, chain=chain)
+    svc._levels = [_level(24600.0)]
+    base = int(time.time()) - 5000          # backdated so 'today' scoping holds
+    svc.state.ticks = {901: {"last_price": 100.0, "ts": base}}
+    svc.check(now=base)                      # prime above
+    svc.state.spot = 24602.0                 # touch -> BUY callout
+    svc.check(now=base + 5)
+    assert len(svc.pushes) == 1
+    a = list(svc.alerts)[0]
+    assert a["token"] == 901 and a["ce_ltp"] == 100.0
+
+    # 16 minutes on: spot recovered, premium up — 15m horizon fills.
+    svc.state.spot = 24630.0
+    svc.state.ticks[901] = {"last_price": 112.0, "ts": base + 960}
+    svc.check(now=base + 5 + 960)
+    o = a["outcomes"]
+    assert o["15m"]["spot"] == 24630.0 and o["15m"]["prem"] == 112.0
+    assert not o["broke"] and o["win"] is None
+
+    # 31 minutes: the win verdict lands on the premium (112 > 100).
+    svc.check(now=base + 5 + 1860)
+    assert o["30m"]["prem"] == 112.0 and o["win"] is True
+    # 66 minutes: finalized; extremes recorded the round trip.
+    svc.state.spot = 24660.0
+    svc.check(now=base + 5 + 3960)
+    assert o["final"] is True and o["spot_max"] == 24660.0
+
+    s = svc.summary()
+    assert s["buy"]["n"] == 1 and s["buy"]["win_rate"] == 100.0
+    assert s["buy"]["held_rate"] == 100.0
+    assert s["buy"]["avg_prem_move_30m_pct"] == 12.0
+    print("  GRADE  -> horizons, break check, 30m verdict, scoreboard")
+
+
+def test_callout_break_marks_the_level_failed():
+    """Spot travelling 15+ pts through a BUY level = level broke; with no
+    premium tick at the 30m mark the verdict falls back to spot direction."""
+    svc = _svc(spot=24650.0, chain=None)      # no chain: strike-only callout
+    svc._levels = [_level(24600.0)]
+    base = int(time.time()) - 5000
+    svc.check(now=base)
+    svc.state.spot = 24602.0
+    svc.check(now=base + 5)
+    a = list(svc.alerts)[0]
+    assert a["ce_ltp"] is None
+    svc.state.spot = 24580.0                  # 20 pts through the level
+    svc.check(now=base + 400)
+    assert a["outcomes"]["broke"] is True
+    svc.check(now=base + 5 + 1860)            # 30m: spot below fire spot
+    assert a["outcomes"]["win"] is False, "spot fallback must grade the miss"
+    s = svc.summary()
+    assert s["buy"]["held_rate"] == 0.0 and s["buy"]["win_rate"] == 0.0
+    assert s["buy"]["avg_prem_move_30m_pct"] is None
+    print("  BREAK  -> failed levels and premium-less callouts grade honestly")
+
+
+def test_callout_history_persists_across_restart():
+    """Yesterday's lesson (the 14:21 callout vanished in a restart): alerts
+    and their grades round-trip through the store file."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "alerts.json"
+        svc = _svc(spot=24650.0)
+        svc._alerts_path = path
+        svc._levels = [_level(24600.0)]
+        base = int(time.time()) - 5000
+        svc.check(now=base)
+        svc.state.spot = 24602.0
+        svc.check(now=base + 5)
+        assert path.exists(), "fire must persist the ledger"
+
+        from app.patterns.level_watch import LevelWatchService
+
+        svc2 = LevelWatchService(svc.cfg, svc.state, alerts_path=path)
+        assert len(svc2.alerts) == 1
+        assert list(svc2.alerts)[0]["level"] == 24600.0
+    print("  STORE  -> callouts and grades survive a restart")
 
 
 def test_watched_is_near_spot_only():

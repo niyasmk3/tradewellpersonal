@@ -22,18 +22,35 @@ tape oscillating on a level cannot buzz the phone every five seconds.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from collections import deque
+from pathlib import Path
 
 log = logging.getLogger("tradewell.patterns")
+
+# Persisted callout history + outcomes: the 03-Aug 14:21 CEILING callout
+# vanished in a 15:31 restart because the ring buffer was memory-only — a
+# ledger that forgets its own calls cannot grade them.
+_ALERTS_PATH = Path(__file__).resolve().parents[2] / ".level_alerts.json"
+_KEEP_DAYS = 14
 
 # "Highest-frequency trends" filter: a level qualifies only with this many
 # DISTINCT touch-days and this hold rate — below either, it is a coin drawn
 # on a chart. Same floors the tendencies layer uses for its verdicts.
 MIN_DAYS_TOUCHED = 5
 MIN_HOLD_RATE = 0.60
+
+# Outcome grading (the "are the callouts making money?" ledger): each callout
+# is followed for an hour after it fires. A level "broke" when spot travelled
+# BREAK_TOL_PTS through it; the suggestion "won" when the quoted option moved
+# the called direction by the 30-minute mark (premium up after a BUY, down
+# after a CEILING — booking before a drop is the ceiling's whole claim).
+GRADE_HORIZONS_S = {"15m": 900, "30m": 1800, "60m": 3600}
+GRADE_FINAL_S = 3900
+BREAK_TOL_PTS = 15.0
 
 TOUCH_TOL_PCT = 0.0004        # ~10 points at NIFTY 24.6k: "touching"
 REARM_MULT = 3.0              # leave the band by 3x tol before re-arming...
@@ -81,7 +98,7 @@ class LevelWatchService:
     loop. Pushes go through notify.push_text on its own daemon thread.
     """
 
-    def __init__(self, cfg, state) -> None:
+    def __init__(self, cfg, state, alerts_path=_ALERTS_PATH) -> None:
         self.cfg = cfg
         self.state = state
         self._lock = threading.Lock()
@@ -90,11 +107,43 @@ class LevelWatchService:
         self._prev_spot: float | None = None
         self._armed: dict = {}          # level -> ready to fire
         self._last_fire: dict = {}      # level -> ts
-        self.alerts: deque = deque(maxlen=30)
+        self.alerts: deque = deque(maxlen=200)
+        self._alerts_path = alerts_path
+        self._dirty = False
+        # Constructed at FEED START (runtime), not import — loading history
+        # here keeps callouts and their grades across restarts (tests pass
+        # alerts_path=None for a memory-only instance).
+        self._load()
         # Injection point so tests capture pushes instead of spawning threads.
         from app.notify import push_text
 
         self._push = push_text
+
+    # ---- persistence ---------------------------------------------------------
+    def _load(self) -> None:
+        if self._alerts_path is None or not self._alerts_path.exists():
+            return
+        try:
+            cutoff = int(time.time()) - _KEEP_DAYS * 86400
+            rows = json.loads(self._alerts_path.read_text())
+            for a in rows:
+                if isinstance(a, dict) and (a.get("ts") or 0) >= cutoff:
+                    self.alerts.append(a)
+        except Exception:
+            log.warning("level watch: alert history unreadable", exc_info=True)
+
+    def _save(self) -> None:
+        if self._alerts_path is None:
+            return
+        try:
+            with self._lock:
+                rows = list(self.alerts)
+            tmp = self._alerts_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(rows))
+            tmp.replace(self._alerts_path)
+            self._dirty = False
+        except Exception:
+            log.warning("level watch: alert save failed", exc_info=True)
 
     # ---- ladder ------------------------------------------------------------
     def refresh_levels(self, now: float) -> None:
@@ -129,7 +178,8 @@ class LevelWatchService:
         cards priced at the previous day's close) applies to a callout's
         rupee figure too — no timestamped tick within QUOTE_MAX_AGE_S, no
         premium in the push (review catch)."""
-        out = {"strike": round(spot / 50) * 50, "expiry": None, "ce_ltp": None}
+        out = {"strike": round(spot / 50) * 50, "expiry": None, "ce_ltp": None,
+               "token": None}
         try:
             from app.kite.instruments import chain_key
             from app.signals.engine import premium_quote
@@ -140,6 +190,7 @@ class LevelWatchService:
             out["expiry"] = chain.expiry
             row = next((r for r in chain.rows if r.strike == out["strike"]), None)
             if row is not None and row.ce_ltp and row.ce_token:
+                out["token"] = int(row.ce_token)
                 px, age = premium_quote(getattr(self.state, "ticks", {}),
                                         row.ce_token, float(row.ce_ltp), now)
                 if age is not None and age <= QUOTE_MAX_AGE_S:
@@ -160,8 +211,13 @@ class LevelWatchService:
             spot = float(snap.ltp) if snap and snap.ltp else None
             if not spot:
                 return
+            # Grade open callouts on every pass, even when no level is near —
+            # the ledger's whole job is following through after the touch.
+            self._grade(now, spot)
             prev, self._prev_spot = self._prev_spot, spot
             if prev is None or not self._levels:
+                if self._dirty:
+                    self._save()
                 return
             tol = spot * TOUCH_TOL_PCT
             rearm = min(REARM_MULT * tol, REARM_CAP_PTS)
@@ -187,6 +243,8 @@ class LevelWatchService:
                 self._armed[key] = False
                 self._last_fire[key] = now
                 self._fire(side, lv, spot, now)
+            if self._dirty:
+                self._save()
         except Exception:  # the feed loop must never die for a callout
             log.debug("level watch check failed", exc_info=True)
 
@@ -221,13 +279,94 @@ class LevelWatchService:
             "level": level, "spot": round(spot, 2),
             "hold_rate": lv.get("hold_rate"), "days_touched": lv.get("days_touched"),
             "strike": quote["strike"], "expiry": quote["expiry"],
-            "ce_ltp": quote["ce_ltp"], "title": title,
+            "ce_ltp": quote["ce_ltp"], "token": quote.get("token"),
+            "title": title,
+            # Filled in by _grade over the next hour — the callout's own
+            # report card, persisted with it.
+            "outcomes": {"spot_max": round(spot, 2), "spot_min": round(spot, 2),
+                         "broke": False, "win": None, "final": False},
         }
         with self._lock:
             self.alerts.append(alert)
+        self._dirty = True
         log.info("level watch: %s", title)
         # Owner's topic only: level context describes YOUR positioning.
         self._push(title, body, self.cfg, audience="private")
+
+    # ---- outcome grading -----------------------------------------------------
+    def _grade(self, now: int, spot: float) -> None:
+        """Follow each open callout for an hour: spot extremes, whether the
+        level BROKE (spot travelled BREAK_TOL_PTS through it), the spot and
+        the quoted option's premium at 15/30/60 minutes, and the 30-minute
+        WIN verdict — premium up after a BUY, premium down after a CEILING
+        (the ceiling's claim is that booking there avoids a give-back).
+        Samples at the watch cadence; extremes persist on the next save."""
+        ticks = getattr(self.state, "ticks", {}) or {}
+        with self._lock:
+            open_alerts = [a for a in self.alerts
+                           if not (a.get("outcomes") or {}).get("final")
+                           and now - a["ts"] <= GRADE_FINAL_S + 600]
+        for a in open_alerts:
+            o = a.get("outcomes")
+            if o is None:
+                o = a["outcomes"] = {"spot_max": a["spot"], "spot_min": a["spot"],
+                                     "broke": False, "win": None, "final": False}
+            age = now - a["ts"]
+            o["spot_max"] = round(max(o["spot_max"], spot), 2)
+            o["spot_min"] = round(min(o["spot_min"], spot), 2)
+            if not o["broke"]:
+                broke = (spot < a["level"] - BREAK_TOL_PTS if a["side"] == "buy"
+                         else spot > a["level"] + BREAK_TOL_PTS)
+                if broke:
+                    o["broke"] = True
+                    self._dirty = True
+            prem = None
+            tok = a.get("token")
+            if tok is not None:
+                lp = (ticks.get(tok) or {}).get("last_price")
+                prem = float(lp) if lp else None
+            for label, secs in GRADE_HORIZONS_S.items():
+                if age >= secs and label not in o:
+                    o[label] = {"spot": round(spot, 2),
+                                "prem": round(prem, 2) if prem else None}
+                    self._dirty = True
+                    if label == "30m" and o.get("win") is None:
+                        base = a.get("ce_ltp")
+                        if prem is not None and base:
+                            o["win"] = prem > base if a["side"] == "buy" else prem < base
+                        else:
+                            o["win"] = (o[label]["spot"] > a["spot"]
+                                        if a["side"] == "buy"
+                                        else o[label]["spot"] < a["spot"])
+            if age >= GRADE_FINAL_S and not o["final"]:
+                o["final"] = True
+                self._dirty = True
+
+    def summary(self) -> dict:
+        """The scoreboard: are the callouts making money? Aggregated over the
+        persisted history (last 14 days), per side, graded rows only."""
+        with self._lock:
+            rows = [a for a in self.alerts if (a.get("outcomes") or {}).get("win") is not None]
+        out = {}
+        for side in ("buy", "sell"):
+            g = [a for a in rows if a["side"] == side]
+            if not g:
+                continue
+            n = len(g)
+            wins = sum(1 for a in g if a["outcomes"]["win"])
+            held = sum(1 for a in g if not a["outcomes"]["broke"])
+            pmoves = [ (a["outcomes"]["30m"]["prem"] - a["ce_ltp"]) / a["ce_ltp"] * 100
+                       for a in g
+                       if a.get("ce_ltp") and (a["outcomes"].get("30m") or {}).get("prem")]
+            out[side] = {
+                "n": n,
+                "win_rate": round(100 * wins / n, 1),
+                "held_rate": round(100 * held / n, 1),
+                "avg_prem_move_30m_pct": (round(sum(pmoves) / len(pmoves), 1)
+                                          if pmoves else None),
+                "n_prem_graded": len(pmoves),
+            }
+        return out
 
     def recent(self) -> list:
         """Today's callouts only (review catch): the ring buffer survives

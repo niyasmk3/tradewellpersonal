@@ -497,6 +497,12 @@ export interface PaperSummary {
       reason: string | null;
     }[];
   } | null;
+  /** Early-derisk lock scoreboard: what premiums did AFTER each breakeven
+      lock-out (same-session window) — crash avoided vs runner escaped. */
+  derisk_aftermath?: {
+    armed: number; locked_out: number; runner_escaped: number; crash_avoided: number;
+    noise: number; unobserved: number; forfeited: number; avoided: number; note: string;
+  } | null;
   rows: PaperRow[];
   slippage_pct: number;
   lots: number;
@@ -655,6 +661,20 @@ export interface PatternsLiveRead {
   note: string;
 }
 
+/** Outcome grade attached to a callout over the hour after it fired. */
+export interface LevelAlertOutcome {
+  spot_max: number;
+  spot_min: number;
+  /** Spot travelled ≥15 pts through the level — the level failed. */
+  broke: boolean;
+  /** 30-minute verdict: premium up after BUY / down after CEILING. Null until graded. */
+  win: boolean | null;
+  final: boolean;
+  "15m"?: { spot: number; prem: number | null };
+  "30m"?: { spot: number; prem: number | null };
+  "60m"?: { spot: number; prem: number | null };
+}
+
 /** A level-touch callout fired by the live watch (backend level_watch.py). */
 export interface LevelAlert {
   ts: number;
@@ -666,7 +686,9 @@ export interface LevelAlert {
   strike: number;
   expiry: string | null;
   ce_ltp: number | null;
+  token?: number | null;
   title: string;
+  outcomes?: LevelAlertOutcome;
 }
 
 export interface LevelAlertsResponse {
@@ -675,6 +697,12 @@ export interface LevelAlertsResponse {
   /** Strong levels currently on watch (index-space; add basis for futures charts). */
   watched: LevelRow[];
   alerts: LevelAlert[];
+  /** The scoreboard over the last 14 days of graded callouts, per side. */
+  grades?: Record<
+    "buy" | "sell",
+    { n: number; win_rate: number; held_rate: number;
+      avg_prem_move_30m_pct: number | null; n_prem_graded: number }
+  > | Record<string, never>;
 }
 
 export interface PatternsResults {
