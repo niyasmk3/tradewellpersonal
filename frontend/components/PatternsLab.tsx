@@ -8,8 +8,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CandleFrequency,
+  ConditionalCell,
+  ConditionalOutcome,
   DayOfWeekStats,
   LevelRow,
+  PatternsLiveRead,
   PatternsResults,
   TimeOfDaySlot,
   api,
@@ -24,6 +27,206 @@ const blueBg = (a: number) => `rgba(59,130,246,${a.toFixed(3)})`;
 
 function signCls(v: number, zero = 0) {
   return v > zero ? "text-bull" : v < zero ? "text-bear" : "text-muted";
+}
+
+// ---------------------------------------------------------------- live read
+
+function CellStat({ c }: { c: ConditionalCell | null | undefined }) {
+  if (!c) return <span className="text-muted">—</span>;
+  const pct = Math.round(c.hit_rate * 1000) / 10;
+  // Color ONLY what the backend's verdict calls a tendency (n≥30 outside the
+  // coin band). Recomputing the band here from hit_rate alone painted n=25
+  // flukes bright red/green — the exact overconfidence the layer exists to
+  // prevent (review catch: the honesty gate must survive rendering).
+  const tendency = c.verdict === "tendency";
+  return (
+    <span className="font-mono">
+      <span
+        className={!tendency ? "text-muted" : c.hit_rate > 0.55 ? "text-bull" : "text-bear"}
+        title={c.verdict === "sample too small" ? `n=${c.n} — too few to call a tendency` : undefined}
+      >
+        {pct}%
+      </span>
+      <span className="text-muted"> · {c.avg_bps > 0 ? "+" : ""}{c.avg_bps}bp · n={c.n}</span>
+    </span>
+  );
+}
+
+function LiveReadCard() {
+  const [read, setRead] = useState<PatternsLiveRead | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      setRead(await api.patternsLiveRead());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, 120_000); // a 5-min tape needs no hot poll
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  const vol = read?.volume;
+  return (
+    <section className="card p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Live read — today&apos;s tape vs 3y conditional frequencies
+        </h2>
+        {read?.last_bar && (
+          <span className="text-[10px] text-muted">
+            last closed bar {read.last_bar} · {read.bars_today} bars today
+          </span>
+        )}
+        <button
+          onClick={refresh}
+          disabled={busy}
+          className="ml-auto rounded bg-panel2 px-2 py-0.5 text-[10px] text-muted hover:text-white disabled:opacity-50"
+        >
+          {busy ? "Reading…" : "Refresh"}
+        </button>
+      </div>
+
+      {err && (
+        <p className="text-[11px] text-muted">
+          {err.includes("409")
+            ? "Stored results predate this layer — click Re-analyze (no re-sync needed)."
+            : err.includes("No results")
+              ? "No analysis yet — click Sync + Analyze first."
+              : err.includes("404")
+                ? "The backend hasn't loaded the live-read endpoint yet — it arrives with the next backend restart."
+                : err.includes("401")
+                  ? "Kite login required — authenticate on the dashboard first."
+                  : err}
+        </p>
+      )}
+
+      {read && !err && (
+        <>
+          {vol && (
+            <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+              <span>
+                <span className="text-muted">volume now </span>
+                <span className={`font-mono ${
+                  vol.current_regime === "high" ? "text-bull"
+                    : vol.current_regime === "low" ? "text-bear" : ""
+                }`}>{vol.current_regime ?? "n/a"}</span>
+              </span>
+              {vol.pace_vs_typical != null && (
+                <span>
+                  <span className="text-muted">day pace </span>
+                  <span className={`font-mono ${signCls(vol.pace_vs_typical - 1)}`}>
+                    {vol.pace_vs_typical}×
+                  </span>
+                  <span className="text-muted"> typical ({vol.pace_days}d)</span>
+                </span>
+              )}
+              {vol.trend && (
+                <span>
+                  <span className="text-muted">last {vol.trend_window_min}m </span>
+                  <span className="font-mono">{vol.trend}</span>
+                </span>
+              )}
+            </div>
+          )}
+          {read.patterns.length === 0 ? (
+            <p className="text-[11px] text-muted">
+              No directional candlestick pattern on the last 30 minutes of closed bars.
+            </p>
+          ) : (
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="text-left text-[10px] uppercase text-muted">
+                  <th className="py-1 pr-2">bar</th>
+                  <th className="py-1 pr-2">pattern</th>
+                  <th className="py-1 pr-2">vol</th>
+                  <th className="py-1 pr-2">history says (30m, matched vol)</th>
+                  <th className="py-1">unconditioned</th>
+                </tr>
+              </thead>
+              <tbody>
+                {read.patterns.map((p, i) => (
+                  <tr key={i} className="border-t border-edge/50">
+                    <td className="py-1 pr-2 font-mono text-muted">{p.bar}</td>
+                    <td className={`py-1 pr-2 ${p.direction === "bullish" ? "text-bull" : "text-bear"}`}>
+                      {p.pattern.replace(/_/g, " ")}
+                    </td>
+                    <td className="py-1 pr-2 font-mono text-muted">{p.volume_regime ?? "—"}</td>
+                    <td className="py-1 pr-2">
+                      <CellStat c={p.historical_30m} />
+                      {!p.conditioned && <span className="text-[9px] text-muted"> (no vol match)</span>}
+                    </td>
+                    <td className="py-1"><CellStat c={p.historical_30m_all} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="mt-2 text-[10px] leading-relaxed text-muted">{read.note} Hit rate
+            is in the pattern&apos;s textbook direction — below 45% means the tape
+            historically went the OTHER way.</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ------------------------------------------------- volume-conditioned table
+
+function ConditionalTable({ table }: { table: Record<string, ConditionalOutcome> }) {
+  const rows = Object.entries(table);
+  if (rows.length === 0) return <p className="text-[11px] text-muted">No data.</p>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-[11px]">
+        <thead>
+          <tr className="text-left text-[10px] uppercase text-muted">
+            <th className="py-1 pr-2">pattern</th>
+            <th className="py-1 pr-2">n</th>
+            <th className="py-1 pr-2">30m all</th>
+            <th className="py-1 pr-2">high vol</th>
+            <th className="py-1 pr-2">low vol</th>
+            <th className="py-1">Δ hi−lo</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([name, p]) => {
+            const h = p.horizons["30m"];
+            if (!h) return null;
+            return (
+              <tr key={name} className="border-t border-edge/50">
+                <td className={`py-1 pr-2 ${p.direction === "bullish" ? "text-bull" : "text-bear"}`}>
+                  {name.replace(/_/g, " ")}
+                </td>
+                <td className="py-1 pr-2 font-mono text-muted">{p.n_total}</td>
+                <td className="py-1 pr-2"><CellStat c={h.all} /></td>
+                <td className="py-1 pr-2"><CellStat c={h.by_volume?.high} /></td>
+                <td className="py-1 pr-2"><CellStat c={h.by_volume?.low} /></td>
+                <td className="py-1 font-mono">
+                  {h.volume_effect_pp != null ? (
+                    <span className={signCls(h.volume_effect_pp)}>
+                      {h.volume_effect_pp > 0 ? "+" : ""}{h.volume_effect_pp}pp
+                    </span>
+                  ) : (
+                    <span className="text-muted">—</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- weekday cards
@@ -405,6 +608,9 @@ export function PatternsLab() {
 
       {results && (
         <>
+          {/* today's tape vs the conditional table */}
+          <LiveReadCard />
+
           {/* day-of-week */}
           <section>
             <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted">
@@ -481,6 +687,25 @@ export function PatternsLab() {
               </p>
             </section>
           </div>
+
+          {/* volume-conditioned pattern outcomes */}
+          {results.conditional_outcomes && (
+            <section className="card p-3">
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Volume-conditioned outcomes — does participation change the odds?
+              </h2>
+              <ConditionalTable table={results.conditional_outcomes} />
+              <p className="mt-2 text-[10px] leading-relaxed text-muted">
+                Hit rate in the pattern&apos;s textbook direction over the next 30 minutes;
+                green/red only where n≥30 AND outside the 45–55% coin band — muted cells
+                are coins or samples too small to call. A colored cell below 45% = the
+                pattern historically resolved AGAINST its textbook read. Volume
+                buckets: bar&apos;s NIFTYBEES proxy vs its rolling 20-bar median (≥1.5× high,
+                ≤0.7× low). Moves are basis points of the index — a few bp does not pay
+                option costs; this is context, not a trigger.
+              </p>
+            </section>
+          )}
 
           <footer className="card px-4 py-3 text-[10px] leading-relaxed text-muted">
             {results.disclaimer} Generated {results.generated_at?.slice(0, 16).replace("T", " ")} UTC.

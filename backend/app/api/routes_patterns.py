@@ -65,6 +65,37 @@ async def results() -> dict:
     return data
 
 
+@router.get("/live-read")
+async def live_read() -> dict:
+    """Today's tape against the 3-year conditional frequencies: patterns on
+    the last 30 minutes of closed 5-min bars (each joined to its
+    volume-conditioned historical cell) plus the day's volume pace. Reads the
+    stored analysis — POST /patterns/analyze after a sync to (re)build it.
+    """
+    if not kite_service.is_authenticated:
+        raise HTTPException(status_code=401, detail="Kite login required")
+    data = store.load_results()
+    if data is None:
+        raise HTTPException(status_code=404, detail="No results yet — POST /patterns/analyze")
+    if "conditional_outcomes" not in data:
+        raise HTTPException(
+            status_code=409,
+            detail="Results predate the tendencies layer — POST /patterns/analyze to rebuild")
+
+    from app.patterns.tendencies import assemble_live_read, fetch_today
+
+    def _read() -> dict:
+        today = fetch_today(kite_service.kite)
+        tail = store.load_tail(60)
+        return assemble_live_read(today, tail, data)
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as exc:  # pragma: no cover - Kite/network
+        log.exception("Patterns live read failed")
+        raise HTTPException(status_code=500, detail=f"Live read error: {exc}")
+
+
 @router.get("/levels")
 async def levels(
     near: float = Query(default=0, description="Filter to levels near this price (0 = current close)"),

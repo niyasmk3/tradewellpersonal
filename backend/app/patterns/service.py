@@ -7,6 +7,7 @@ from app.patterns import store
 from app.patterns.analysis import build_daily, day_of_week_stats, pattern_frequency, time_of_day_profile
 from app.patterns.data import sync
 from app.patterns.levels import find_levels
+from app.patterns.tendencies import conditional_outcomes, exclude_current_day, volume_pace_curve
 
 log = logging.getLogger("tradewell.patterns")
 
@@ -51,6 +52,14 @@ def run_analysis() -> dict:
         "day_of_week": day_of_week_stats(daily),
         "time_of_day": time_of_day_profile(df),
         "candlestick_frequency": pattern_frequency(df),
+        # Volume-conditioned pattern outcomes (15/30/60m) + the typical
+        # cumulative-volume curve — the dataset the /patterns/live-read
+        # endpoint joins today's tape against. The CURRENT day is excluded
+        # (review catch): a mid-session re-analyze must not grade this
+        # morning's patterns and then serve them back as independent
+        # history this afternoon.
+        "conditional_outcomes": conditional_outcomes(exclude_current_day(df)),
+        "volume_pace": volume_pace_curve(exclude_current_day(df)),
         "levels": find_levels(df),
     }
     store.save_results(results)

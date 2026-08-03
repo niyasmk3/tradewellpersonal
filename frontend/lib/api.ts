@@ -589,6 +589,55 @@ export interface LevelRow {
   last_touch: string;
 }
 
+/** One historical outcome cell: n, hit rate in the pattern's direction, move size. */
+export interface ConditionalCell {
+  n: number;
+  hit_rate: number;
+  avg_bps: number;
+  median_bps: number;
+  /** "tendency" (n≥30 outside 45–55%), "coin", or "sample too small". */
+  verdict?: string;
+}
+
+export interface ConditionalHorizon {
+  all: ConditionalCell;
+  by_volume?: { high?: ConditionalCell; normal?: ConditionalCell; low?: ConditionalCell };
+  /** High-volume hit minus low-volume hit, percentage points (both n≥30 only). */
+  volume_effect_pp?: number;
+}
+
+export interface ConditionalOutcome {
+  direction: "bullish" | "bearish";
+  n_total: number;
+  horizons: Record<string, ConditionalHorizon>; // "15m" | "30m" | "60m"
+}
+
+/** Today's tape joined to the 3y conditional table — frequencies, not forecasts. */
+export interface PatternsLiveRead {
+  bars_today: number;
+  last_bar?: string;
+  last_close?: number;
+  patterns: {
+    bar: string;
+    pattern: string;
+    direction: "bullish" | "bearish";
+    volume_regime: "high" | "normal" | "low" | null;
+    historical_30m: ConditionalCell | null;
+    historical_30m_all: ConditionalCell | null;
+    conditioned: boolean;
+    horizons: Record<string, ConditionalCell> | null;
+  }[];
+  volume: {
+    current_regime: "high" | "normal" | "low" | null;
+    pace_vs_typical: number | null;
+    pace_days: number | null;
+    trend: "rising" | "falling" | "flat" | null;
+    /** Actual window the trend compares (shrinks early in the session). */
+    trend_window_min: number | null;
+  } | null;
+  note: string;
+}
+
 export interface PatternsResults {
   disclaimer: string;
   generated_at: string;
@@ -604,6 +653,10 @@ export interface PatternsResults {
   day_of_week: Record<string, DayOfWeekStats>;
   time_of_day: Record<string, TimeOfDaySlot[]>;
   candlestick_frequency: Record<string, CandleFrequency>;
+  /** Volume-conditioned pattern outcomes (15/30/60m) — absent until the first
+      re-analyze after the tendencies layer shipped. */
+  conditional_outcomes?: Record<string, ConditionalOutcome>;
+  volume_pace?: { days: number; cum_median: number[] };
   levels: {
     method: string;
     pivot_count: number;
@@ -617,7 +670,15 @@ export interface PatternsResults {
 
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${path}`);
+  if (!res.ok) {
+    // Keep the "<status> <statusText>" prefix — several callers branch on it —
+    // but carry the backend's detail so error copy can be precise (review
+    // catch: a 409 "re-analyze" and a 404 "no results" read identically
+    // without it), and the typed status rides on ApiError.
+    const body = await res.json().catch(() => ({}));
+    const detail = typeof body?.detail === "string" ? `: ${body.detail}` : "";
+    throw new ApiError(`${res.status} ${res.statusText} — ${path}${detail}`, res.status);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -734,4 +795,5 @@ export const api = {
   patternsResults: () => getJSON<PatternsResults>("/patterns/results"),
   patternsSync: (years = 3) => postJSON<{ total_bars: number }>(`/patterns/sync?years=${years}`, {}),
   patternsAnalyze: () => postJSON<PatternsResults>("/patterns/analyze", {}),
+  patternsLiveRead: () => getJSON<PatternsLiveRead>("/patterns/live-read"),
 };

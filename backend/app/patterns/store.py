@@ -90,6 +90,18 @@ def load_frame() -> pd.DataFrame:
     return df
 
 
+def load_tail(n: int) -> pd.DataFrame:
+    """The last `n` candles, ascending — for callers that only need detector
+    warm-up context. Pulling the full multi-year table to keep 60 rows made
+    every live-read poll pay for the whole history (review catch)."""
+    with _connect() as conn:
+        df = pd.read_sql_query(
+            "SELECT ts, open, high, low, close, vol_proxy FROM candles "
+            "ORDER BY ts DESC LIMIT ?", conn, params=(int(n),)
+        )
+    return df.iloc[::-1].reset_index(drop=True)
+
+
 def set_meta(key: str, value: str) -> None:
     with _connect() as conn:
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
