@@ -174,6 +174,27 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* The +5% early-derisk lock's scoreboard: after each breakeven
+          lock-out, did the premium crash (lock saved us) or run (lock cost
+          us)? Same-session window — a floor on both sides, not the full
+          counterfactual. */}
+      {data.derisk_aftermath && (
+        <div className="mt-2 rounded bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300">
+          Early-derisk lock: fired on {data.derisk_aftermath.armed}, ended{" "}
+          {data.derisk_aftermath.locked_out} at breakeven — then{" "}
+          {data.derisk_aftermath.crash_avoided} crashed (saved ₹
+          {signed(data.derisk_aftermath.avoided, 0)}) vs {data.derisk_aftermath.runner_escaped}{" "}
+          ran on (forfeited ₹{signed(data.derisk_aftermath.forfeited, 0)})
+          {data.derisk_aftermath.noise ? `, ${data.derisk_aftermath.noise} drifted` : ""}
+          {data.derisk_aftermath.unobserved ? `, ${data.derisk_aftermath.unobserved} unobserved` : ""}.{" "}
+          {data.derisk_aftermath.locked_out < 10
+            ? "Early days — read at 10+ lock-outs."
+            : data.derisk_aftermath.avoided >= data.derisk_aftermath.forfeited
+              ? "The lock is earning its keep."
+              : "The lock is costing more than it saves — consider raising EARLY_DERISK_MFE_PCT."}
+        </div>
+      )}
+
       {/* Exit-policy A/B: the same recorded fills replayed under "bank the
           whole 1-lot position at the quick target" vs the live ratchet. */}
       {data.exit_ab && (

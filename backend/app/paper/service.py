@@ -348,6 +348,12 @@ class PaperTradingService:
             current = None
             if trade.token is not None:
                 current = self.state.ticks.get(trade.token, {}).get("last_price")
+            # Same-day closed rows keep being OBSERVED (post_close_* extremes):
+            # the early-derisk aftermath ledger scores each breakeven lock-out
+            # by what the premium did next, which is unknowable without this.
+            if trade.status.value not in ("entered", "partial"):
+                monitor.track_reversible(trade, current)
+                return
             snap = self.state.underlying_snapshot(trade.symbol)
             spot = snap.ltp if snap else None
             # A scalp thesis is stale in minutes, not three-quarters of an hour.
@@ -356,7 +362,7 @@ class PaperTradingService:
                              stall_minutes=sm,
                              early_derisk_pct=self.cfg.early_derisk_mfe_pct)
 
-        self.store.apply_monitor(updater)
+        self.store.apply_monitor(updater, include_reversible=True)
 
         # Book half at the early target before considering exits. Without this
         # the simulator would record the stop-to-entry benefit but never the
@@ -673,6 +679,52 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         })
     evening_rows = [r for r in on_rows if r["evening"]]
 
+    # ---- EARLY-DERISK AFTERMATH: is the +5% lock earning its keep? ----------
+    # The lock went live 3-Aug without a paired A/B (its clean counterfactual
+    # became unobservable the moment it started ending trades at entry). This
+    # is the honest substitute: every trade the lock ENDED at ~breakeven keeps
+    # being observed through the same-day post-close window, and what the
+    # premium did next scores the lock — fell to where the old stop lived
+    # (crash avoided: the lock saved that loss) vs ran to the quick target
+    # (runner escaped: the lock forfeited that gain). Window-bounded (rest of
+    # the session) and same-day only — stated, not hidden.
+    derisked = [t for t in closed
+                if t.entered_at >= HONEST_FILLS_FROM and shadow_class(t) is None
+                and t.mode.value in ("intraday", "scalp")
+                and any(e.kind == "early_derisk" for e in t.events)]
+    locked_out = [t for t in derisked
+                  if t.auto_close_reason == "stop" and t.entry_premium
+                  and abs(t.exit_premium - t.entry_premium) <= t.entry_premium * 0.015]
+    esc, avoided, noise, unobserved = [], [], [], []
+    forfeited_val = avoided_val = 0.0
+    for t in locked_out:
+        qty = t.initial_quantity or t.quantity
+        up, dn = t.post_close_mfe, t.post_close_mae
+        if up is None and dn is None:
+            unobserved.append(t)             # closed too near the bell to observe
+            continue
+        ran_to = t.quick_target or t.entry_premium * 1.12
+        if up is not None and up >= ran_to:
+            esc.append(t)
+            forfeited_val += (up - t.exit_premium) * qty
+        elif dn is not None and dn <= t.entry_premium * 0.92:
+            avoided.append(t)
+            avoided_val += (t.exit_premium - dn) * qty
+        else:
+            noise.append(t)
+    derisk_aftermath = {
+        "armed": len(derisked),              # lock fired at least once
+        "locked_out": len(locked_out),       # ended at ~breakeven by the lock
+        "runner_escaped": len(esc),
+        "crash_avoided": len(avoided),
+        "noise": len(noise),
+        "unobserved": len(unobserved),
+        "forfeited": round(forfeited_val, 2),   # upside seen AFTER lock-outs
+        "avoided": round(avoided_val, 2),       # downside dodged by lock-outs
+        "note": ("Same-session observation window only — the score is a floor "
+                 "on both sides, not the full counterfactual."),
+    } if derisked else None
+
     return {
         "trades": len(rows),
         "open": len(open_clean),
@@ -791,6 +843,9 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "evening": _on_stats(evening_rows) if evening_rows else None,
             "rows": on_rows,
         } if on_rows else None,
+        # THE EARLY-DERISK AFTERMATH (see the block above): what premiums did
+        # AFTER the +5% lock ended a trade at breakeven — the lock's scoreboard.
+        "derisk_aftermath": derisk_aftermath,
         # Shadow and inflated rows LAST, visibly flagged — context, not evidence.
         "rows": rows + hollow_rows + late_rows + refire_rows + setup_rows + stopb_rows + inflated,
     }
