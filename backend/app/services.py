@@ -422,11 +422,21 @@ class FeedController:
         while True:
             try:
                 if self.paper is not None:
-                    from app.signals.store import hollow_store, signal_store
+                    from app.signals.store import (
+                        hollow_store,
+                        late_shadow_store,
+                        refire_shadow_store,
+                        signal_store,
+                    )
                     self.paper.scan(signal_store)
-                    # The shadow store: cards the participation floor vetoed.
-                    # Paper fills them tagged, so the floor stays auditable.
+                    # The shadow stores: cards a measured-hypothesis gate
+                    # vetoed (participation floor / late cutoff / re-fire
+                    # guard), ONE STORE PER CLASS so no hypothesis's card can
+                    # squat another's slot. Paper fills them tagged, so each
+                    # gate stays auditable in its own ledger.
                     self.paper.scan(hollow_store)
+                    self.paper.scan(late_shadow_store)
+                    self.paper.scan(refire_shadow_store)
                     self.paper.run_once()
             except Exception as exc:  # pragma: no cover
                 log.warning("paper loop error: %s", exc)

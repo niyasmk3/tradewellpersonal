@@ -158,6 +158,22 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* The re-fire guard's scoreboard: what the cards it refused would have
+          made. Born from n=2 losing re-fires; blocked a winner 03-Aug. */}
+      {data.refire_shadow && (
+        <div className="mt-2 rounded bg-rose-500/10 px-2 py-1 text-[10px] text-rose-300">
+          Re-fire-guard counterfactual: {data.refire_shadow.trades} closed
+          {data.refire_shadow.open ? ` (+${data.refire_shadow.open} open)` : ""}, net ₹
+          {signed(data.refire_shadow.net_pnl, 0)} (₹{signed(data.refire_shadow.expectancy, 0)}/trade,{" "}
+          {data.refire_shadow.win_rate}% wins).{" "}
+          {data.refire_shadow.trades < 30
+            ? `Verdict at 30+ fills — ${30 - data.refire_shadow.trades} to go.`
+            : data.refire_shadow.expectancy > 0
+              ? "Positive at sample size: the guard is costing money — shorten or retire it."
+              : "Negative at sample size: the guard is earning its keep."}
+        </div>
+      )}
+
       {/* Exit-policy A/B: the same recorded fills replayed under "bank the
           whole 1-lot position at the quick target" vs the live ratchet. */}
       {data.exit_ab && (
@@ -206,19 +222,29 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                     className={`tag text-[9px] ${
                       r.shadow_class === "late"
                         ? "bg-orange-500/15 text-orange-300"
-                        : r.shadow_class === "stopb"
-                          ? "bg-teal-500/15 text-teal-300"
-                          : "bg-purple-500/15 text-purple-300"
+                        : r.shadow_class === "refire"
+                          ? "bg-rose-500/15 text-rose-300"
+                          : r.shadow_class === "stopb"
+                            ? "bg-teal-500/15 text-teal-300"
+                            : "bg-purple-500/15 text-purple-300"
                     }`}
                     title={
                       r.shadow_class === "late"
                         ? "Counterfactual: this card was vetoed by the 14:15 entry cutoff — paper takes it anyway so the cutoff hypothesis stays auditable. Not counted in any aggregate above."
-                        : r.shadow_class === "stopb"
-                          ? "Stop-basis A/B twin: the same fill run under the OTHER stop basis. Graded only against its paired clean row — not counted in any aggregate above."
-                          : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
+                        : r.shadow_class === "refire"
+                          ? "Counterfactual: this card was vetoed by the re-fire guard (same thesis stopped/invalidated within 2h) — paper takes it anyway so the guard stays auditable. Not counted in any aggregate above."
+                          : r.shadow_class === "stopb"
+                            ? "Stop-basis A/B twin: the same fill run under the OTHER stop basis. Graded only against its paired clean row — not counted in any aggregate above."
+                            : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
                     }
                   >
-                    {r.shadow_class === "late" ? "late" : r.shadow_class === "stopb" ? "stop A/B" : "hollow"}
+                    {r.shadow_class === "late"
+                      ? "late"
+                      : r.shadow_class === "refire"
+                        ? "refire"
+                        : r.shadow_class === "stopb"
+                          ? "stop A/B"
+                          : "hollow"}
                   </span>
                 )}
                 {r.era?.startsWith("inflated") && (

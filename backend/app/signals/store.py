@@ -386,10 +386,34 @@ signal_store = SignalStore(store_path=_STORE_PATH)
 from app.signals.archive import signal_archive as _signal_archive  # noqa: E402
 signal_store.archive = _signal_archive
 
-# SHADOW STORE for hollow cards — setups the volume/OI participation floor
-# vetoed from the live feed. They get the same stabilisation (one active per
-# slot, throttle, day-scoped persistence) so the paper book can fill them as
-# tagged counterfactuals, but they are never served to the dashboard, never
-# pushed, and never enterable. Its slot counters are its own: a hollow card
-# must not consume the real feed's daily quota, and vice versa.
+# SHADOW STORES for vetoed cards — setups a measured-hypothesis gate withheld
+# from the live feed. They get the same stabilisation (one active per slot,
+# throttle, day-scoped persistence) so the paper book can fill them as tagged
+# counterfactuals, but they are never served to the dashboard, never pushed,
+# and never enterable. Slot counters are their own: a shadow card must not
+# consume the real feed's daily quota, and vice versa.
+#
+# ONE STORE PER HYPOTHESIS CLASS (review catch, 03-Aug): a SignalStore holds
+# one active card per symbol+mode, and with every class sharing a single
+# store, a squatting floor shadow silently DROPPED refire/late candidates —
+# same-direction candidates never displace an incumbent, so whichever class
+# adopted first throttled the other ledgers' 30-fill verdicts with no record
+# anywhere. The class identity itself rides each card's hollow_reason, so
+# consumers (paper tags, shadow_class) are unaffected by which file a card
+# came from.
 hollow_store = SignalStore(store_path=_STORE_PATH.with_name(".hollow_signals.json"))
+late_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".late_signals.json"))
+refire_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".refire_signals.json"))
+
+
+def shadow_store_for(tag: str) -> SignalStore:
+    """Route a shadow candidate to its hypothesis class's own store.
+
+    `tag` is the shadow_tag the veto resolution produced: "late: ...",
+    "refire: ...", or the participation-floor reason verbatim (no prefix).
+    """
+    if tag.startswith("late:"):
+        return late_shadow_store
+    if tag.startswith("refire:"):
+        return refire_shadow_store
+    return hollow_store

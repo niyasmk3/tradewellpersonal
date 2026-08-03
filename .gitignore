@@ -21,6 +21,8 @@ venv/
 .signals.backup-*.json
 .signals_archive.jsonl
 .hollow_signals.json
+.late_signals.json
+.refire_signals.json
 .eval_trace.jsonl
 .news_seen.json
 .instruments_cache.json

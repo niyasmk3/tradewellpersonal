@@ -25,7 +25,7 @@ from app.signals import calibration
 from app.signals.eval_trace import eval_trace
 from app.signals.score_history import score_history
 from app.signals.sizing import apply_fund_sizing
-from app.signals.store import SignalStore, ThrottleConfig, hollow_store
+from app.signals.store import SignalStore, ThrottleConfig, shadow_store_for
 from app.signals.risk_limits import risk_limit_store
 from app.state import MarketState
 from app.trades.store import trade_store
@@ -386,6 +386,49 @@ class SignalService:
             log.debug("hollow veto failed", exc_info=True)
         return None
 
+    def _hypothesis_veto(self, fresh: SignalResponse, now: int) -> tuple:
+        """Resolve the three MEASURED-HYPOTHESIS vetoes — participation floor,
+        re-fire guard, late cutoff — into (veto_text, shadow_tag).
+
+        Each of these gates is a live bet that refusing the card is the right
+        call, and each keeps its own counterfactual ledger (floor / refire /
+        late shadow classes) so the paper book can rule at 30+ fills. ALL
+        THREE are computed every time (review finding, P0-2): a card failing
+        two gates at once is confounded evidence for both hypotheses — it is
+        vetoed (reason precedence: floor is the most fundamental refusal,
+        then the re-fire guard, then the cutoff) and shadow-booked to
+        NEITHER ledger.
+
+        The re-fire guard joined this group on 03-Aug: it blocked a 24550 CE
+        re-entry at 10:57 that ran +6-9% unmeasured — the 28-Jul evidence
+        that created the guard (two re-fires, both lost) is n=2, today's
+        counter-example is n=1, and neither decides a knob. Its blocks now
+        leave a graded shadow instead of a vanished WAIT.
+        """
+        floor = self._hollow_veto(fresh.signal)
+        refire = self._refire_veto(fresh.signal, now)
+        late = self._late_cutoff_veto(fresh, now)
+        hits = [h for h in (floor, refire, late) if h]
+        if not hits:
+            return None, None
+        if len(hits) > 1:
+            lead = hits[0]
+            extras = []
+            if floor and refire:
+                extras.append("under the re-fire guard")
+            if late and lead is not late:
+                extras.append("past the entry cutoff")
+            return lead + " (also " + " and ".join(extras) + ")", None
+        if floor:
+            return floor, floor
+        if refire:
+            return refire, "refire: " + refire
+        # Late alone: shadow-book only until 15:10 — after that there is
+        # genuinely no runway left to measure the counterfactual.
+        if ((now + 19800) % 86400) // 60 <= 15 * 60 + 10:
+            return late, "late: " + late
+        return late, None
+
     def _leadership_note(self, symbol: str) -> str | None:
         """BANKNIFTY-vs-NIFTY relative strength, as a displayed note only."""
         if symbol.upper() != "NIFTY":
@@ -486,37 +529,27 @@ class SignalService:
         # stays live, only the offer is withheld.
         veto = shadow_tag = None
         if fresh.signal is not None:
+            # Integrity vetoes first — session frame, volume-data health and
+            # scalp friction are "this card is not viable" refusals, with no
+            # hypothesis to measure. The re-fire guard deliberately moved OUT
+            # of this group (03-Aug: it blocked a 24550 CE re-entry that ran
+            # on without us) and into the measured-hypothesis resolution
+            # below, where its blocks get shadow-booked and graded.
             veto = (self._context_veto(fresh, df, now)
-                    or self._refire_veto(fresh.signal, now)
                     or self._scalp_friction_veto(fresh.signal))
             if veto is None:
-                # BOTH hypothesis vetoes are computed so each ledger stays
-                # pure (review finding): a sub-floor card arriving after 14:15
-                # is confounded by BOTH conditions — booked to whichever
-                # single ledger, it would poison that hypothesis's verdict.
-                # So: both fail -> vetoed (floor reason leads, the more
-                # fundamental refusal) and shadow-booked to NEITHER.
-                late = self._late_cutoff_veto(fresh, now)
-                floor = self._hollow_veto(fresh.signal)
-                if late and floor:
-                    veto = floor + " (also past the entry cutoff)"
-                elif late:
-                    veto = late
-                    # Shadow-book the late would-be card until 15:10 (after
-                    # that there is genuinely no runway to measure). Tag class
-                    # "late:" keeps it OUT of the floor's verdict block.
-                    if ((now + 19800) % 86400) // 60 <= 15 * 60 + 10:
-                        shadow_tag = "late: " + veto
-                elif floor:
-                    veto = floor
-                    shadow_tag = floor
+                veto, shadow_tag = self._hypothesis_veto(fresh, now)
             if shadow_tag:
                 try:
                     shadow = fresh.model_copy(deep=True)
                     shadow.signal.hollow_reason = shadow_tag
-                    # Same cadence throttle so the shadow slot stabilises
-                    # one card per window, just like the live feed.
-                    hollow_store.reconcile(shadow, now, self._throttle())
+                    # Same cadence throttle so the shadow slot stabilises one
+                    # card per window, just like the live feed. Routed to the
+                    # CLASS's own store (review catch): with one shared slot a
+                    # squatting floor shadow silently dropped refire/late
+                    # candidates and throttled their 30-fill verdicts.
+                    shadow_store_for(shadow_tag).reconcile(
+                        shadow, now, self._throttle())
                 except Exception:
                     log.debug("shadow reconcile failed", exc_info=True)
             if veto:
@@ -568,7 +601,9 @@ class SignalService:
                 "action": fresh.action.value,
                 "reason": fresh.no_trade_reason,
                 "veto": veto,
-                "shadow": (("late" if shadow_tag.startswith("late:") else "floor")
+                "shadow": (("late" if shadow_tag.startswith("late:")
+                            else "refire" if shadow_tag.startswith("refire:")
+                            else "floor")
                            if shadow_tag else None),
                 "card": fresh.signal.id if fresh.signal else None,
                 # ...and what the slot is actually SERVING after the cadence

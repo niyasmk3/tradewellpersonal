@@ -68,8 +68,9 @@ def is_hollow_row(t) -> bool:
 
 def shadow_class(x) -> str | None:
     """Which counterfactual ledger a row/card belongs to: "late" (14:15-cutoff
-    hypothesis), "floor" (participation-floor hypothesis), "stopb" (the
-    stop-basis A/B twin, audit P1-5), or None (clean).
+    hypothesis), "refire" (re-fire-guard hypothesis, 03-Aug), "floor"
+    (participation-floor hypothesis), "stopb" (the stop-basis A/B twin,
+    audit P1-5), or None (clean).
 
     Works on a Trade (notes tag) or a SignalCard (hollow_reason). The classes
     must stay independent EVERYWHERE — including the paper capacity buckets:
@@ -82,6 +83,8 @@ def shadow_class(x) -> str | None:
     if notes and notes.startswith("hollow:"):
         if notes.startswith("hollow: late:"):
             return "late"
+        if notes.startswith("hollow: refire:"):
+            return "refire"
         if notes.startswith("hollow: stopb:"):
             return "stopb"
         return "floor"
@@ -89,6 +92,8 @@ def shadow_class(x) -> str | None:
     if reason:
         if reason.startswith("late:"):
             return "late"
+        if reason.startswith("refire:"):
+            return "refire"
         if reason.startswith("stopb:"):
             return "stopb"
         return "floor"
@@ -404,6 +409,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     inflated = []
     hollow_rows = []
     late_rows = []
+    refire_rows = []
     stopb_rows = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
@@ -411,11 +417,12 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         deployed = t.entry_premium * qty
         honest = t.entered_at >= HONEST_FILLS_FROM
         hollow = is_hollow_row(t)
-        # Three shadow ledgers, one tag channel: "hollow: late: ..." rows test
-        # the 14:15 cutoff hypothesis, "hollow: stopb: ..." rows are the
-        # stop-basis A/B twins (paired below, never aggregated alone), plain
-        # "hollow: ..." rows test the volume/OI participation floor. Each
-        # verdict block must stay pure.
+        # Four shadow ledgers, one tag channel: "hollow: late: ..." rows test
+        # the 14:15 cutoff hypothesis, "hollow: refire: ..." rows test the
+        # re-fire guard, "hollow: stopb: ..." rows are the stop-basis A/B
+        # twins (paired below, never aggregated alone), plain "hollow: ..."
+        # rows test the volume/OI participation floor. Each verdict block
+        # must stay pure.
         cls = shadow_class(t)
         row = {
             "id": t.id, "contract": t.contract, "direction": t.direction.value,
@@ -435,6 +442,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         # class (its own verdict block below), and pre-honest-era history
         # (flagged, counted nowhere).
         (late_rows if (honest and cls == "late")
+         else refire_rows if (honest and cls == "refire")
          else stopb_rows if (honest and cls == "stopb")
          else hollow_rows if (honest and hollow)
          else rows if honest else inflated).append(row)
@@ -448,6 +456,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     open_all = [t for t in store.all()
                 if t.status in (TradeStatus.ENTERED, TradeStatus.PARTIAL)]
     open_late = [t for t in open_all if shadow_class(t) == "late"]
+    open_refire = [t for t in open_all if shadow_class(t) == "refire"]
     open_hollow = [t for t in open_all if shadow_class(t) == "floor"]
     open_clean = [t for t in open_all if shadow_class(t) is None]
 
@@ -710,6 +719,21 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "win_rate": (round(100 * sum(1 for r in late_rows if r["net_pnl"] > 0)
                                / len(late_rows), 1) if late_rows else 0.0),
         } if (late_rows or open_late) else None,
+        # THE RE-FIRE GUARD'S OWN VERDICT (03-Aug): fills of cards the guard
+        # refused because the same thesis stopped/invalidated within the 2h
+        # window. Born from n=2 losing re-fires (28-Jul); first known blocked
+        # winner 03-Aug (24550 CE, +6-9% unmeasured). Negative expectancy at
+        # 30+ fills = the guard earns its keep; positive = shorten or retire
+        # SIGNAL_REFIRE_GUARD_S — this ledger decides, not anecdotes.
+        "refire_shadow": {
+            "trades": len(refire_rows),
+            "open": len(open_refire),
+            "net_pnl": round(sum(r["net_pnl"] for r in refire_rows), 2),
+            "expectancy": (round(sum(r["net_pnl"] for r in refire_rows) / len(refire_rows), 2)
+                           if refire_rows else 0.0),
+            "win_rate": (round(100 * sum(1 for r in refire_rows if r["net_pnl"] > 0)
+                               / len(refire_rows), 1) if refire_rows else 0.0),
+        } if (refire_rows or open_refire) else None,
         # THE EXIT-POLICY A/B (see the block above): same trades, two exits.
         "exit_ab": exit_ab,
         # THE STOP-BASIS A/B (audit P1-5, see the block above): same trades,
@@ -726,5 +750,5 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "rows": on_rows,
         } if on_rows else None,
         # Shadow and inflated rows LAST, visibly flagged — context, not evidence.
-        "rows": rows + hollow_rows + late_rows + stopb_rows + inflated,
+        "rows": rows + hollow_rows + late_rows + refire_rows + stopb_rows + inflated,
     }

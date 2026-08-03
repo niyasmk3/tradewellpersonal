@@ -406,7 +406,7 @@ export interface PaperRow {
   hollow?: boolean;
   /** Which shadow ledger a hollow row belongs to: the participation-floor
       hypothesis, the 14:15 late-cutoff hypothesis, or the stop-basis A/B twin. */
-  shadow_class?: "floor" | "late" | "stopb" | null;
+  shadow_class?: "floor" | "late" | "refire" | "stopb" | null;
   mode?: string;
 }
 
@@ -431,6 +431,9 @@ export interface PaperSummary {
   /** The 14:15-cutoff hypothesis ledger: fills of late-vetoed cards (14:15-15:10).
       Positive expectancy at 30+ fills retires the cutoff. */
   late_shadow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
+  /** The re-fire guard's hypothesis ledger: fills of cards the guard refused.
+      Positive expectancy at 30+ fills shortens or retires the guard. */
+  refire_shadow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
   /** 1-lot exit-policy A/B: trailing ratchet vs banking the whole position at
       the quick target — a paired counterfactual on the same recorded fills. */
   exit_ab?: {
