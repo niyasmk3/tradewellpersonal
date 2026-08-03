@@ -134,6 +134,46 @@ def test_paper_rows_get_post_close_tracking():
     print("  TRACK  -> paper observes closed rows; post_close_mfe recorded")
 
 
+def test_order_decides_when_both_extremes_breach():
+    """Review catch #1: crash-first must count as AVOIDED — the un-locked
+    position dies at the old stop before the later rally exists for it."""
+    s = _store()
+    t1 = _locked_out(s, "CF", post_mfe=118.0, post_mae=85.0)
+    def stamp(x):
+        x.post_close_mae_at = 1000       # crash first...
+        x.post_close_mfe_at = 5000       # ...rally an hour later
+    s._apply(t1.id, stamp)
+    da = summarize(s)["derisk_aftermath"]
+    assert da["crash_avoided"] == 1 and da["runner_escaped"] == 0, da
+    # Rally-first (or unknowable order) counts against the lock.
+    s2 = _store()
+    t2 = _locked_out(s2, "RF", post_mfe=118.0, post_mae=85.0)
+    def stamp2(x):
+        x.post_close_mfe_at = 1000
+        x.post_close_mae_at = 5000
+    s2._apply(t2.id, stamp2)
+    da2 = summarize(s2)["derisk_aftermath"]
+    assert da2["runner_escaped"] == 1 and da2["crash_avoided"] == 0, da2
+    print("  ORDER  -> crash-first = avoided; rally-first/unknown = escaped")
+
+
+def test_sums_use_remaining_quantity_after_partial():
+    """Review catch #2: a 2-lot row that booked half must score its aftermath
+    at the REMAINING 65, not the entry-time 130."""
+    s = _store()
+    t = s.create_from_signal(_card("TWO"), 2, 100.0, 65, quick_pct=0.12)
+    s.book_partial(t.id, 112.0, 0.5)
+    def fn(x):
+        x.events.append(TradeEvent(ts=int(time.time()), kind="early_derisk", note="lock"))
+    s._apply(t.id, fn)
+    s.auto_close(t.id, 100.2, "stop")
+    def post(x): x.post_close_mfe, x.post_close_mfe_at = 118.0, 1000
+    s._apply(t.id, post)
+    da = summarize(s)["derisk_aftermath"]
+    assert abs(da["forfeited"] - (118.0 - 100.2) * 65) < 0.01, da["forfeited"]
+    print("  QTY    -> partial-booked row scored at remaining 65, not 130")
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

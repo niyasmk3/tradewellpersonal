@@ -698,16 +698,32 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     esc, avoided, noise, unobserved = [], [], [], []
     forfeited_val = avoided_val = 0.0
     for t in locked_out:
-        qty = t.initial_quantity or t.quantity
+        # The REMAINING position at the lock-out, not the entry size — a
+        # multi-lot row that already booked half would otherwise double-count
+        # its aftermath (review catch: 2x on both sums).
+        qty = t.quantity
         up, dn = t.post_close_mfe, t.post_close_mae
         if up is None and dn is None:
             unobserved.append(t)             # closed too near the bell to observe
             continue
         ran_to = t.quick_target or t.entry_premium * 1.12
-        if up is not None and up >= ran_to:
+        runner_hit = up is not None and up >= ran_to
+        crash_hit = dn is not None and dn <= t.entry_premium * 0.92
+        if runner_hit and crash_hit:
+            # Both extremes printed after the exit — the one that came FIRST
+            # decides, because an un-locked position would have met it first:
+            # crash-first means the old stop dies before the later rally ever
+            # existed for it (review catch: order was ignored). A missing or
+            # tied timestamp counts as runner — the reading that does NOT
+            # flatter the lock carries the burden of proof.
+            crash_first = (t.post_close_mae_at is not None
+                           and t.post_close_mfe_at is not None
+                           and t.post_close_mae_at < t.post_close_mfe_at)
+            runner_hit, crash_hit = not crash_first, crash_first
+        if runner_hit:
             esc.append(t)
             forfeited_val += (up - t.exit_premium) * qty
-        elif dn is not None and dn <= t.entry_premium * 0.92:
+        elif crash_hit:
             avoided.append(t)
             avoided_val += (t.exit_premium - dn) * qty
         else:
