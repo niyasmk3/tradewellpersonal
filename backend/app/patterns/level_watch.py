@@ -170,6 +170,18 @@ class LevelWatchService:
             levels.sort(key=lambda lv: abs(lv["level"] - spot))
         return levels[:MAX_WATCHED]
 
+    def _next_buy_code(self, now: int) -> str:
+        """A per-day trade code for BUY callouts (#B1, #B2, ... — user
+        suggestion, 04-Aug): every later message about the same trade (the
+        CEILING booking call, the LEVEL BROKE exit) quotes this code, so a
+        lock-screen glance says WHICH bought strike it refers to. Resets
+        each day; ASCII, so it survives the notification Title header."""
+        today = (now + 19800) // 86400
+        with self._lock:
+            n = sum(1 for a in self.alerts
+                    if a["side"] == "buy" and (a["ts"] + 19800) // 86400 == today)
+        return f"#B{n + 1}"
+
     def _link_earlier_buy(self, now: int):
         """Today's most recent un-broken BUY callout + its contract's live
         premium — so a CEILING callout can talk about THE STRIKE THE BUY
@@ -285,8 +297,9 @@ class LevelWatchService:
         contract = f"NIFTY {quote['strike']} CE{px} · exp {exp}"
         ref_buy = ref_now = None          # set by the resistance branch only
 
+        code = self._next_buy_code(now) if side == "support" else None
         if side == "support":
-            title = f"📍 LEVEL BUY setup · {contract}"
+            title = f"📍 {code} LEVEL BUY setup · {contract}"
             # BOTH exits are named at BUY time (04-Aug, user questions): the
             # failure line below (same threshold the grader calls "broke",
             # backed by the LEVEL BROKE alert) and the first strong ceiling
@@ -302,6 +315,8 @@ class LevelWatchService:
                 f"Spot {spot:,.0f} touched support {level:,.0f} — {held} "
                 f"({lv.get('total_touches', '?')} touches).\n"
                 f"{contract}\n"
+                f"Trade code {code} — the booking and exit alerts for this "
+                "trade will quote it.\n"
                 f"If you trade this: the thesis FAILS below "
                 f"{level - BREAK_TOL_PTS:,.0f} — decide that exit before "
                 "entering. You'll get a LEVEL BROKE alert if it happens.\n"
@@ -310,24 +325,30 @@ class LevelWatchService:
                 "engine's gate still applies."
             )
         else:
-            title = f"📍 LEVEL CEILING {level:,.0f} — consider booking"
             # When today had a BUY callout, the ceiling talks about THAT
             # contract — buy and sell must read as one story, not two
-            # different strikes (04-Aug user catch). The fresh ATM quote
-            # stays as reference for anyone without a position.
+            # different strikes (04-Aug user catch), and it quotes the BUY's
+            # trade code (#B1) so the correlation is unmistakable on a lock
+            # screen. The fresh ATM quote stays as reference for anyone
+            # without a position.
             ref_buy, ref_now = self._link_earlier_buy(now)
+            ref_code = (ref_buy or {}).get("code")
+            title = (f"📍 LEVEL CEILING {level:,.0f} — book {ref_code}"
+                     if ref_code else
+                     f"📍 LEVEL CEILING {level:,.0f} — consider booking")
             if ref_buy is not None:
                 when = time.strftime("%H:%M", time.gmtime(ref_buy["ts"] + 19800))
+                tagline = f"{ref_code} " if ref_code else ""
                 if ref_now:
                     pct = (ref_now - ref_buy["ce_ltp"]) / ref_buy["ce_ltp"] * 100
                     buy_line = (
-                        f"Your {when} BUY — NIFTY {ref_buy['strike']} CE @ "
+                        f"Your {tagline}BUY ({when}) — NIFTY {ref_buy['strike']} CE @ "
                         f"₹{ref_buy['ce_ltp']:g} — is now ₹{ref_now:g} "
                         f"({pct:+.0f}%). THIS is the level history says to "
                         "book it at.\n")
                 else:
                     buy_line = (
-                        f"Your {when} BUY — NIFTY {ref_buy['strike']} CE @ "
+                        f"Your {tagline}BUY ({when}) — NIFTY {ref_buy['strike']} CE @ "
                         f"₹{ref_buy['ce_ltp']:g} — THIS is the level history "
                         "says to book it at.\n")
             else:
@@ -342,6 +363,7 @@ class LevelWatchService:
 
         alert = {
             "ts": now, "side": "buy" if side == "support" else "sell",
+            "code": code,
             "level": level, "spot": round(spot, 2),
             "hold_rate": lv.get("hold_rate"), "days_touched": lv.get("days_touched"),
             "strike": quote["strike"], "expiry": quote["expiry"],
@@ -409,12 +431,15 @@ class LevelWatchService:
                     # call was early and the rally is running.
                     mins = max(1, (now - a["ts"]) // 60)
                     if a["side"] == "buy":
+                        tag = f"{a['code']} " if a.get("code") else ""
+                        strike = (f"NIFTY {a['strike']} CE"
+                                  if a.get("strike") else "that entry")
                         self._push(
-                            f"⚠ LEVEL BROKE — {a['level']:,.0f} failed",
+                            f"⚠ {tag}LEVEL BROKE — {a['level']:,.0f} failed",
                             (f"Spot {spot:,.0f} has traded through support "
-                             f"{a['level']:,.0f} ({mins}m after the BUY callout). "
-                             "The reason for that entry is GONE — if you took it, "
-                             "this is the exit the callout named."),
+                             f"{a['level']:,.0f} ({mins}m after the {tag}BUY "
+                             f"callout). The reason for {strike} is GONE — if "
+                             "you took it, this is the exit the callout named."),
                             self.cfg, audience="private")
                     else:
                         self._push(

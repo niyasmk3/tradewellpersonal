@@ -402,6 +402,49 @@ def test_ceiling_books_the_earlier_buy():
     print("  LINK   -> the ceiling books the strike the BUY named")
 
 
+def test_trade_codes_correlate_buy_book_and_exit():
+    """User suggestion (04-Aug): every BUY gets a per-day code (#B1, #B2…)
+    and the booking ceiling AND the broke exit quote it — one glance says
+    WHICH bought strike a later alert refers to."""
+    chain = _Chain([_Row(24600, 104.5)])
+    svc = _svc(spot=24610.0, chain=chain)
+    svc._levels = [_level(24600.0), _level(24775.0, days=25, hold=0.82)]
+    base = int(time.time()) - 5000
+    svc.check(now=base)
+    svc.state.spot = 24602.0
+    svc.check(now=base + 5)                    # -> #B1
+    t1, b1, _ = svc.pushes[0]
+    assert "#B1" in t1 and "Trade code #B1" in b1
+    assert list(svc.alerts)[0]["code"] == "#B1"
+
+    # The ceiling books it BY CODE.
+    svc.state.ticks[901] = {"last_price": 142.3, "ts": base + 3000}
+    svc.state.spot = 24700.0
+    svc.check(now=base + 2400)
+    svc.state.spot = 24772.0
+    svc.check(now=base + 3000)
+    ceil = next(p for p in svc.pushes if "CEILING" in p[0])
+    assert "book #B1" in ceil[0] and "#B1 BUY" in ceil[1], ceil[0]
+
+    # A second buy the same day gets #B2; the broke alert quotes ITS code.
+    svc2 = _svc(spot=24650.0, chain=None)
+    svc2._levels = [_level(24600.0)]
+    svc2.alerts.append({"ts": base, "side": "buy", "code": "#B1",
+                        "level": 24500.0, "spot": 24510.0, "strike": 24500,
+                        "ce_ltp": 90.0, "token": None,
+                        "outcomes": {"spot_max": 0, "spot_min": 0,
+                                     "broke": False, "win": None, "final": True}})
+    svc2.check(now=base + 100)
+    svc2.state.spot = 24602.0
+    svc2.check(now=base + 105)
+    assert list(svc2.alerts)[-1]["code"] == "#B2"
+    svc2.state.spot = 24580.0
+    svc2.check(now=base + 400)
+    broke = next(p for p in svc2.pushes if "LEVEL BROKE" in p[0])
+    assert "#B2" in broke[0] and "NIFTY 24600 CE" in broke[1], broke[0]
+    print("  CODE   -> #B1 buys, 'book #B1' ceilings, '#B1 BROKE' exits")
+
+
 def test_callout_history_persists_across_restart():
     """Yesterday's lesson (the 14:21 callout vanished in a restart): alerts
     and their grades round-trip through the store file."""

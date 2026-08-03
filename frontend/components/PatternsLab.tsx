@@ -169,6 +169,7 @@ function LevelWatchCard() {
                       }`}>
                         {a.side === "buy" ? "BUY setup" : "CEILING"}
                       </span>
+                      {a.code && <span className="tag bg-panel text-[9px] font-mono text-white/80">{a.code}</span>}
                       <span className="font-mono">{a.level.toFixed(0)}</span>
                       <span className="text-muted">
                         {Math.round((a.hold_rate ?? 0) * 100)}% of {a.days_touched}d

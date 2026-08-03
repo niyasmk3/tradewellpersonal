@@ -679,6 +679,9 @@ export interface LevelAlertOutcome {
 export interface LevelAlert {
   ts: number;
   side: "buy" | "sell";
+  /** Per-day trade code (#B1, #B2…) on BUY callouts; the ceiling/broke
+      alerts for the same trade quote it. Null on CEILING rows. */
+  code?: string | null;
   level: number;
   spot: number;
   hold_rate: number | null;
