@@ -20,6 +20,7 @@ venv/
 .signals.json
 .signals.backup-*.json
 .signals_archive.jsonl
+.shadow_signals_archive.jsonl
 .hollow_signals.json
 .late_signals.json
 .refire_signals.json

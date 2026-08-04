@@ -327,12 +327,19 @@ class SignalStore:
                 return None
             # Audit trail BEFORE overwriting: the ladder the user was looking
             # at (and may have executed against) must survive the refresh.
-            card.reprice_history = (card.reprice_history or [])[-9:] + [{
+            _rh = card.reprice_history or []
+            # Slot 0 is the ISSUE-TIME ladder and is NEVER rotated out — the
+            # only durable copy of the card's first values under unlimited
+            # refreshes (04-Aug: 27 reprices in 9 min rotated the birth ladder
+            # away and history presented a 30.7 zone as the 14.5 issue-time
+            # offer the paper book had actually filled).
+            card.reprice_history = (([_rh[0]] + _rh[1:][-8:]) if _rh else []) + [{
                 "at": now, "ref": card.ref_entry_premium, "ref_spot": card.ref_spot,
                 "premium_sl": card.premium_sl, "target1": card.target1,
                 "target2": card.target2, "entry_low": card.entry_low,
                 "entry_high": card.entry_high,
             }]
+            card.reprice_total = (card.reprice_total or 0) + 1
             card.entry_low = ladder["entry_low"]
             card.entry_high = ladder["entry_high"]
             card.premium_sl = ladder["premium_sl"]
@@ -405,6 +412,15 @@ hollow_store = SignalStore(store_path=_STORE_PATH.with_name(".hollow_signals.jso
 late_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".late_signals.json"))
 refire_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".refire_signals.json"))
 setup_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".setup_signals.json"))
+
+# Shadow cards get their OWN append-only archive (04-Aug find: the four shadow
+# stores are day-scoped and had archive=None, so 7 of the day's 10 cards left
+# no permanent record — the hypothesis ledgers' own evidence was self-erasing
+# at every restart). Separate file on purpose: consumers of the live archive
+# (history tab, report cards) must never see counterfactual cards.
+from app.signals.archive import shadow_signal_archive as _shadow_archive  # noqa: E402
+for _s in (hollow_store, late_shadow_store, refire_shadow_store, setup_shadow_store):
+    _s.archive = _shadow_archive
 
 
 def shadow_store_for(tag: str) -> SignalStore:

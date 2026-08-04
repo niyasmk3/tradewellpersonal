@@ -133,7 +133,7 @@ class SignalArchive:
                 continue
         return ids
 
-    def merge_store_file(self) -> None:
+    def merge_store_file(self, store_names: tuple = (".signals.json",)) -> None:
         """Fold in cards from the sibling .signals.json the archive hasn't seen.
 
         The store file is the only place cards issued by a PRE-ARCHIVE process
@@ -145,32 +145,36 @@ class SignalArchive:
         if self._path is None:
             return
         try:
-            store_file = self._path.with_name(".signals.json")
-            if not store_file.exists():
-                return
-            data = json.loads(store_file.read_text())
             seen = self._archived_ids()
             merged = 0
-            for slot in data.values():
-                cards = list(slot.get("history") or [])
-                if slot.get("active"):
-                    cards.append(slot["active"])
-                for raw in cards:
-                    try:
-                        card = SignalCard.model_validate(raw)
-                    except Exception:
-                        continue
-                    if card.id in seen:
-                        continue
-                    seen.add(card.id)
-                    self.record(card)
-                    merged += 1
+            for name in store_names:
+                store_file = self._path.with_name(name)
+                if not store_file.exists():
+                    continue
+                data = json.loads(store_file.read_text())
+                for slot in data.values():
+                    cards = list(slot.get("history") or [])
+                    if slot.get("active"):
+                        cards.append(slot["active"])
+                    for raw in cards:
+                        try:
+                            card = SignalCard.model_validate(raw)
+                        except Exception:
+                            continue
+                        if card.id in seen:
+                            continue
+                        seen.add(card.id)
+                        self.record(card)
+                        merged += 1
             if merged:
-                log.info("signal archive: harvested %d card(s) from .signals.json", merged)
+                log.info("signal archive: harvested %d card(s) from %s", merged, ", ".join(store_names))
         except Exception:
             log.warning("signal archive boot-merge failed", exc_info=True)
 
 
-# The ONLY archiving instance (see the module docstring). Test-constructed
-# stores get archive=None and stay silent.
+# The archiving instances (see the module docstring). Test-constructed
+# stores get archive=None and stay silent. Shadow cards write to their own
+# file so live-archive consumers never see counterfactuals.
 signal_archive = SignalArchive(_ARCHIVE_PATH)
+shadow_signal_archive = SignalArchive(
+    _ARCHIVE_PATH.with_name(".shadow_signals_archive.jsonl") if _ARCHIVE_PATH else None)

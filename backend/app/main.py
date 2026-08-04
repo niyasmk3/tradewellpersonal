@@ -46,6 +46,12 @@ async def lifespan(app: FastAPI):
     from app.signals.archive import signal_archive
 
     signal_archive.merge_store_file()
+    # Shadow stores are day-scoped and self-erasing; harvest them into their
+    # own archive at every boot so hypothesis evidence survives restarts.
+    from app.signals.archive import shadow_signal_archive
+    shadow_signal_archive.merge_store_file(
+        (".hollow_signals.json", ".late_signals.json",
+         ".refire_signals.json", ".setup_signals.json"))
 
     # Same at-boot-never-at-import rule for the eval trace's retention prune
     # (audit P1-2): the file grows ~500 lines/session; the prune keeps

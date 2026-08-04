@@ -117,9 +117,22 @@ export function SignalHistoryPanel({
                   ? istDateTime(r.valid_until)
                   : istTime(r.valid_until)}
               </span>
-              <span className="text-white/70">
-                zone ₹{r.entry_low}–{r.entry_high}
-              </span>
+              {/* Issue-time values FIRST — they are what any fill at birth
+                  actually saw; a repriced card shows its final ladder after
+                  the arrow (04-Aug: 27 refreshes once made history claim a
+                  30.7 zone was the 14.5 issue-time offer). */}
+              {r.issued_entry_low != null ? (
+                <span
+                  className="text-white/70"
+                  title={`Issued ₹${r.issued_entry_low}–${r.issued_entry_high} (SL ₹${r.issued_premium_sl}, T1 ₹${r.issued_target1}); re-priced ${r.reprice_count ?? "?"}x to the values after the arrow`}
+                >
+                  issued ₹{r.issued_entry_low}–{r.issued_entry_high} → ₹{r.entry_low}–{r.entry_high}
+                </span>
+              ) : (
+                <span className="text-white/70">
+                  zone ₹{r.entry_low}–{r.entry_high}
+                </span>
+              )}
               <span>SL ₹{r.premium_sl}</span>
               <span>T1 ₹{r.target1}</span>
             </div>

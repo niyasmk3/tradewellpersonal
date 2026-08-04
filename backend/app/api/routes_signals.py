@@ -32,6 +32,30 @@ def _resolve(symbol: str, mode: str) -> TradingMode:
     return tmode
 
 
+def _issue_view(c) -> dict:
+    """The card's ISSUE-TIME ladder + reprice provenance, for history rows.
+
+    04-Aug: a card repriced 27 times displayed its final 30.7 zone under its
+    11:39 birth stamp, and the paper fill at 14.26 looked impossible. History
+    must show what was OFFERED at issue; reprice_history[0] (birth-pinned in
+    the store) is the durable copy of that.
+    """
+    out = {"repriced_at": c.repriced_at}
+    rh = c.reprice_history or []
+    if c.repriced_at and rh:
+        first = rh[0]
+        out.update({
+            "issued_entry_low": first.get("entry_low"),
+            "issued_entry_high": first.get("entry_high"),
+            "issued_premium_sl": first.get("premium_sl"),
+            "issued_target1": first.get("target1"),
+            # reprice_total is the monotonic counter; len(rh) plateaus at the
+            # 10-slot cap. Fall back for cards persisted before the field.
+            "reprice_count": getattr(c, "reprice_total", 0) or len(rh),
+        })
+    return out
+
+
 @router.get("/modes")
 def enabled_modes() -> dict:
     # Only advertise modes that are both enabled in config and valid enum members.
@@ -111,6 +135,7 @@ def signal_history(symbol: str, mode: str = Query("all")) -> dict:
                 "entry_low": c.entry_low, "entry_high": c.entry_high,
                 "premium_sl": c.premium_sl, "target1": c.target1, "target2": c.target2,
                 "ref_entry_premium": c.ref_entry_premium,
+                **_issue_view(c),
             })
     rows.sort(key=lambda r: r["created_at"], reverse=True)
     return {"rows": rows, "count": len(rows)}
@@ -176,6 +201,7 @@ def signal_archive_history(symbol: str, mode: str = Query("all"),
             "entry_low": c.entry_low, "entry_high": c.entry_high,
             "premium_sl": c.premium_sl, "target1": c.target1, "target2": c.target2,
             "ref_entry_premium": c.ref_entry_premium,
+            **_issue_view(c),
         })
     rows.sort(key=lambda r: r["created_at"], reverse=True)
     return {"rows": rows, "count": len(rows), "days": days}
@@ -318,6 +344,19 @@ def reprice_signal(symbol: str, mode: str = Query("intraday")) -> RepriceResult:
         signal_store.close_active(symbol, tmode, now, reason)
         return RepriceResult(status="closed", score=live_score,
                              score_needed=profile.score_valid, reason=reason)
+
+    # COOL-DOWN — checked only AFTER the decay-close branch above, because
+    # closing a dead thesis must never wait out a timer (a card repriced 5s
+    # ago whose score just collapsed still has to close on this click).
+    # 04-Aug: 27 refreshes in 9 minutes re-zoned a card the paper book had
+    # already filled and kept extending its life. A refresh is for a STALE
+    # card; a card refreshed seconds ago is by definition not stale.
+    last = card.repriced_at or 0
+    if last and now - last < 30:
+        raise HTTPException(
+            status_code=429,
+            detail=(f"Re-priced {now - last}s ago — the ladder is "
+                    "current. Refresh again in 30s if the premium keeps moving."))
 
     # Still valid → re-price against the live premium of the same strike.
     # SAME freshness rule as issuance. Repricing exists to REMOVE staleness,

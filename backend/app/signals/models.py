@@ -177,6 +177,10 @@ class SignalCard(BaseModel):
     # Pre-reprice ladder snapshots, oldest first — the audit trail of what the
     # user was actually looking at before each refresh. Capped small.
     reprice_history: list[dict] = []
+    # TRUE lifetime reprice count. reprice_history rotates its middle out at
+    # 10 slots, so len() plateaus there — this counter doesn't (04-Aug's 27
+    # refreshes must read 27x, not 10x).
+    reprice_total: int = 0
     # Live LTP of THIS card's option, attached fresh at request time (not
     # persisted) so the UI can show what the contract is trading at right now
     # against the entry zone. None when there is no live tick for the token.

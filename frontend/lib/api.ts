@@ -271,6 +271,15 @@ export interface SignalHistoryRow {
   premium_sl: number;
   target1: number;
   target2: number;
+  /** Set when the card was re-priced after issue. entry_low/high above are the
+   *  FINAL ladder; issued_* are what was offered at birth (the values a fill
+   *  at issue time actually saw). */
+  repriced_at?: number | null;
+  issued_entry_low?: number;
+  issued_entry_high?: number;
+  issued_premium_sl?: number;
+  issued_target1?: number;
+  reprice_count?: number;
   ref_entry_premium: number | null;
 }
 
