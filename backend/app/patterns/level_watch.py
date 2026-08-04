@@ -51,6 +51,15 @@ MIN_HOLD_RATE = 0.60
 GRADE_HORIZONS_S = {"15m": 900, "30m": 1800, "60m": 3600}
 GRADE_FINAL_S = 3900
 BREAK_TOL_PTS = 15.0
+# 04-Aug hardening, paid for live:
+# - STALE_TAPE_S: the ticker died at 10:01 with spot frozen 9pts from a
+#   level; the watcher must never prime, fire or grade on a tape that is
+#   not ticking.
+# - KNIFE_MUTE_S: after a BUY level BREAKS, the tape is falling — new BUY
+#   callouts stay muted for this window (catching successive knives on a
+#   trend day is the level-bounce strategy's known failure mode).
+STALE_TAPE_S = 90
+KNIFE_MUTE_S = 1200
 
 TOUCH_TOL_PCT = 0.0004        # ~10 points at NIFTY 24.6k: "touching"
 REARM_MULT = 3.0              # leave the band by 3x tol before re-arming...
@@ -106,7 +115,8 @@ class LevelWatchService:
         self._levels_at = 0.0
         self._prev_spot: float | None = None
         self._armed: dict = {}          # level -> ready to fire
-        self._last_fire: dict = {}      # level -> ts
+        self._last_fire: dict = {}      # level -> ts (rebuilt from disk too)
+        self._last_buy_break = 0        # knife guard anchor (rebuilt on load)
         self.alerts: deque = deque(maxlen=200)
         self._alerts_path = alerts_path
         self._dirty = False
@@ -129,6 +139,20 @@ class LevelWatchService:
             for a in rows:
                 if isinstance(a, dict) and (a.get("ts") or 0) >= cutoff:
                     self.alerts.append(a)
+                    # THE 84-PUSH LESSON (04-Aug): a rebuilt instance had
+                    # amnesia — empty cooldowns let every feed restart re-fire
+                    # the same level within seconds. The persisted ledger IS
+                    # the cooldown memory; rebuild it here.
+                    try:
+                        key = round(float(a["level"]), 2)
+                        self._last_fire[key] = max(self._last_fire.get(key, 0),
+                                                   int(a["ts"]))
+                        broke_at = (a.get("outcomes") or {}).get("broke_at")
+                        if a.get("side") == "buy" and broke_at:
+                            self._last_buy_break = max(self._last_buy_break,
+                                                       int(broke_at))
+                    except Exception:
+                        continue
         except Exception:
             log.warning("level watch: alert history unreadable", exc_info=True)
 
@@ -247,6 +271,15 @@ class LevelWatchService:
                 return
             now = now or int(time.time())
             self.refresh_levels(now)
+            # FROZEN-TAPE GATE (04-Aug): the dead ticker left spot parked
+            # 9pts from a level and every fresh instance "touched" it. No
+            # ticks flowing = no priming, no firing, no grading. Duck-typed:
+            # states without the method (unit fakes) skip the gate.
+            age_fn = getattr(self.state, "last_tick_age", None)
+            if callable(age_fn):
+                age = age_fn()
+                if age is None or age > STALE_TAPE_S:
+                    return
             snap = self.state.underlying_snapshot("NIFTY")
             spot = float(snap.ltp) if snap and snap.ltp else None
             if not spot:
@@ -280,6 +313,15 @@ class LevelWatchService:
                 # approach side, not from wishing: falling onto it = support
                 # test; rising into it = the ceiling.
                 side = "support" if prev > level else "resistance"
+                # KNIFE GUARD: a BUY level broke minutes ago — the tape is
+                # falling, and the next support "touch" is the knife, not a
+                # bounce. Stay armed (a touch after the mute can still fire),
+                # just silent for the window. Ceilings are unaffected.
+                if (side == "support" and self._last_buy_break
+                        and now - self._last_buy_break < KNIFE_MUTE_S):
+                    log.debug("level watch: BUY muted (level broke %ds ago)",
+                              now - self._last_buy_break)
+                    continue
                 self._armed[key] = False
                 self._last_fire[key] = now
                 self._fire(side, lv, spot, now)
@@ -423,6 +465,9 @@ class LevelWatchService:
                          else spot > a["level"] + BREAK_TOL_PTS)
                 if broke:
                     o["broke"] = True
+                    o["broke_at"] = now       # knife-guard anchor, persisted
+                    if a["side"] == "buy":
+                        self._last_buy_break = max(self._last_buy_break, now)
                     self._dirty = True
                     # THE PROTECTIVE ALERT (04-Aug): the moment the reason
                     # for a BUY callout dies, say so — minutes, not the 30m
@@ -474,9 +519,25 @@ class LevelWatchService:
 
     def summary(self) -> dict:
         """The scoreboard: are the callouts making money? Aggregated over the
-        persisted history (last 14 days), per side, graded rows only."""
+        persisted history (last 14 days), per side, graded rows only.
+
+        RESTART-STORM HYGIENE (04-Aug): 84 amnesia-refires of one frozen
+        event must grade as ONE. Within a (side, level), an alert closer
+        than the cooldown to the previously kept one is the same event —
+        dropped from the grades (the raw ledger keeps everything)."""
+        cd = int(getattr(self.cfg, "level_alert_cooldown_s", 1800)) or 1800
         with self._lock:
-            rows = [a for a in self.alerts if (a.get("outcomes") or {}).get("win") is not None]
+            graded = sorted(
+                (a for a in self.alerts
+                 if (a.get("outcomes") or {}).get("win") is not None),
+                key=lambda a: a["ts"])
+        rows = []
+        last_kept: dict = {}
+        for a in graded:
+            k = (a["side"], round(float(a["level"]), 2))
+            if a["ts"] - last_kept.get(k, -10**12) >= cd:
+                rows.append(a)
+                last_kept[k] = a["ts"]
         out = {}
         for side in ("buy", "sell"):
             g = [a for a in rows if a["side"] == side]

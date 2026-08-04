@@ -473,6 +473,116 @@ def test_callout_history_persists_across_restart():
     print("  STORE  -> callouts and grades survive a restart")
 
 
+def test_frozen_tape_fires_nothing():
+    """04-Aug: the dead ticker parked spot 9pts from a level and every fresh
+    instance 'touched' it. With no ticks flowing the watcher must not prime,
+    fire or grade."""
+    svc = _svc(spot=24650.0)
+    svc.state.last_tick_age = lambda: 400          # frozen tape
+    svc._levels = [_level(24600.0)]
+    base = int(time.time()) - 5000
+    svc.check(now=base)
+    svc.state.spot = 24602.0
+    svc.check(now=base + 5)
+    assert svc.pushes == [], "a frozen tape must be silent"
+    svc.state.last_tick_age = lambda: 3            # tape alive again
+    svc.check(now=base + 10)                       # prime
+    svc.check(now=base + 15)
+    assert len(svc.pushes) == 1, "fresh ticks resume normal behaviour"
+    print("  FROZEN -> no priming, no firing, no grading on a dead tape")
+
+
+def test_cooldown_survives_instance_rebuild():
+    """THE 84-PUSH BUG: every feed restart rebuilt the watcher with empty
+    cooldowns and re-fired the same level within seconds. The persisted
+    ledger is now the cooldown memory."""
+    import tempfile
+    from pathlib import Path
+
+    from app.patterns.level_watch import LevelWatchService
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "alerts.json"
+        svc = _svc(spot=24650.0)
+        svc._alerts_path = path
+        svc._levels = [_level(24600.0)]
+        base = int(time.time()) - 3000
+        svc.check(now=base)
+        svc.state.spot = 24602.0
+        svc.check(now=base + 5)                    # fires, persists
+        assert len(svc.pushes) == 1
+
+        # "Feed restart": a brand-new instance, same frozen-ish situation.
+        svc2 = LevelWatchService(svc.cfg, svc.state, alerts_path=path)
+        svc2._levels_at = time.time() + 10**6
+        svc2._levels = [_level(24600.0)]
+        svc2.pushes = []
+        svc2._push = lambda t, b, c, **k: svc2.pushes.append((t, b, k))
+        svc2.check(now=base + 60)                  # prime
+        svc2.check(now=base + 65)                  # touch again, 1min later
+        assert svc2.pushes == [], "the rebuilt instance must honour the cooldown"
+    print("  MEMORY -> a rebuilt watcher cannot re-fire inside the cooldown")
+
+
+def test_knife_guard_mutes_buys_after_a_break():
+    """A broken BUY level = falling tape: new BUY callouts stay muted for
+    KNIFE_MUTE_S; ceilings are unaffected; the mute expires."""
+    from app.patterns.level_watch import KNIFE_MUTE_S
+
+    svc = _svc(spot=24700.0, chain=None)
+    svc._levels = [_level(24650.0), _level(24600.0), _level(24775.0)]
+    base = int(time.time()) - 20000
+    svc.check(now=base)
+    svc.state.spot = 24652.0
+    svc.check(now=base + 5)                        # BUY @ 24650
+    assert len(svc.pushes) == 1
+    svc.state.spot = 24630.0                       # breaks 24650 (20 pts)
+    svc.check(now=base + 120)                      # -> BROKE alert + mute
+    assert any("LEVEL BROKE" in t for t, _, _ in svc.pushes)
+    n = len(svc.pushes)
+    svc.state.spot = 24602.0                       # next support "touch"
+    svc.check(now=base + 300)
+    assert len(svc.pushes) == n, "BUY must stay muted while the knife falls"
+    # A ceiling during the mute still speaks (it books, not buys).
+    svc.state.spot = 24700.0
+    svc.check(now=base + 400)
+    svc.state.spot = 24773.0
+    svc.check(now=base + 500)
+    assert any("CEILING" in t for t, _, _ in svc.pushes)
+    # After the mute, a fresh support touch fires again.
+    n2 = len(svc.pushes)
+    svc.state.spot = 24640.0
+    svc.check(now=base + 120 + KNIFE_MUTE_S + 60)
+    svc.state.spot = 24602.0
+    svc.check(now=base + 120 + KNIFE_MUTE_S + 65)
+    assert len(svc.pushes) == n2 + 1, "the mute must expire"
+    print("  KNIFE  -> broken support mutes new BUYs 20m; ceilings unaffected")
+
+
+def test_summary_dedupes_restart_storms():
+    """84 duplicates of one frozen event must grade as ONE."""
+    svc = _svc(spot=24650.0)
+    base = int(time.time()) - 7200
+    for i in range(10):                            # a storm, 1 min apart
+        svc.alerts.append({
+            "ts": base + i * 60, "side": "buy", "level": 24625.0,
+            "spot": 24634.0, "ce_ltp": None, "strike": 24650,
+            "outcomes": {"broke": True, "win": False, "final": True,
+                         "spot_max": 0, "spot_min": 0},
+        })
+    svc.alerts.append({                            # a real, separate event
+        "ts": base + 4000, "side": "buy", "level": 24625.0,
+        "spot": 24630.0, "ce_ltp": 50.0, "strike": 24650,
+        "outcomes": {"broke": False, "win": True, "final": True,
+                     "spot_max": 0, "spot_min": 0,
+                     "30m": {"spot": 24660.0, "prem": 60.0}},
+    })
+    s = svc.summary()
+    assert s["buy"]["n"] == 2, s
+    assert s["buy"]["win_rate"] == 50.0
+    print("  DEDUP  -> a restart storm grades as one event, not eighty-four")
+
+
 def test_watched_is_near_spot_only():
     svc = _svc(spot=24600.0)
     svc._levels = [_level(24600.0), _level(24580.0), _level(26000.0), _level(23000.0)]

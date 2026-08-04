@@ -370,6 +370,7 @@ class FeedController:
         flips is_authenticated and the supervisor goes quiet until re-login.
         """
         failures = 0
+        starved_restarts = 0
         while True:
             await asyncio.sleep(interval)
             try:
@@ -399,11 +400,37 @@ class FeedController:
                     # no on_close, no on_noreconnect) — ticker_dead never fires,
                     # so tick age is the only reliable liveness signal.
                     age = market_state.last_tick_age()
+                    starved_restarts += 1
+                    # THE 04-AUG LESSON, paid in 84 phone pushes: an
+                    # in-process feed restart CANNOT revive a dead KiteTicker
+                    # (Twisted reactor, known since 20-Jul), so the supervisor
+                    # restart-looped every minute for 90 minutes while tick
+                    # age climbed 212s -> 5000s+. After three failed attempts
+                    # the only cure is the cure the ⟳ button applies: replace
+                    # the whole process. Same-day token reloads; the fresh
+                    # ticker connects clean.
+                    if starved_restarts >= 3:
+                        log.error(
+                            "Supervisor: %d feed restarts did not revive ticks "
+                            "(age %ss) — escalating to full process restart",
+                            starved_restarts - 1, age)
+                        from app.api.routes_system import _exec_self, _relaunch_argv
+                        from app.notify import push_text
+                        push_text(
+                            "Tradewell: self-healing restart",
+                            (f"Ticker silent for {age}s despite "
+                             f"{starved_restarts - 1} feed restarts — replacing "
+                             "the process to revive the socket."),
+                            get_settings())
+                        _exec_self(_relaunch_argv(), delay_s=2.0)
+                        return          # this process is about to be replaced
                     log.warning("Supervisor: no ticks for %ss while market open — restarting feed", age)
                     await self.restart()
                 elif self._started_day and self._started_day != today:
                     log.info("Supervisor: IST day rolled over — re-resolving universe")
                     await self.restart()
+                if not self._tick_starved():
+                    starved_restarts = 0
                 failures = 0
             except Exception as exc:
                 log.warning("Supervisor recovery attempt failed: %s", exc)
