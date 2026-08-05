@@ -46,7 +46,13 @@ Rules, in order:
    the main chart shows the near-month FUTURE (runs above spot by the
    "basis"); level callouts (#B1 etc.) come from 3 years of touch history;
    the engine issues scored signal cards gated at 78/100 intraday.
-5. Never present yourself as a licensed advisor; this is educational
+5. When the context includes the IMPLIED ODDS block, you may quote those
+   probabilities for "what is the chance..." questions — ALWAYS labelled as
+   what the option market currently implies (risk-neutral, derived from
+   live IVs), never as your own forecast. Note that they move with IV, and
+   that the chance of TOUCHING a level before a date is roughly double the
+   finish-beyond odds for out-of-the-money strikes.
+6. Never present yourself as a licensed advisor; this is educational
    decision support for the tool's owner."""
 
 
@@ -108,6 +114,12 @@ def build_context() -> str:
     except Exception:
         log.debug("assistant: pulse context failed", exc_info=True)
     try:
+        odds = _implied_odds()
+        if odds:
+            lines.append(odds)
+    except Exception:
+        log.debug("assistant: implied odds failed", exc_info=True)
+    try:
         from app.services import feed
 
         lw = getattr(feed, "level_watch", None)
@@ -127,6 +139,85 @@ def build_context() -> str:
     except Exception:
         log.debug("assistant: level context failed", exc_info=True)
     return "\n".join(lines) if lines else "No live data available (feed may be down)."
+
+
+_RISK_FREE = 0.065
+
+
+def _p_above(spot: float, strike: float, sigma: float, days: float) -> float:
+    """Risk-neutral P(spot > strike) after `days`, Black-Scholes N(d2)."""
+    import math
+
+    from app.options.iv import _norm_cdf
+
+    t = max(days, 0.25) / 365.0
+    d2 = ((math.log(spot / strike) + (_RISK_FREE - 0.5 * sigma * sigma) * t)
+          / (sigma * math.sqrt(t)))
+    return _norm_cdf(d2)
+
+
+def _implied_odds(now_ts: float | None = None) -> str | None:
+    """The market's own probabilities, read off live option IVs.
+
+    P(spot finishes above strike K at horizon T) = N(d2) under Black-Scholes
+    with the strike's OWN implied vol (per-strike IV is computed in-process
+    for ±5 strikes around ATM). Risk-neutral odds — the market's current
+    pricing, explicitly NOT a forecast; the block says so and the system
+    prompt makes Claude repeat it. Horizons: the next three calendar days
+    and expiry, labelled with real dates so "by 7th August" maps directly."""
+    import math
+    import time as _t
+    from datetime import date, timedelta
+
+    from app.kite.instruments import chain_key
+    from app.options.iv import _norm_cdf
+    from app.state import market_state
+
+    chain = market_state.get_option_chain(chain_key("NIFTY", "nearest"))
+    snap = market_state.underlying_snapshot("NIFTY")
+    spot = float(snap.ltp) if snap and snap.ltp else None
+    if chain is None or not spot or not chain.expiry:
+        return None
+    try:
+        exp = date.fromisoformat(str(chain.expiry))
+    except Exception:
+        return None
+    now_ts = now_ts or _t.time()
+    today = date.fromtimestamp(now_ts + 19800)          # IST calendar day
+    days_to_exp = (exp - today).days
+    if days_to_exp <= 0:
+        return None
+    # chain IVs are stored as PERCENT (implied_vol returns e.g. 14.3 — its
+    # own docstring says so); Black-Scholes wants the fraction. Caught by
+    # the first live computation printing a 1250% IV.
+    ivs = {r.strike: float(r.ce_iv) / 100.0 for r in chain.rows
+           if r.ce_iv and 0 < float(r.ce_iv) < 200}
+    if not ivs:
+        return None
+    atm = min(ivs, key=lambda k: abs(k - spot))
+    atm_iv = float(ivs[atm])
+
+    horizons = [d for d in (1, 2, 3) if d < days_to_exp] + [days_to_exp]
+    labels = [(f"at expiry {exp.strftime('%d-%b')}" if d == days_to_exp
+               else f"by {(today + timedelta(days=d)).strftime('%d-%b')}")
+              for d in horizons]
+
+    def p_above(strike: float, days: int) -> float:
+        return _p_above(spot, strike, float(ivs.get(strike, atm_iv)), days)
+
+    sig_day = spot * atm_iv / math.sqrt(365.0)
+    rows = [f"IMPLIED ODDS from live option IVs (risk-neutral market pricing, "
+            f"NOT a forecast; ATM IV {atm_iv:.1%}, weekly expiry "
+            f"{exp.strftime('%d-%b')}, {days_to_exp}d away). "
+            f"1-sigma move ≈ ±{sig_day:.0f} pts/day, "
+            f"±{sig_day * math.sqrt(days_to_exp):.0f} pts to expiry.",
+            "P(NIFTY finishes ABOVE strike) — " + " / ".join(labels) + ":"]
+    for strike in sorted(ivs):
+        probs = " / ".join(f"{p_above(strike, d):.0%}" for d in horizons)
+        rows.append(f"  {strike:.0f}: {probs}")
+    rows.append("(Odds of TOUCHING a strike before a date are roughly double "
+                "the finish-above odds for OTM strikes. All numbers move with IV.)")
+    return "\n".join(rows)
 
 
 def ask(question: str, history: list[dict] | None = None) -> dict:
