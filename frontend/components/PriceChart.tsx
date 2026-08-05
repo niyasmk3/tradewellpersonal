@@ -65,6 +65,78 @@ function macd(values: number[], fast = 12, slow = 26, sig = 9) {
   return { line, signal, hist };
 }
 
+/** Bollinger Bands: SMA(period) ± mult·σ of closes. Display-only. */
+function bollinger(closes: number[], period = 20, mult = 2) {
+  const upper: (number | undefined)[] = [];
+  const mid: (number | undefined)[] = [];
+  const lower: (number | undefined)[] = [];
+  for (let i = 0; i < closes.length; i++) {
+    if (i < period - 1) {
+      upper.push(undefined);
+      mid.push(undefined);
+      lower.push(undefined);
+      continue;
+    }
+    const win = closes.slice(i - period + 1, i + 1);
+    const m = win.reduce((a, b) => a + b, 0) / period;
+    const sd = Math.sqrt(win.reduce((a, b) => a + (b - m) * (b - m), 0) / period);
+    mid.push(m);
+    upper.push(m + mult * sd);
+    lower.push(m - mult * sd);
+  }
+  return { upper, mid, lower };
+}
+
+/** ADX(14), Wilder smoothing — trend STRENGTH 0-100 (direction-blind).
+ *  Above ~25 = trending market; below ~20 = chop. Display-only. */
+function adxSeries(candles: Candle[], period = 14): (number | undefined)[] {
+  const n = candles.length;
+  const out: (number | undefined)[] = new Array(n).fill(undefined);
+  if (n < period + 2) return out;
+  const plusDM = [0];
+  const minusDM = [0];
+  const tr = [0];
+  for (let i = 1; i < n; i++) {
+    const up = candles[i].high - candles[i - 1].high;
+    const dn = candles[i - 1].low - candles[i].low;
+    plusDM.push(up > dn && up > 0 ? up : 0);
+    minusDM.push(dn > up && dn > 0 ? dn : 0);
+    tr.push(
+      Math.max(
+        candles[i].high - candles[i].low,
+        Math.abs(candles[i].high - candles[i - 1].close),
+        Math.abs(candles[i].low - candles[i - 1].close),
+      ),
+    );
+  }
+  let smTR = 0;
+  let smP = 0;
+  let smM = 0;
+  let adx: number | undefined;
+  const dxs: number[] = [];
+  for (let i = 1; i < n; i++) {
+    if (i <= period) {
+      smTR += tr[i];
+      smP += plusDM[i];
+      smM += minusDM[i];
+      if (i < period) continue;
+    } else {
+      smTR = smTR - smTR / period + tr[i];
+      smP = smP - smP / period + plusDM[i];
+      smM = smM - smM / period + minusDM[i];
+    }
+    const pdi = smTR > 0 ? (100 * smP) / smTR : 0;
+    const mdi = smTR > 0 ? (100 * smM) / smTR : 0;
+    const dx = pdi + mdi > 0 ? (100 * Math.abs(pdi - mdi)) / (pdi + mdi) : 0;
+    dxs.push(dx);
+    if (dxs.length === period) adx = dxs.reduce((a, b) => a + b, 0) / period;
+    else if (dxs.length > period && adx !== undefined)
+      adx = (adx * (period - 1) + dx) / period;
+    if (adx !== undefined) out[i] = adx;
+  }
+  return out;
+}
+
 type LineData = { time: UTCTimestamp; value: number }[];
 
 function line(candles: Candle[], series: (number | undefined)[]): LineData {
@@ -106,6 +178,13 @@ export function PriceChart({
   const macdRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdSigRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  // Bollinger (price pane) and ADX (own pane) — same off-by-default rule.
+  const [showBB, setShowBB] = useState(false);
+  const bbUpRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const bbMidRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const bbLoRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const [showAdx, setShowAdx] = useState(false);
+  const adxRef = useRef<ISeriesApi<"Line"> | null>(null);
   // Signature of the last payload pushed, so identical polls don't repaint.
   // Declared here (not beside the data effect) because chart creation must be
   // able to CLEAR it — see the reset in the creation effect below.
@@ -191,6 +270,60 @@ export function PriceChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showMacd]);
 
+  // Bollinger bands share the PRICE pane — three quiet slate lines that must
+  // never shout over the candles.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (showBB) {
+      const quiet = { lineWidth: 1 as const, priceLineVisible: false, lastValueVisible: false };
+      bbUpRef.current = chart.addSeries(LineSeries, { color: "#64748b", ...quiet });
+      bbLoRef.current = chart.addSeries(LineSeries, { color: "#64748b", ...quiet });
+      bbMidRef.current = chart.addSeries(LineSeries, { color: "rgba(100,116,139,0.55)", lineStyle: 2, ...quiet });
+      sigRef.current = "";               // force the next data push to repaint
+    } else {
+      for (const r of [bbUpRef, bbMidRef, bbLoRef]) {
+        if (r.current) {
+          try {
+            chart.removeSeries(r.current);
+          } catch {
+            /* already gone */
+          }
+          r.current = null;
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showBB]);
+
+  // ADX gets its own pane, below MACD's when both are on. Recreated when the
+  // MACD toggle changes so the pane index stays consistent.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (adxRef.current) {
+      try {
+        chart.removeSeries(adxRef.current);
+      } catch {
+        /* pane already gone */
+      }
+      adxRef.current = null;
+    }
+    if (showAdx) {
+      const s = chart.addSeries(
+        LineSeries,
+        { color: "#38bdf8", lineWidth: 1, priceLineVisible: false, lastValueVisible: true },
+        showMacd ? 2 : 1,
+      );
+      // The line traders actually use: ≥25 = trending, below = chop.
+      s.createPriceLine({ price: 25, color: "#4b5563", lineWidth: 1, lineStyle: 2,
+                          axisLabelVisible: false, title: "25 trend" });
+      adxRef.current = s;
+      sigRef.current = "";
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAdx, showMacd]);
+
   // Underlying invalidation levels as price lines. These are the ONLY position
   // levels in index points — the premium stop/targets belong to a different
   // scale entirely and would be meaningless drawn on a futures chart.
@@ -243,6 +376,16 @@ export function PriceChart({
     ema9Ref.current?.setData(line(candles, ema(closes, 9)));
     ema20Ref.current?.setData(line(candles, ema(closes, 20)));
 
+    if (bbUpRef.current) {
+      const b = bollinger(closes);
+      bbUpRef.current.setData(line(candles, b.upper));
+      bbMidRef.current?.setData(line(candles, b.mid));
+      bbLoRef.current?.setData(line(candles, b.lower));
+    }
+    if (adxRef.current) {
+      adxRef.current.setData(line(candles, adxSeries(candles)));
+    }
+
     if (macdRef.current) {
       const m = macd(closes);
       macdRef.current.setData(line(candles, m.line));
@@ -262,7 +405,7 @@ export function PriceChart({
           .filter(Boolean) as { time: UTCTimestamp; value: number; color: string }[],
       );
     }
-  }, [candles, showMacd]);
+  }, [candles, showMacd, showBB, showAdx]);
 
   return (
     <div className={`card relative flex flex-col overflow-hidden ${fill ? "h-full min-h-0" : ""}`}>
@@ -272,6 +415,28 @@ export function PriceChart({
           <span className="text-accent">VWAP</span>
           <span className="text-[#f5a623]">EMA9</span>
           <span className="text-[#a78bfa]">EMA20</span>
+          <button
+            onClick={() => setShowBB((v) => !v)}
+            title="Bollinger Bands (20-bar average ± 2 standard deviations). Price hugging the upper band = strong trend; bands squeezing tight = a breakout is loading. Display only."
+            className={`rounded border px-1.5 py-0.5 transition ${
+              showBB
+                ? "border-accent/60 bg-accent/15 text-accent"
+                : "border-edge bg-panel2 text-muted hover:text-white"
+            }`}
+          >
+            BB
+          </button>
+          <button
+            onClick={() => setShowAdx((v) => !v)}
+            title="ADX(14) — trend STRENGTH 0-100, direction-blind. Above the dashed 25 line = trending market (trust breakouts); below ~20 = chop (fade levels). Display only."
+            className={`rounded border px-1.5 py-0.5 transition ${
+              showAdx
+                ? "border-accent/60 bg-accent/15 text-accent"
+                : "border-edge bg-panel2 text-muted hover:text-white"
+            }`}
+          >
+            ADX
+          </button>
           <button
             onClick={() => setShowMacd((v) => !v)}
             title="MACD(12,26,9) on the near-month future — display only, not part of the signal score"
