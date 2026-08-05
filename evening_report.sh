@@ -27,4 +27,7 @@ mkdir -p "$OUT_DIR"
   "$PY" "$ROOT/recorder/nightly_learn.py" 2>&1
 } > "$OUT_DIR/$STAMP.txt"
 
+# One-page visual dashboard of everything above — bookmarkable.
+"$PY" "$ROOT/recorder/research_report.py" >> "$OUT_DIR/$STAMP.txt" 2>&1
+
 ln -sf "$OUT_DIR/$STAMP.txt" "$OUT_DIR/latest.txt"
