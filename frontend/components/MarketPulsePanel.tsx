@@ -1,6 +1,99 @@
 "use client";
 
-import { MarketPulse } from "@/lib/api";
+import { useRef, useState } from "react";
+import { MarketPulse, api } from "@/lib/api";
+
+type ChatMsg = { role: "user" | "assistant"; content: string };
+
+/** The ask-anything box: questions go to Claude WITH the live dashboard
+ *  context attached server-side, so answers are about this screen right now.
+ *  Explains only — the engine's gates stay the only signal source. */
+function PulseChat() {
+  const [open, setOpen] = useState(false);
+  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const send = async () => {
+    const question = q.trim();
+    if (!question || busy) return;
+    setBusy(true);
+    setErr(null);
+    setQ("");
+    const next: ChatMsg[] = [...msgs, { role: "user", content: question }];
+    setMsgs(next);
+    try {
+      const r = await api.marketChat(question, msgs.slice(-16));
+      setMsgs([...next, { role: "assistant", content: r.answer }]);
+      requestAnimationFrame(() =>
+        listRef.current?.scrollTo({ top: listRef.current.scrollHeight }));
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      setErr(/404/.test(m)
+        ? "The chat endpoint arrives with the next backend restart (⟳ button)."
+        : m);
+      setMsgs(msgs);                    // roll the unanswered question back
+      setQ(question);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 border-t border-edge/60 pt-1.5">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="text-[10px] uppercase tracking-wide text-muted transition hover:text-white"
+        title="Ask anything about what's on screen — the answer is grounded in the live dashboard state. Explains only; never a trade signal."
+      >
+        {open ? "▾ Ask about this market" : "▸ Ask about this market"}
+      </button>
+      {open && (
+        <div className="mt-1.5">
+          {msgs.length > 0 && (
+            <div ref={listRef} className="mb-1.5 flex max-h-48 flex-col gap-1.5 overflow-y-auto pr-1">
+              {msgs.map((m, i) => (
+                <div
+                  key={i}
+                  className={`rounded px-2 py-1 text-[11px] leading-relaxed ${
+                    m.role === "user"
+                      ? "self-end bg-accent/15 text-white/90"
+                      : "self-start bg-panel2 text-white/80"
+                  }`}
+                >
+                  {m.content}
+                </div>
+              ))}
+              {busy && <div className="self-start px-2 text-[11px] text-muted">thinking…</div>}
+            </div>
+          )}
+          {err && <p className="mb-1 text-[10px] text-yellow-400">{err}</p>}
+          <div className="flex gap-1.5">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && send()}
+              placeholder="e.g. why is the chart above the header price?"
+              className="min-w-0 flex-1 rounded border border-edge bg-panel2 px-2 py-1 text-[11px] text-white placeholder:text-muted focus:border-accent/60 focus:outline-none"
+            />
+            <button
+              onClick={send}
+              disabled={busy || !q.trim()}
+              className="rounded bg-accent/20 px-2.5 py-1 text-[11px] font-medium text-accent transition hover:bg-accent/30 disabled:opacity-40"
+            >
+              Ask
+            </button>
+          </div>
+          <p className="mt-1 text-[9px] leading-snug text-muted">
+            Grounded in the live screen · explains, never signals · not investment advice
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * Live tape analytics, sitting directly under the score card. The score says
@@ -96,6 +189,7 @@ export function MarketPulsePanel({ data, error }: { data: MarketPulse | null; er
           {d.story}
         </p>
       )}
+      <PulseChat />
     </div>
   );
 }

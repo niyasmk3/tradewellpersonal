@@ -884,4 +884,6 @@ export const api = {
   patternsAnalyze: () => postJSON<PatternsResults>("/patterns/analyze", {}),
   patternsLiveRead: () => getJSON<PatternsLiveRead>("/patterns/live-read"),
   levelAlerts: () => getJSON<LevelAlertsResponse>("/patterns/level-alerts"),
+  marketChat: (question: string, history: { role: string; content: string }[]) =>
+    postJSON<{ enabled: boolean; answer: string }>("/market/chat", { question, history }),
 };

@@ -290,6 +290,10 @@ class Settings(BaseSettings):
     # Claude model for sentiment classification. Opus is the default; set to
     # claude-haiku-4-5 for cheaper high-volume classification.
     news_model: str = Field(default="claude-opus-4-8", alias="NEWS_MODEL")
+    # The dashboard's ask-anything box (app/assistant.py). Haiku by default:
+    # explanation questions at chat cadence — cheap, fast, good enough; the
+    # news module keeps its own, bigger model for classification.
+    chat_model: str = Field(default="claude-haiku-4-5-20251001", alias="CHAT_MODEL")
     # Indian-market RSS feeds (comma-separated). Verified live & fresh 2026-07-19
     # across 3 publishers (ET, Livemint, BusinessLine). NOTE: Moneycontrol RSS is
     # ~2yr stale and Business Standard RSS is dead/blocked — both were removed.

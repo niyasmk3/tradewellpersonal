@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field as PydField
 
 from app.config import get_settings
 from app.market.candles import TIMEFRAME_SECONDS
@@ -14,6 +15,33 @@ from app.state import market_state
 from app.api.ws import build_snapshot
 
 router = APIRouter(prefix="/market", tags=["market"])
+
+
+class ChatRequest(BaseModel):
+    question: str = PydField(min_length=1, max_length=1000)
+    # Prior turns the client replays so follow-ups keep their thread.
+    history: list[dict] = PydField(default_factory=list, max_length=20)
+
+
+@router.post("/chat")
+async def market_chat(req: ChatRequest) -> dict:
+    """The dashboard's ask-anything box: Claude grounded in the live screen
+    (app/assistant.py). Blocking API call — offloaded off the event loop."""
+    import asyncio
+
+    from app import assistant
+
+    try:
+        return await asyncio.to_thread(assistant.ask, req.question, req.history)
+    except Exception as exc:
+        log_chat_error(exc)
+        raise HTTPException(status_code=502, detail=f"Chat failed: {exc}")
+
+
+def log_chat_error(exc: Exception) -> None:
+    import logging
+
+    logging.getLogger("tradewell.assistant").warning("chat failed: %s", exc)
 
 
 def _require_symbol(symbol: str):
