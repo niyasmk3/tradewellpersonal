@@ -19,6 +19,12 @@ mkdir -p "$OUT_DIR"
   "$PY" "$ROOT/recorder/dataset.py" 2>&1
   echo
   "$PY" "$ROOT/recorder/analyze.py" 2>&1
+  echo
+  echo "=== NSE archives (participant OI + option EOD) ==================="
+  "$PY" "$ROOT/recorder/nse_daily.py" 2>&1
+  echo
+  echo "=== Nightly learning pass ========================================"
+  "$PY" "$ROOT/recorder/nightly_learn.py" 2>&1
 } > "$OUT_DIR/$STAMP.txt"
 
 ln -sf "$OUT_DIR/$STAMP.txt" "$OUT_DIR/latest.txt"
