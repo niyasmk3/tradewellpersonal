@@ -276,6 +276,19 @@ class Settings(BaseSettings):
     # fill running the OPPOSITE stop basis, so the choice gets the same
     # 30-diverged-fill discipline as the exit-policy A/B. Costs nothing live.
     stop_ab_paired: bool = Field(default=True, alias="STOP_AB_PAIRED")
+    # STOP-CALIBRATION SHADOW (05-Aug). T1 already self-tunes from the paper
+    # book's MFE distribution; this is the stop's mirror — at 30+ clean
+    # intraday fills a calibrated SL%% is fitted from where WINNERS bottomed
+    # (MAE P90 + buffer), and every clean intraday fill books a twin identical
+    # except that one stop level. The stop_calib ledger pairs them; the live
+    # ladder never moves until that ledger wins at 30+ diverged pairs.
+    stop_calib_shadow: bool = Field(default=True, alias="STOP_CALIB_SHADOW")
+    # --- Post-close ops (05-Aug) ---
+    # Nightly state tarball (paper book, journals, archives, .env, patterns
+    # candles) into this folder — point it at an iCloud-synced path and any
+    # laptop becomes disposable. Empty = backup off.
+    state_backup_dir: str = Field(default="", alias="STATE_BACKUP_DIR")
+    state_backup_keep: int = Field(default=14, ge=1, alias="STATE_BACKUP_KEEP")
     rr_target1: float = Field(default=1.5, alias="RR_TARGET1")
     rr_target2: float = Field(default=2.5, alias="RR_TARGET2")
     # Strike liquidity guards

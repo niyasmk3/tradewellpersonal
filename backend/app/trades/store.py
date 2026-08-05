@@ -336,6 +336,24 @@ class TradeStore:
 
         return self._apply(tid, fn)
 
+    def set_stop(self, tid: str, stop_loss: float, note: str) -> Trade | None:
+        """Re-anchor an open row's stop AND trailing floor to `stop_loss`.
+
+        Exists for the stop-calibration paper twin (05-Aug), which must carry
+        a calibrated stop that may sit LOOSER than the ladder's static one —
+        update() deliberately ratchets trailing_sl upward only (max()), which
+        is right for a live position and wrong for re-basing a just-created
+        counterfactual. Not wired to any UI.
+        """
+        def fn(t: Trade) -> None:
+            if t.status not in _OPEN:
+                return  # a finalized journal record must not be edited
+            t.stop_loss = stop_loss
+            t.trailing_sl = stop_loss
+            t.events.append(TradeEvent(ts=_now(), kind="updated", note=note))
+
+        return self._apply(tid, fn)
+
     def auto_close(
         self, tid: str, exit_premium: float, reason: str,
         price_source: str = "estimated",

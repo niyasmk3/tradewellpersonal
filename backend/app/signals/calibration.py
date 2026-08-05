@@ -65,6 +65,75 @@ def _p75_mfe_pct(trades) -> float | None:
     return samples[idx]
 
 
+_SL_CLAMP_LO, _SL_CLAMP_HI = 0.10, 0.25
+_SL_BUFFER = 0.03           # the stop sits BELOW the survival line, not on it
+_SL_MIN_WINNERS = 10        # a P90 of 3 winners is noise wearing a percentile
+
+_sl_cache: dict = {"at": 0.0, "value": None}
+
+
+def _winner_mae_sl_pct(trades) -> float | None:
+    """Calibrated intraday premium-SL fraction from where WINNERS bottomed.
+
+    The stop's job is to cut losers without amputating winners. The measurable
+    half of that is the second: the P90 of winners' MAE%% (how far below entry
+    eventual gross winners dipped before running) is the line 90%% of winners
+    never crossed — a stop a buffer below it keeps those winners while any
+    tighter placement provably amputates them. Same clean-sample discipline as
+    the T1 calibrator: honest era, non-hollow, exited, excursion tracking from
+    entry. Needs the T1 gate's >=30 clean fills overall AND >=10 winners with
+    MAE data, else None and the static stop stands.
+    """
+    from app.paper.service import HONEST_FILLS_FROM, is_hollow_row
+
+    total = 0
+    winner_maes = []
+    for t in trades:
+        if t.mode.value != "intraday":
+            continue
+        if t.status.value != "exited" or not t.entry_premium or not t.exit_premium:
+            continue
+        if t.entered_at < HONEST_FILLS_FROM or is_hollow_row(t):
+            continue
+        if t.excursion_from is None or t.excursion_from - t.entered_at > 30:
+            continue
+        total += 1
+        if t.exit_premium > t.entry_premium and t.mae_premium is not None:
+            winner_maes.append(
+                max(0.0, (t.entry_premium - t.mae_premium) / t.entry_premium))
+    if total < _MIN_SAMPLES or len(winner_maes) < _SL_MIN_WINNERS:
+        return None
+    winner_maes.sort()
+    p90 = winner_maes[int(0.90 * (len(winner_maes) - 1))]
+    return max(_SL_CLAMP_LO, min(_SL_CLAMP_HI, p90 + _SL_BUFFER))
+
+
+def intraday_sl_pct(cfg) -> float | None:
+    """Calibrated intraday premium-SL fraction, or None to keep the static stop.
+
+    SHADOW-ONLY BY DESIGN (05-Aug): the sole consumer is the paper book's
+    stop-calibration twin (paper.service.consider), which books a counter-
+    factual fill with ONLY the stop moved. The live ladder never reads this —
+    it changes only if the stop_calib ledger wins at 30+ diverged pairs, and
+    by a human flipping the knob, not by this function.
+    """
+    try:
+        if not getattr(cfg, "stop_calib_shadow", False):
+            return None
+        now = time.time()
+        if now - _sl_cache["at"] < _CACHE_S:
+            return _sl_cache["value"]
+        from app.services import feed
+
+        store = getattr(feed, "paper_store", None)
+        val = _winner_mae_sl_pct(store.all()) if store is not None else None
+        _sl_cache["at"], _sl_cache["value"] = now, val
+        return val
+    except Exception:  # calibration must never stop a fill
+        log.debug("SL calibration failed — static stop stands", exc_info=True)
+        return None
+
+
 def intraday_rr1(profile, cfg) -> float | None:
     """rr1 override for the intraday profile, or None to keep the static plan.
 

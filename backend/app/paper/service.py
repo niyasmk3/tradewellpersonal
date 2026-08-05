@@ -70,7 +70,7 @@ def shadow_class(x) -> str | None:
     """Which counterfactual ledger a row/card belongs to: "late" (14:15-cutoff
     hypothesis), "refire" (re-fire-guard hypothesis, 03-Aug), "floor"
     (participation-floor hypothesis), "stopb" (the stop-basis A/B twin,
-    audit P1-5), or None (clean).
+    audit P1-5), "stopc" (the stop-calibration twin, 05-Aug), or None (clean).
 
     Works on a Trade (notes tag) or a SignalCard (hollow_reason). The classes
     must stay independent EVERYWHERE — including the paper capacity buckets:
@@ -87,6 +87,8 @@ def shadow_class(x) -> str | None:
             return "refire"
         if notes.startswith("hollow: stopb:"):
             return "stopb"
+        if notes.startswith("hollow: stopc:"):
+            return "stopc"
         if notes.startswith("hollow: setup:"):
             return "setup"
         return "floor"
@@ -98,6 +100,8 @@ def shadow_class(x) -> str | None:
             return "refire"
         if reason.startswith("stopb:"):
             return "stopb"
+        if reason.startswith("stopc:"):
+            return "stopc"
         if reason.startswith("setup:"):
             return "setup"
         return "floor"
@@ -328,6 +332,52 @@ class PaperTradingService:
             except Exception:
                 log.warning("paper: stop-A/B twin failed for %s — pair skipped",
                             card.contract, exc_info=True)
+
+        # STOP-CALIBRATION TWIN (05-Aug). T1 already self-tunes from winners'
+        # MFE; the stop is calibrated the same way (winners' MAE P90 + buffer,
+        # signals.calibration.intraday_sl_pct) but goes NOWHERE NEAR the live
+        # ladder — every clean intraday fill books a twin whose stop is moved
+        # to the calibrated level AFTER creation (set_stop), so entry, targets
+        # and exit policy stay identical and the pair isolates the one moved
+        # variable. price_ladder derives T1/T2 FROM sl_pct, which is why the
+        # twin cannot simply be created with the calibrated sl_pct — that
+        # would move the targets too and confound the A/B. Same notes channel,
+        # same capacity exemption, same never-undo-the-clean-fill rule as the
+        # stopb twin. None until the book has 30+ clean intraday fills.
+        # PREMIUM-PRIMARY ONLY (review catch, 05-Aug): under underlying-
+        # primary the monitor's disaster-backstop branch takes exit priority
+        # and never consults stop_loss — both arms would exit at the same
+        # backstop, pairs would never diverge, and the ledger would grade
+        # noise while looking busy. A premium-SL calibration is only testable
+        # where the premium SL actually decides exits, so the ledger PAUSES
+        # (books nothing) if STOP_PRIMARY ever flips to underlying.
+        if (not card_hollow and card.mode.value == "intraday"
+                and getattr(self.cfg, "stop_calib_shadow", False)
+                and not (self.cfg.stop_primary == "underlying"
+                         and self.cfg.trading_capital > 0)):
+            from app.signals import calibration
+
+            calib = calibration.intraday_sl_pct(self.cfg)
+            if calib is not None and sl_pct is not None and abs(calib - sl_pct) >= 0.005:
+                try:
+                    tw = self.store.create_from_signal(
+                        card, lots, fill, lot, product=None,
+                        disaster_pct=None,   # premium-stop semantics, both arms
+                        quick_pct=self.cfg.quick_target_pct or None,
+                        sl_pct=sl_pct, rr1=rr1, rr2=rr2,
+                        notes=(f"hollow: stopc: calibrated {calib:.0%} vs static "
+                               f"{sl_pct:.0%} — stop-calibration twin (only the "
+                               "stop differs)"),
+                    )
+                    self.store.set_stop(
+                        tw.id, round(fill * (1 - calib), 2),
+                        f"Calibrated stop {calib:.0%} applied (static {sl_pct:.0%})")
+                    log.info("paper: stop-calibration twin booked for %s "
+                             "(SL %.0f%% vs %.0f%%)",
+                             card.contract, calib * 100, sl_pct * 100)
+                except Exception:
+                    log.warning("paper: stop-calibration twin failed for %s — "
+                                "pair skipped", card.contract, exc_info=True)
         return t
 
     # ---- exit --------------------------------------------------------------
@@ -421,6 +471,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     late_rows = []
     refire_rows = []
     stopb_rows = []
+    stopc_rows = []
     setup_rows = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
@@ -428,12 +479,12 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         deployed = t.entry_premium * qty
         honest = t.entered_at >= HONEST_FILLS_FROM
         hollow = is_hollow_row(t)
-        # Four shadow ledgers, one tag channel: "hollow: late: ..." rows test
+        # The shadow ledgers, one tag channel: "hollow: late: ..." rows test
         # the 14:15 cutoff hypothesis, "hollow: refire: ..." rows test the
-        # re-fire guard, "hollow: stopb: ..." rows are the stop-basis A/B
-        # twins (paired below, never aggregated alone), plain "hollow: ..."
-        # rows test the volume/OI participation floor. Each verdict block
-        # must stay pure.
+        # re-fire guard, "hollow: stopb: ..." / "hollow: stopc: ..." rows are
+        # the stop-basis and stop-calibration twins (paired below, never
+        # aggregated alone), plain "hollow: ..." rows test the volume/OI
+        # participation floor. Each verdict block must stay pure.
         cls = shadow_class(t)
         row = {
             "id": t.id, "contract": t.contract, "direction": t.direction.value,
@@ -464,6 +515,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         (late_rows if (honest and cls == "late")
          else refire_rows if (honest and cls == "refire")
          else stopb_rows if (honest and cls == "stopb")
+         else stopc_rows if (honest and cls == "stopc")
          else setup_rows if (honest and cls == "setup")
          else hollow_rows if (honest and hollow)
          else rows if honest else inflated).append(row)
@@ -632,6 +684,72 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
                                    / n_pairs, 1) if n_pairs else 0.0)},
             "delta_net": delta,
             "verdict": verdict,
+        }
+
+    # ---- STOP-CALIBRATION PAIRED A/B (05-Aug) -------------------------------
+    # Twins booked by consider() with ONLY the stop moved to the MAE-derived
+    # calibrated level (see signals.calibration.intraday_sl_pct). Same pairing
+    # discipline as stop_ab: by signal id, verdict at 30+ DIVERGED pairs, and
+    # the live ladder does not move until this block says so — to a human.
+    stopc_closed = [t for t in closed if shadow_class(t) == "stopc"
+                    and t.entered_at >= HONEST_FILLS_FROM and t.signal_id]
+    ctwin_by_signal = {}
+    for t in stopc_closed:
+        ctwin_by_signal.setdefault(t.signal_id, t)
+    stop_calib = None
+    calib_pairs = []
+    for c in closed:
+        if shadow_class(c) is not None or c.entered_at < HONEST_FILLS_FROM:
+            continue
+        tw = ctwin_by_signal.get(c.signal_id) if c.signal_id else None
+        if tw is None:
+            continue
+        s_net = chg.net_pnl(c.entry_premium, c.exit_premium,
+                            c.initial_quantity or c.quantity)
+        c_net = chg.net_pnl(tw.entry_premium, tw.exit_premium,
+                            tw.initial_quantity or tw.quantity)
+        calib_pairs.append({
+            "static": s_net, "calibrated": c_net,
+            "diverged": (c.auto_close_reason != tw.auto_close_reason
+                         or abs((c.exit_premium or 0.0) - (tw.exit_premium or 0.0)) > 0.01),
+        })
+    calib_settled = {t.signal_id for t in stopc_closed
+                     if any(c.signal_id == t.signal_id and shadow_class(c) is None
+                            for c in closed)}
+    calib_twin_ids = {t.signal_id for t in store.all()
+                      if shadow_class(t) == "stopc" and t.signal_id
+                      and t.entered_at >= HONEST_FILLS_FROM}
+    calib_pending = len(calib_twin_ids - calib_settled)
+    if calib_pairs or calib_pending:
+        n_cp, n_cdiv = len(calib_pairs), sum(1 for p in calib_pairs if p["diverged"])
+        s_tot = round(sum(p["static"] for p in calib_pairs), 2)
+        c_tot = round(sum(p["calibrated"] for p in calib_pairs), 2)
+        cdelta = round(c_tot - s_tot, 2)
+        if not calib_pairs:
+            cverdict = "First pair(s) still open — a pair settles when both arms close."
+        elif n_cdiv < 30:
+            cverdict = f"{n_cdiv} diverged pair(s) — evidence gathering."
+        elif cdelta > 0:
+            cverdict = ("Calibrated stop wins this sample — consider adopting it "
+                        "in the intraday ladder.")
+        elif cdelta < 0:
+            cverdict = "Static stop wins this sample — keep the ladder as is."
+        else:
+            cverdict = "Dead heat on this sample."
+        stop_calib = {
+            "n": n_cp, "n_diverged": n_cdiv, "pending": calib_pending,
+            "static_stop": {
+                "net_pnl": s_tot,
+                "expectancy": round(s_tot / n_cp, 2) if n_cp else 0.0,
+                "win_rate": (round(100 * sum(1 for p in calib_pairs if p["static"] > 0)
+                                   / n_cp, 1) if n_cp else 0.0)},
+            "calibrated_stop": {
+                "net_pnl": c_tot,
+                "expectancy": round(c_tot / n_cp, 2) if n_cp else 0.0,
+                "win_rate": (round(100 * sum(1 for p in calib_pairs if p["calibrated"] > 0)
+                                   / n_cp, 1) if n_cp else 0.0)},
+            "delta_net": cdelta,
+            "verdict": cverdict,
         }
 
     # ---- THE OVERNIGHT-HOLD LEDGER (positional) -----------------------------
@@ -850,6 +968,10 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         # premium stop vs underlying-invalidation-with-disaster-backstop.
         # None until the first twin books.
         "stop_ab": stop_ab,
+        # THE STOP-CALIBRATION A/B (05-Aug, see the block above): same trades,
+        # static 18% stop vs the winners'-MAE-derived stop. None until the
+        # book reaches 30 clean intraday fills and the first twin books.
+        "stop_calib": stop_calib,
         # THE OVERNIGHT-HOLD LEDGER (see the block above): did holding a
         # positional thesis through the close pay, and did the late-day
         # entries — the deliberate gap bets — pay more? None until the first
@@ -863,5 +985,6 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         # AFTER the +5% lock ended a trade at breakeven — the lock's scoreboard.
         "derisk_aftermath": derisk_aftermath,
         # Shadow and inflated rows LAST, visibly flagged — context, not evidence.
-        "rows": rows + hollow_rows + late_rows + refire_rows + setup_rows + stopb_rows + inflated,
+        "rows": (rows + hollow_rows + late_rows + refire_rows + setup_rows
+                 + stopb_rows + stopc_rows + inflated),
     }

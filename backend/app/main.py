@@ -69,6 +69,12 @@ async def lifespan(app: FastAPI):
     from app.watchdog import watchdog_loop
 
     watchdog = asyncio.create_task(watchdog_loop())
+    # Post-close ops (state backup + verdict watch) live in-process because
+    # macOS TCC blocks launchd from this repo's ~/Documents home — the engine
+    # is the only scheduler with reliable access to its own state files.
+    from app.ops import ops_loop
+
+    ops = asyncio.create_task(ops_loop())
 
     # If a valid access token was supplied via .env, start the feed immediately.
     if kite_service.is_authenticated:
@@ -84,6 +90,7 @@ async def lifespan(app: FastAPI):
     broadcaster.cancel()
     supervisor.cancel()
     watchdog.cancel()
+    ops.cancel()
     await feed.stop()
 
 
