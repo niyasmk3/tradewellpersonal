@@ -412,6 +412,7 @@ hollow_store = SignalStore(store_path=_STORE_PATH.with_name(".hollow_signals.jso
 late_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".late_signals.json"))
 refire_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".refire_signals.json"))
 setup_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".setup_signals.json"))
+confirm_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".confirm_signals.json"))
 
 # Shadow cards get their OWN append-only archive (04-Aug find: the four shadow
 # stores are day-scoped and had archive=None, so 7 of the day's 10 cards left
@@ -419,7 +420,8 @@ setup_shadow_store = SignalStore(store_path=_STORE_PATH.with_name(".setup_signal
 # at every restart). Separate file on purpose: consumers of the live archive
 # (history tab, report cards) must never see counterfactual cards.
 from app.signals.archive import shadow_signal_archive as _shadow_archive  # noqa: E402
-for _s in (hollow_store, late_shadow_store, refire_shadow_store, setup_shadow_store):
+for _s in (hollow_store, late_shadow_store, refire_shadow_store, setup_shadow_store,
+           confirm_shadow_store):
     _s.archive = _shadow_archive
 
 
@@ -436,4 +438,6 @@ def shadow_store_for(tag: str) -> SignalStore:
         return refire_shadow_store
     if tag.startswith("setup:"):
         return setup_shadow_store
+    if tag.startswith("confirm:"):
+        return confirm_shadow_store
     return hollow_store

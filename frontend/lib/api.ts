@@ -415,7 +415,7 @@ export interface PaperRow {
   hollow?: boolean;
   /** Which shadow ledger a hollow row belongs to: the participation-floor
       hypothesis, the 14:15 late-cutoff hypothesis, or the stop-basis A/B twin. */
-  shadow_class?: "floor" | "late" | "refire" | "stopb" | "setup" | null;
+  shadow_class?: "floor" | "late" | "refire" | "stopb" | "stopc" | "setup" | "confirm" | null;
   /** Which setup detector booked this row (setup-class rows only). */
   setup?: string;
   mode?: string;
@@ -445,6 +445,9 @@ export interface PaperSummary {
   /** The re-fire guard's hypothesis ledger: fills of cards the guard refused.
       Positive expectancy at 30+ fills shortens or retires the guard. */
   refire_shadow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
+  /** WATCH->CONFIRM ledger (P2-3): fills of first-gate-bar cards the
+      persistence gate refused. Negative = the gate earns its keep. */
+  confirm_shadow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
   /** Setup detectors' ledger (P1-4): structural candidates the score engine
       cannot see, per-setup verdicts at 30+ fills each. */
   setup_shadow?: {

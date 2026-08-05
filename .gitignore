@@ -26,6 +26,7 @@ venv/
 .late_signals.json
 .refire_signals.json
 .setup_signals.json
+.confirm_signals.json
 .level_alerts.json
 .eval_trace.jsonl
 .news_seen.json

@@ -91,6 +91,8 @@ def shadow_class(x) -> str | None:
             return "stopc"
         if notes.startswith("hollow: setup:"):
             return "setup"
+        if notes.startswith("hollow: confirm:"):
+            return "confirm"
         return "floor"
     reason = getattr(x, "hollow_reason", None)
     if reason:
@@ -104,6 +106,8 @@ def shadow_class(x) -> str | None:
             return "stopc"
         if reason.startswith("setup:"):
             return "setup"
+        if reason.startswith("confirm:"):
+            return "confirm"
         return "floor"
     return None
 
@@ -473,6 +477,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     stopb_rows = []
     stopc_rows = []
     setup_rows = []
+    confirm_rows = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
         net = chg.net_pnl(t.entry_premium, t.exit_premium, qty)
@@ -517,6 +522,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
          else stopb_rows if (honest and cls == "stopb")
          else stopc_rows if (honest and cls == "stopc")
          else setup_rows if (honest and cls == "setup")
+         else confirm_rows if (honest and cls == "confirm")
          else hollow_rows if (honest and hollow)
          else rows if honest else inflated).append(row)
     wins = [r for r in rows if r["net_pnl"] > 0]
@@ -531,6 +537,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     open_late = [t for t in open_all if shadow_class(t) == "late"]
     open_refire = [t for t in open_all if shadow_class(t) == "refire"]
     open_setup = [t for t in open_all if shadow_class(t) == "setup"]
+    open_confirm = [t for t in open_all if shadow_class(t) == "confirm"]
     open_hollow = [t for t in open_all if shadow_class(t) == "floor"]
     open_clean = [t for t in open_all if shadow_class(t) is None]
 
@@ -962,6 +969,20 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
                 ) if g
             },
         } if (setup_rows or open_setup) else None,
+        # THE WATCH->CONFIRM LEDGER (audit P2-3, sized 05-Aug): fills of
+        # first-gate-bar cards the persistence gate refused. The 60d replay
+        # priced this class at -0.41R / 30% WR; if THIS ledger's premium
+        # truth stays negative the gate earns its keep, positive at 30+
+        # fills means loosen it. None until the first confirm fill.
+        "confirm_shadow": {
+            "trades": len(confirm_rows),
+            "open": len(open_confirm),
+            "net_pnl": round(sum(r["net_pnl"] for r in confirm_rows), 2),
+            "expectancy": (round(sum(r["net_pnl"] for r in confirm_rows) / len(confirm_rows), 2)
+                           if confirm_rows else 0.0),
+            "win_rate": (round(100 * sum(1 for r in confirm_rows if r["net_pnl"] > 0)
+                               / len(confirm_rows), 1) if confirm_rows else 0.0),
+        } if (confirm_rows or open_confirm) else None,
         # THE EXIT-POLICY A/B (see the block above): same trades, two exits.
         "exit_ab": exit_ab,
         # THE STOP-BASIS A/B (audit P1-5, see the block above): same trades,
@@ -986,5 +1007,5 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
         "derisk_aftermath": derisk_aftermath,
         # Shadow and inflated rows LAST, visibly flagged — context, not evidence.
         "rows": (rows + hollow_rows + late_rows + refire_rows + setup_rows
-                 + stopb_rows + stopc_rows + inflated),
+                 + confirm_rows + stopb_rows + stopc_rows + inflated),
     }

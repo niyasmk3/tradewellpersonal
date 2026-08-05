@@ -151,6 +151,7 @@ def verdict_events(summary: dict, announced: set) -> list[dict]:
         ("floor_30", "hollow", "participation floor", "SIGNAL_MIN_VOLUME/OI_SCORE"),
         ("late_30", "late_shadow", "14:15 cutoff", "SIGNAL_ENTRY_CUTOFF_IST"),
         ("refire_30", "refire_shadow", "re-fire guard", "SIGNAL_REFIRE_GUARD_S"),
+        ("confirm_30", "confirm_shadow", "WATCH->CONFIRM gate", "SIGNAL_CONFIRM_BARS"),
     ):
         b = summary.get(block) or {}
         if b.get("trades", 0) >= 30:

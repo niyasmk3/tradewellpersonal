@@ -474,6 +474,7 @@ class FeedController:
             try:
                 if self.paper is not None:
                     from app.signals.store import (
+                        confirm_shadow_store,
                         hollow_store,
                         late_shadow_store,
                         refire_shadow_store,
@@ -491,6 +492,7 @@ class FeedController:
                     self.paper.scan(late_shadow_store)
                     self.paper.scan(refire_shadow_store)
                     self.paper.scan(setup_shadow_store)
+                    self.paper.scan(confirm_shadow_store)
                     self.paper.run_once()
             except Exception as exc:  # pragma: no cover
                 log.warning("paper loop error: %s", exc)

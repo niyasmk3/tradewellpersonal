@@ -80,6 +80,11 @@ def _resp(card, at):
 
 def _svc(**over):
     svc = SignalService.__new__(SignalService)
+    # SIGNAL_CONFIRM_BARS=0: these tests exercise the re-fire hypothesis IN
+    # ISOLATION; with the WATCH->CONFIRM gate (05-Aug) enabled, a fixture
+    # card with no tracked gate-run would be confounded by the confirm veto
+    # and every "refire alone" assertion would silently test the wrong thing.
+    over.setdefault("SIGNAL_CONFIRM_BARS", 0)
     svc.cfg = Settings(_env_file=None, SIGNAL_POST_GAP_QUIET_S=0, **over)
     svc.state = object()
     return svc

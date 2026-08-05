@@ -174,6 +174,22 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* WATCH->CONFIRM (P2-3): first-gate-bar cards the persistence gate
+          refused. Sized 05-Aug: one-bar flickers were -0.41R at 30% WR. */}
+      {data.confirm_shadow && (
+        <div className="mt-2 rounded bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300">
+          WATCH-gate counterfactual (first-bar cards): {data.confirm_shadow.trades} closed
+          {data.confirm_shadow.open ? ` (+${data.confirm_shadow.open} open)` : ""}, net ₹
+          {signed(data.confirm_shadow.net_pnl, 0)} (₹{signed(data.confirm_shadow.expectancy, 0)}/trade,{" "}
+          {data.confirm_shadow.win_rate}% wins).{" "}
+          {data.confirm_shadow.trades < 30
+            ? `Verdict at 30+ fills — ${30 - data.confirm_shadow.trades} to go (replay priced this class at -0.41R).`
+            : data.confirm_shadow.expectancy > 0
+              ? "Positive at sample size: the confirm gate is costing money — loosen it."
+              : "Negative at sample size: the confirm gate is earning its keep."}
+        </div>
+      )}
+
       {/* The +5% early-derisk lock's scoreboard: after each breakeven
           lock-out, did the premium crash (lock saved us) or run (lock cost
           us)? Same-session window — a floor on both sides, not the full
@@ -269,7 +285,9 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                             ? "bg-teal-500/15 text-teal-300"
                             : r.shadow_class === "setup"
                               ? "bg-indigo-500/15 text-indigo-300"
-                              : "bg-purple-500/15 text-purple-300"
+                              : r.shadow_class === "confirm"
+                                ? "bg-fuchsia-500/15 text-fuchsia-300"
+                                : "bg-purple-500/15 text-purple-300"
                     }`}
                     title={
                       r.shadow_class === "late"
@@ -280,7 +298,9 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                             ? "Stop-basis A/B twin: the same fill run under the OTHER stop basis. Graded only against its paired clean row — not counted in any aggregate above."
                             : r.shadow_class === "setup"
                               ? "Setup-detector candidate (P1-4): a structural setup the score engine cannot see, paper-only until its own 30-fill verdict. Not counted in any aggregate above."
-                              : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
+                              : r.shadow_class === "confirm"
+                                ? "Counterfactual: this card fired on its FIRST bar above the gate and the WATCH->CONFIRM persistence gate refused it — paper takes it anyway so the gate stays auditable. Not counted in any aggregate above."
+                                : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
                     }
                   >
                     {r.shadow_class === "late"
@@ -291,7 +311,9 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                           ? "stop A/B"
                           : r.shadow_class === "setup"
                             ? (r.setup ?? "setup").replace(/_/g, " ")
-                            : "hollow"}
+                            : r.shadow_class === "confirm"
+                              ? "watch"
+                              : "hollow"}
                   </span>
                 )}
                 {r.era?.startsWith("inflated") && (

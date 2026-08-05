@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     # Per-level re-fire spacing; the edge trigger + re-arm band do the fine
     # de-bouncing, this stops a level camped on all afternoon from repeating.
     level_alert_cooldown_s: int = Field(default=1800, ge=0, alias="LEVEL_ALERT_COOLDOWN_S")
+    # WATCH->CONFIRM persistence (audit P2-3, sized 05-Aug): a card may only
+    # issue once its direction's score has held the gate for this many
+    # CONSECUTIVE closed bars. The 60d replay: 58% of gate-crossings last
+    # exactly one bar and lose -0.41R at 30% WR (the 05-Aug 11:03 card's
+    # class); persistent episodes are the engine's only positive class.
+    # First-bar cards are shadow-booked to their own "confirm" ledger.
+    # 0 or 1 disables. Intraday/scalp only — positional's 15m bars are slow.
+    signal_confirm_bars: int = Field(default=2, ge=0, alias="SIGNAL_CONFIRM_BARS")
     # Blind-spot instrumentation (audit P1-2): one JSONL line per closed bar
     # per mode with both directions' scores, the regime vote and any veto —
     # the dataset that classifies missed moves (36/41 had NO candidate; 27 of

@@ -404,9 +404,67 @@ class SignalService:
             log.debug("hollow veto failed", exc_info=True)
         return None
 
+    def _track_gate_runs(self, symbol: str, profile, df, fresh, now: int) -> None:
+        """Per-bar persistence bookkeeping for the WATCH->CONFIRM gate: how
+        many CONSECUTIVE closed bars each direction's score has held the
+        mode's gate. Updated once per new closed bar (the 5s re-evals of the
+        same bar must not inflate the run). In-memory only — a restart
+        forgets runs, costing at most one extra confirm bar afterwards."""
+        try:
+            if df is None or not len(df):
+                return
+            bar = int(df["ts"].iloc[-1])
+            secs = TIMEFRAME_SECONDS.get(profile.timeframe, 180)
+            if bar + secs > now:
+                return                    # forming bar — closed bars only
+            runs = getattr(self, "_gate_runs", None)
+            if runs is None:
+                runs = self._gate_runs = {}
+            key = (symbol.upper(), profile.mode.value)
+            prev = runs.get(key)
+            gate = profile.score_valid
+            ce_pass = fresh.status.bull_score >= gate
+            pe_pass = fresh.status.bear_score >= gate
+            if prev is not None and prev["bar"] == bar:
+                return                    # same bar re-eval: keep the record
+            contiguous = prev is not None and prev["bar"] == bar - secs
+            runs[key] = {
+                "bar": bar,
+                "CE": (prev["CE"] + 1 if contiguous and ce_pass and prev["CE"] > 0
+                       else (1 if ce_pass else 0)),
+                "PE": (prev["PE"] + 1 if contiguous and pe_pass and prev["PE"] > 0
+                       else (1 if pe_pass else 0)),
+            }
+        except Exception:
+            log.debug("gate-run tracking failed", exc_info=True)
+
+    def _confirm_veto(self, fresh: SignalResponse) -> str | None:
+        """WATCH->CONFIRM (audit P2-3, sized 05-Aug): a card whose direction
+        has held the gate for fewer than SIGNAL_CONFIRM_BARS consecutive
+        closed bars is a WATCH, not an offer. The 60d replay: one-bar
+        flickers are 58% of crossings and lose -0.41R at 30% WR (the 05-Aug
+        11:03 card's exact class); persistent episodes are the engine's only
+        positive class. Intraday/scalp only — positional's 15m frame moves
+        too slowly for flicker to be the failure mode."""
+        need = int(getattr(self.cfg, "signal_confirm_bars", 0) or 0)
+        if need <= 1 or fresh.signal is None:
+            return None
+        if fresh.mode.value not in ("intraday", "scalp"):
+            return None
+        runs = getattr(self, "_gate_runs", None) or {}
+        rec = runs.get((fresh.symbol.upper(), fresh.mode.value))
+        run = rec.get(fresh.signal.direction.value, 0) if rec else 0
+        if run >= need:
+            return None
+        return (f"WATCH — first bar above the gate; needs {need} consecutive "
+                f"closed bars to CONFIRM (has {max(run, 1)}). One-bar spikes "
+                "lost -0.41R over 60 days; persistence is the only class "
+                "that measured positive.")
+
     def _hypothesis_veto(self, fresh: SignalResponse, now: int) -> tuple:
-        """Resolve the three MEASURED-HYPOTHESIS vetoes — participation floor,
-        re-fire guard, late cutoff — into (veto_text, shadow_tag).
+        """Resolve the four MEASURED-HYPOTHESIS vetoes — participation floor,
+        re-fire guard, late cutoff, WATCH->CONFIRM — into
+        (veto_text, shadow_tag).
 
         Each of these gates is a live bet that refusing the card is the right
         call, and each keeps its own counterfactual ledger (floor / refire /
@@ -426,7 +484,8 @@ class SignalService:
         floor = self._hollow_veto(fresh.signal)
         refire = self._refire_veto(fresh.signal, now)
         late = self._late_cutoff_veto(fresh, now)
-        hits = [h for h in (floor, refire, late) if h]
+        confirm = self._confirm_veto(fresh)
+        hits = [h for h in (floor, refire, late, confirm) if h]
         if not hits:
             return None, None
         if len(hits) > 1:
@@ -436,6 +495,8 @@ class SignalService:
                 extras.append("under the re-fire guard")
             if late and lead is not late:
                 extras.append("past the entry cutoff")
+            if confirm and lead is not confirm:
+                extras.append("unconfirmed (first gate bar)")
             return lead + " (also " + " and ".join(extras) + ")", None
         if floor:
             return floor, floor
@@ -443,9 +504,11 @@ class SignalService:
             return refire, "refire: " + refire
         # Late alone: shadow-book only until 15:10 — after that there is
         # genuinely no runway left to measure the counterfactual.
-        if ((now + 19800) % 86400) // 60 <= 15 * 60 + 10:
-            return late, "late: " + late
-        return late, None
+        if late:
+            if ((now + 19800) % 86400) // 60 <= 15 * 60 + 10:
+                return late, "late: " + late
+            return late, None
+        return confirm, "confirm: " + confirm
 
     def _leadership_note(self, symbol: str) -> str | None:
         """BANKNIFTY-vs-NIFTY relative strength, as a displayed note only."""
@@ -546,6 +609,9 @@ class SignalService:
         # an issued card into a WAIT with the reason shown — the score panel
         # stays live, only the offer is withheld.
         veto = shadow_tag = None
+        # Persistence bookkeeping runs on EVERY evaluation (scores below the
+        # gate must reset the run), before any veto looks at it.
+        self._track_gate_runs(symbol, profile, df, fresh, now)
         # Whether the ENGINE formed a card at all, before any veto: the setup
         # detectors run only in the genuinely-empty case (review catch —
         # gating on the post-veto signal let a setup double-book the same bar
@@ -793,6 +859,7 @@ class SignalService:
                 "veto": veto,
                 "shadow": (("late" if shadow_tag.startswith("late:")
                             else "refire" if shadow_tag.startswith("refire:")
+                            else "confirm" if shadow_tag.startswith("confirm:")
                             else "floor")
                            if shadow_tag else None),
                 "card": fresh.signal.id if fresh.signal else None,
