@@ -262,6 +262,21 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* Stop-calibration A/B (05-Aug): eligible clean intraday fills (flag on,
+          premium-primary stop, calibration warm, ≥0.5pp gap) get a twin with
+          only the stop moved to the MAE-derived calibrated level. The live
+          ladder does not move until 30+ diverged pairs say so. */}
+      {data.stop_calib && (
+        <div className="mt-2 rounded bg-lime-500/10 px-2 py-1 text-[10px] text-lime-300">
+          Stop-calibration A/B ({data.stop_calib.n} pair{data.stop_calib.n === 1 ? "" : "s"},{" "}
+          {data.stop_calib.n_diverged} diverged
+          {data.stop_calib.pending ? `, ${data.stop_calib.pending} still open` : ""}):
+          static stop ₹{signed(data.stop_calib.static_stop?.expectancy ?? 0, 0)}/trade vs
+          calibrated stop ₹{signed(data.stop_calib.calibrated_stop?.expectancy ?? 0, 0)}/trade
+          (Δ ₹{signed(data.stop_calib.delta_net ?? 0, 0)} total). {data.stop_calib.verdict}
+        </div>
+      )}
+
       <div className="mt-2 space-y-1">
         {data.rows
           .slice()
@@ -283,11 +298,13 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                           ? "bg-rose-500/15 text-rose-300"
                           : r.shadow_class === "stopb"
                             ? "bg-teal-500/15 text-teal-300"
-                            : r.shadow_class === "setup"
-                              ? "bg-indigo-500/15 text-indigo-300"
-                              : r.shadow_class === "confirm"
-                                ? "bg-fuchsia-500/15 text-fuchsia-300"
-                                : "bg-purple-500/15 text-purple-300"
+                            : r.shadow_class === "stopc"
+                              ? "bg-lime-500/15 text-lime-300"
+                              : r.shadow_class === "setup"
+                                ? "bg-indigo-500/15 text-indigo-300"
+                                : r.shadow_class === "confirm"
+                                  ? "bg-fuchsia-500/15 text-fuchsia-300"
+                                  : "bg-purple-500/15 text-purple-300"
                     }`}
                     title={
                       r.shadow_class === "late"
@@ -296,11 +313,13 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                           ? "Counterfactual: this card was vetoed by the re-fire guard (same thesis stopped/invalidated within 2h) — paper takes it anyway so the guard stays auditable. Not counted in any aggregate above."
                           : r.shadow_class === "stopb"
                             ? "Stop-basis A/B twin: the same fill run under the OTHER stop basis. Graded only against its paired clean row — not counted in any aggregate above."
-                            : r.shadow_class === "setup"
-                              ? "Setup-detector candidate (P1-4): a structural setup the score engine cannot see, paper-only until its own 30-fill verdict. Not counted in any aggregate above."
-                              : r.shadow_class === "confirm"
-                                ? "Counterfactual: this card fired on its FIRST bar above the gate and the WATCH->CONFIRM persistence gate refused it — paper takes it anyway so the gate stays auditable. Not counted in any aggregate above."
-                                : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
+                            : r.shadow_class === "stopc"
+                              ? "Stop-calibration A/B twin: the same fill run with only the stop moved to the MAE-derived calibrated level. Graded only against its paired clean row — not counted in any aggregate above."
+                              : r.shadow_class === "setup"
+                                ? "Setup-detector candidate (P1-4): a structural setup the score engine cannot see, paper-only until its own 30-fill verdict. Not counted in any aggregate above."
+                                : r.shadow_class === "confirm"
+                                  ? "Counterfactual: this card fired on its FIRST bar above the gate and the WATCH->CONFIRM persistence gate refused it — paper takes it anyway so the gate stays auditable. Not counted in any aggregate above."
+                                  : "Counterfactual: this card was vetoed by the volume/OI participation floor — paper takes it anyway so the floor stays auditable. Not counted in any aggregate above."
                     }
                   >
                     {r.shadow_class === "late"
@@ -309,11 +328,13 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                         ? "refire"
                         : r.shadow_class === "stopb"
                           ? "stop A/B"
-                          : r.shadow_class === "setup"
-                            ? (r.setup ?? "setup").replace(/_/g, " ")
-                            : r.shadow_class === "confirm"
-                              ? "watch"
-                              : "hollow"}
+                          : r.shadow_class === "stopc"
+                            ? "stop calib"
+                            : r.shadow_class === "setup"
+                              ? (r.setup ?? "setup").replace(/_/g, " ")
+                              : r.shadow_class === "confirm"
+                                ? "watch"
+                                : "hollow"}
                   </span>
                 )}
                 {r.era?.startsWith("inflated") && (

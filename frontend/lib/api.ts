@@ -485,6 +485,20 @@ export interface PaperSummary {
     delta_net?: number;
     verdict?: string;
   } | null;
+  /** Stop-calibration paired A/B (05-Aug): eligible clean intraday fills
+      (flag on, premium-primary stop, calibration warm, ≥0.5pp gap) get a twin
+      with only the stop moved to the MAE-derived calibrated level.
+      Verdict at 30+ diverged pairs before the live ladder moves. */
+  stop_calib?: {
+    n: number;
+    n_diverged: number;
+    /** Pairs with either leg still open — not yet settled. */
+    pending: number;
+    static_stop?: { net_pnl: number; expectancy: number; win_rate: number };
+    calibrated_stop?: { net_pnl: number; expectancy: number; win_rate: number };
+    delta_net?: number;
+    verdict?: string;
+  } | null;
   /** Positional rows that held through an IST day boundary — the overnight-gap
       bet graded, with the deliberate late-day (≥14:30) entries split out. */
   overnight?: {
