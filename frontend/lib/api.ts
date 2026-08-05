@@ -744,6 +744,15 @@ export interface PatternsResults {
       re-analyze after the tendencies layer shipped. */
   conditional_outcomes?: Record<string, ConditionalOutcome>;
   volume_pace?: { days: number; cum_median: number[] };
+  /** CAS auction-print series: official close vs last free tape, daily. */
+  auction_print?: {
+    method: string;
+    cas_live_from: string;
+    note: string;
+    cas_days: { date: string; tape: number; official: number; print: number }[];
+    cas_stats: { n: number; mean: number; median: number; positive_rate: number; max_abs: number } | null;
+    pre_cas_baseline: { n: number; mean: number; median: number; positive_rate: number; max_abs: number } | null;
+  };
   levels: {
     method: string;
     pivot_count: number;

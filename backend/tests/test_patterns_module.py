@@ -101,3 +101,36 @@ def test_levels_touch_counts_and_near_filter():
         assert row["held"] + row["broke"] <= row["total_touches"]
     near = levels_near(lv, lv[0]["level"], window_pct=1.0)
     assert lv[0] in near
+
+
+def test_auction_print_series():
+    """CAS auction-print tracker (05-Aug): tape = 15:10 bar close, official =
+    the session's last bar close (Kite backfills the auction print into it),
+    split before/after the CAS go-live date; partial sessions skipped."""
+    import pandas as pd
+
+    from app.patterns.analysis import CAS_LIVE_FROM, auction_print
+
+    def day(date_s, print_pts):
+        base = int(pd.Timestamp(f"{date_s} 09:15:00+05:30").timestamp())
+        rows = []
+        for b in range(75):
+            px = 100.0
+            rows.append({"ts": base + b * 300, "open": px, "high": px + 0.1,
+                         "low": px - 0.1, "close": px, "vol_proxy": 10.0})
+        rows[-1]["close"] = 100.0 + print_pts    # last bar carries the print
+        return rows
+
+    frame = pd.DataFrame(
+        day("2026-07-30", 0.5) + day("2026-08-03", 201.0) + day("2026-08-04", 46.0))
+    out = auction_print(frame)
+    assert out["cas_stats"]["n"] == 2
+    assert out["cas_stats"]["mean"] == 123.5
+    assert out["cas_stats"]["positive_rate"] == 100.0
+    assert out["pre_cas_baseline"]["n"] == 1
+    assert abs(out["pre_cas_baseline"]["mean"] - 0.5) < 0.01
+    assert out["cas_days"][0]["date"] == CAS_LIVE_FROM
+    assert out["cas_days"][0]["print"] == 201.0
+    partial = pd.DataFrame(day("2026-08-05", 10.0)[:40])
+    out2 = auction_print(pd.concat([frame, partial], ignore_index=True))
+    assert out2["cas_stats"]["n"] == 2, "partial day must be excluded"

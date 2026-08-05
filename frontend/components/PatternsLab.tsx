@@ -921,6 +921,52 @@ export function PatternsLab() {
             </section>
           </div>
 
+          {/* CAS auction-print ledger — official close vs last free tape */}
+          {results.auction_print && (
+            <section className="card p-3">
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Auction print (CAS) — official close vs the last free tape
+              </h2>
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                {results.auction_print.cas_stats ? (
+                  <span className="tag bg-panel2 font-mono text-white/80">
+                    CAS era: mean {results.auction_print.cas_stats.mean > 0 ? "+" : ""}
+                    {results.auction_print.cas_stats.mean} pts · positive{" "}
+                    {results.auction_print.cas_stats.positive_rate}% (n=
+                    {results.auction_print.cas_stats.n})
+                  </span>
+                ) : (
+                  <span className="text-muted">No CAS sessions in the store yet.</span>
+                )}
+                {results.auction_print.pre_cas_baseline && (
+                  <span className="tag bg-panel2 font-mono text-muted">
+                    pre-CAS baseline: {results.auction_print.pre_cas_baseline.mean > 0 ? "+" : ""}
+                    {results.auction_print.pre_cas_baseline.mean} pts (n=
+                    {results.auction_print.pre_cas_baseline.n})
+                  </span>
+                )}
+              </div>
+              {results.auction_print.cas_days.length > 0 && (
+                <div className="mt-2 space-y-0.5 font-mono text-[11px]">
+                  {[...results.auction_print.cas_days].reverse().map((d) => (
+                    <div key={d.date} className="flex items-center gap-3">
+                      <span className="text-muted">{d.date}</span>
+                      <span>tape {d.tape.toFixed(0)}</span>
+                      <span>official {d.official.toFixed(0)}</span>
+                      <span className={d.print >= 0 ? "text-bull" : "text-bear"}>
+                        {d.print > 0 ? "+" : ""}
+                        {d.print.toFixed(1)} pts
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="mt-2 text-[10px] leading-relaxed text-muted">
+                {results.auction_print.note}
+              </p>
+            </section>
+          )}
+
           {/* volume-conditioned pattern outcomes */}
           {results.conditional_outcomes && (
             <section className="card p-3">

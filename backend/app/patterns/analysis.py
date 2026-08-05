@@ -130,6 +130,68 @@ def time_of_day_profile(df: pd.DataFrame) -> dict:
     return out
 
 
+CAS_LIVE_FROM = "2026-08-03"   # NSE Closing Auction Session go-live
+
+
+def auction_print(df: pd.DataFrame) -> dict:
+    """The CAS auction-print series: official close vs the last free tape.
+
+    Under the closing-auction regime the index freezes ~15:15 while the 50
+    stocks auction; the official close is then recomputed from auction
+    prices — and Kite writes that print INTO the session's last intraday bar
+    (verified 03-Aug: the 15:25 bar closes at 24,774 while the frozen bars
+    before it sit at 24,573). So, offline from the 5-min spine alone:
+      tape     = close of the 15:10 bar (last bar fully before the freeze)
+      official = close of the session's final bar (carries the print)
+      print    = official - tape
+    WHY IT MATTERS: nothing intraday can trade the print (F&O books close
+    15:30) — but on EXPIRY DAY options settle against the official close,
+    print included. If the series shows a systematic bias, that is real
+    money on Tuesday expiries. Pre-CAS days use the same formula and should
+    hover near zero — the built-in sanity check on the method.
+    """
+    d = _with_ist(df)
+    rows = []
+    for date_s, g in d.groupby("date", sort=True):
+        b1510 = g[g["hhmm"] == "15:10"]
+        last = g.iloc[-1]
+        if not len(b1510) or last["hhmm"] < "15:20":
+            continue                     # partial/disrupted session
+        tape = float(b1510["close"].iloc[0])
+        official = float(last["close"])
+        rows.append({"date": date_s, "tape": round(tape, 2),
+                     "official": round(official, 2),
+                     "print": round(official - tape, 2)})
+
+    cas = [r for r in rows if r["date"] >= CAS_LIVE_FROM]
+    pre = [r for r in rows if r["date"] < CAS_LIVE_FROM]
+
+    def _stats(rs):
+        if not rs:
+            return None
+        moves = [r["print"] for r in rs]
+        return {
+            "n": len(moves),
+            "mean": round(sum(moves) / len(moves), 1),
+            "median": round(sorted(moves)[len(moves) // 2], 1),
+            "positive_rate": round(100 * sum(1 for m in moves if m > 0) / len(moves), 1),
+            "max_abs": round(max(abs(m) for m in moves), 1),
+        }
+
+    return {
+        "method": ("official close (session's last 5m bar, which Kite backfills "
+                   "with the auction print) minus the 15:10 bar close (last free "
+                   "tape before the freeze)"),
+        "cas_live_from": CAS_LIVE_FROM,
+        "note": ("Untradeable intraday (F&O closes 15:30, the auction is stocks-"
+                 "only) — but EXPIRY-DAY settlement uses the official close, "
+                 "print included. Judge the bias at 20+ CAS sessions, not 3."),
+        "cas_days": cas[-30:],
+        "cas_stats": _stats(cas),
+        "pre_cas_baseline": _stats(pre),
+    }
+
+
 def pattern_frequency(df: pd.DataFrame) -> dict:
     """Candlestick pattern counts per weekday + forward-outcome scoring.
 

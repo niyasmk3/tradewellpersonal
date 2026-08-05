@@ -4,7 +4,13 @@ from __future__ import annotations
 import logging
 
 from app.patterns import store
-from app.patterns.analysis import build_daily, day_of_week_stats, pattern_frequency, time_of_day_profile
+from app.patterns.analysis import (
+    auction_print,
+    build_daily,
+    day_of_week_stats,
+    pattern_frequency,
+    time_of_day_profile,
+)
 from app.patterns.data import sync
 from app.patterns.levels import find_levels
 from app.patterns.tendencies import conditional_outcomes, exclude_current_day, volume_pace_curve
@@ -60,6 +66,9 @@ def run_analysis() -> dict:
         # history this afternoon.
         "conditional_outcomes": conditional_outcomes(exclude_current_day(df)),
         "volume_pace": volume_pace_curve(exclude_current_day(df)),
+        # The CAS auction-print ledger (05-Aug, user-spotted): official close
+        # vs last free tape, daily — the expiry-settlement bias question.
+        "auction_print": auction_print(df),
         "levels": find_levels(df),
     }
     store.save_results(results)
