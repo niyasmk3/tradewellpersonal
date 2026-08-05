@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Research dashboard — everything the experiment knows, on one page.
+"""Research dashboard — served by the app itself at /research.html.
 
-Regenerated nightly by evening_report.sh into:
-    recorder/data/reports/research.html
-Open it anytime (bookmark it); it is self-contained, works offline, and
-never leaves this machine. Sections: scoreboard, every graded fill, the
-learning ledger, research-ignition countdown, harness results, NSE data
-collection, capture health.
+Writes frontend/public/research.html (Next serves public/ statically, so the
+page rides the same origin as the dashboard: http://localhost:3777/research.html)
+plus a copy in recorder/data/reports/. Daily text reports are mirrored into
+frontend/public/reports/ so the page can LINK full history.
+
+Three tabs: Findings (every card/fill/ledger), Training (what has learned,
+what is waiting, harness verdicts), Glossary (every term in plain language).
+Regenerated nightly by evening_report.sh. Nothing leaves this machine.
 """
 from __future__ import annotations
 
 import html
 import json
+import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +22,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REC = ROOT / "recorder"
 DATA = REC / "data"
-OUT = DATA / "reports" / "research.html"
+PUB = ROOT / "frontend" / "public"
+OUT_PUB = PUB / "research.html"
+OUT_COPY = DATA / "reports" / "research.html"
+PUB_REPORTS = PUB / "reports"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 IGNITION_ROWS, IGNITION_MONTHS = 40, 2
@@ -72,61 +78,82 @@ def money(v: float) -> str:
     return f'<span class="{cls}">₹{v:,.0f}</span>'
 
 
+GLOSSARY: list[tuple[str, str]] = [
+    ("Regime", "The engine's weather forecast for the day: trending up, trending down, or sideways. In sideways/compressed weather it refuses to even look for trades."),
+    ("Score (0–100)", "Every 3 minutes the engine grades the market like an exam with six subjects: price action (25), trend (20), options & OI (20), volume (15), volatility (10), news (10)."),
+    ("Issue gate (78)", "The pass mark. Below it, no card — no matter how exciting the chart looks."),
+    ("Persistence gate", "New rule from the owner: one bar above 78 is a WATCH, not an offer. The score must HOLD above the gate across bars — stops one-bar spikes from triggering whipsaw entries."),
+    ("Card", "A complete trade plan issued by the engine: what to buy, the fair entry zone, stop-loss, targets, and an expiry time. Advice, never an order."),
+    ("Validity", "Cards die fast by design — ≈8 min intraday, 3 min scalp. An expired card means the moment passed; never act on one."),
+    ("Cancelled card", "The engine withdrew its own card early because the trend flipped against it before expiry. Active mind-changing, not an error."),
+    ("Entry zone", "The price band the plan considers fair. Above it the chip says 'chasing' — paying more than the plan priced."),
+    ("SL / T1 / T2", "Stop-loss ('the idea was wrong, get out'), first target (the honest one), stretch target."),
+    ("R (risk multiple)", "Profit/loss measured in units of what you risked. Risk ₹10, make ₹27 → +2.7R. Lets trades of different sizes be compared fairly."),
+    ("Expectancy", "Average net result per trade over many trades. THE number. A system can win only 40% of the time and still be profitable if winners are much bigger than losers."),
+    ("Win rate vs expectancy", "Beginners chase win rate; professionals chase expectancy. Option buying is structurally a low-win-rate, fat-winner game."),
+    ("MFE / MAE", "Best and worst moment of a trade's life (Maximum Favourable/Adverse Excursion). Winners' MFE teaches where targets should be; winners' MAE teaches where stops belong."),
+    ("Theta", "The rent you pay to hold a bought option: it loses value every flat minute. Why late or stalled entries are exits — a right thesis that's late still loses."),
+    ("OI (Open Interest)", "Count of open option contracts per strike — where the big players stand. The engine reads changes in it as participation."),
+    ("PCR", "Put/Call ratio of OI. Roughly: the mood of option writers. ~1 balanced; extremes hint at one-sided positioning."),
+    ("VWAP stretch (the rubber band)", "How many ATRs price sits above/below the day's volume-weighted average. Past ~3.5 the engine refuses to chase — rubber bands snap back."),
+    ("Hollow card", "A card vetoed by the volume/OI floor but still paper-tracked in a shadow ledger — so the veto itself is graded. So far the floor keeps saving money."),
+    ("Paper book", "Every card automatically traded in simulation with slippage and full Zerodha charges. The experiment's only scoreboard — no real money ever."),
+    ("Shadow ledger", "A what-if ledger that grades a rule's counterfactual (blocked trades, alternate stops) without touching real behavior. Evidence first, changes later."),
+    ("Exit A/B", "Two exit policies graded side by side on every fill (trail vs bank-at-quick-target). The ledger decides at 30+ diverged fills, not opinion."),
+    ("Stop calibrator (shadow twin)", "Each fill gets an invisible twin with only the stop repositioned (fitted from winners' MAE). Twin vs actual are paired; the live stop changes only after 30+ diverged pairs prove the twin wins."),
+    ("Participant OI (NSE)", "Daily official file of FII / DII / Pro / Client long-short positions — 'what the smart money holds', now collected nightly."),
+    ("Bhavcopy (NSE)", "The exchange's end-of-day file of every contract's close, OI, volume. Our nightly download builds option history that outlives expiry — Kite can't provide this."),
+    ("Labeled row / training sample", "One graded card joined to (a) its own score breakdown, (b) the market snapshot at its birth, (c) the honest outcome. The unit ML learns from."),
+    ("Holdout (locked)", "The newest 28 days of samples, sealed away. Experiments never touch it; only the single final winner is graded on it, once. The defense against fooling ourselves."),
+    ("Walk-forward", "Train on months 1..N, test on month N+1, roll forward. Never shuffle time — the future must never leak into training."),
+    ("Effect size", "How many standard deviations separate winners from losers on a feature. The nightly ledger's measure of 'does this feature matter so far'."),
+    ("Meta-labeling", "Our ML design: the model never predicts the market. It predicts 'given THIS card, what's the probability it wins' — a quality filter over the rule engine."),
+    ("Karpathy harness", "The self-running research loop: change one thing → evaluate walk-forward → keep only what consistently wins → log every attempt. Ignites itself when data gates pass."),
+    ("Ignition gates", "40+ training rows across 2+ months. Below that, any 'finding' is likely luck; the harness refuses to start early by design."),
+]
+
+
 def build() -> str:
     now = datetime.now(IST)
     paper = [t for t in load_json(ROOT / "backend" / ".paper_trades.json", [])
              if isinstance(t, dict)]
-    hollow_raw = load_json(ROOT / "backend" / ".hollow_signals.json", None)
     archive = load_jsonl(ROOT / "backend" / ".signals_archive.jsonl")
     ledger = load_jsonl(DATA / "learning_ledger.jsonl")
 
-    # ---- scoreboard ----
-    closed = [t for t in paper if t.get("status") not in ("entered", None)
-              and isinstance(t.get("realized_pnl"), (int, float))
-              and t.get("exited_at")]
+    closed = [t for t in paper if t.get("exited_at")
+              and isinstance(t.get("realized_pnl"), (int, float))]
     wins = [t for t in closed if t["realized_pnl"] > 0]
     gross = sum(t["realized_pnl"] for t in closed)
-    score_rows = [[
-        str(len(closed)),
-        f"{len(wins)}W / {len(closed) - len(wins)}L",
-        money(gross) + ' <span class="note">(gross — charges shown on dashboard Paper tab)</span>',
-        money(gross / len(closed)) if closed else "—",
-    ]]
-    scoreboard = table(["Closed fills", "Win / Loss", "Total P&L", "Avg / trade"],
-                       score_rows if closed else [])
+    scoreboard = table(
+        ["Closed fills", "Win / Loss", "Total P&L (gross)", "Avg / trade"],
+        [[str(len(closed)), f"{len(wins)}W / {len(closed) - len(wins)}L",
+          money(gross), money(gross / len(closed))]] if closed else [])
 
-    # ---- fills ----
-    fill_rows = []
-    for t in sorted(paper, key=lambda t: t.get("entered_at") or 0, reverse=True):
-        pnl = t.get("realized_pnl")
-        fill_rows.append([
-            fmt_ts(t.get("entered_at")),
-            esc(t.get("contract", "")), esc(t.get("mode", "")),
-            f"{t.get('entry_premium', 0):.2f} → "
-            + (f"{t.get('exit_premium'):.2f}" if t.get("exit_premium") else "open"),
-            money(pnl) if isinstance(pnl, (int, float)) and t.get("exited_at") else "—",
-            esc(t.get("auto_close_reason") or t.get("exit_reason") or t.get("status", "")),
-            f"score {t.get('entry_score', '—')}",
-        ])
-    fills = table(["Entered", "Contract", "Mode", "Premium", "P&L (gross)", "Exit / status", "Entry score"],
-                  fill_rows)
+    fill_rows = [[
+        fmt_ts(t.get("entered_at")), esc(t.get("contract", "")), esc(t.get("mode", "")),
+        f"{t.get('entry_premium', 0):.2f} → "
+        + (f"{t.get('exit_premium'):.2f}" if t.get("exit_premium") else "open"),
+        money(t["realized_pnl"]) if t.get("exited_at") and isinstance(t.get("realized_pnl"), (int, float)) else "—",
+        esc(t.get("auto_close_reason") or t.get("exit_reason") or t.get("status", "")),
+        f"score {t.get('entry_score', '—')}",
+    ] for t in sorted(paper, key=lambda t: t.get("entered_at") or 0, reverse=True)]
+    fills = table(["Entered", "Contract", "Mode", "Premium", "P&L (gross)",
+                   "Exit / status", "Entry score"], fill_rows)
 
-    # ---- cards ----
     cards: dict[str, dict] = {}
     for r in archive:
         c = r.get("card") if isinstance(r.get("card"), dict) else r
         if c.get("id"):
             cards[c["id"]] = c
-    card_rows = [[
-        fmt_ts(c.get("created_at")), esc(c.get("contract", "")),
-        esc(c.get("mode", "")), esc(c.get("state", "")),
-        str(c.get("confidence", "")),
-    ] for c in sorted(cards.values(), key=lambda c: c.get("created_at") or 0, reverse=True)]
+    card_rows = [[fmt_ts(c.get("created_at")), esc(c.get("contract", "")),
+                  esc(c.get("mode", "")), esc(c.get("state", "")),
+                  str(c.get("confidence", ""))]
+                 for c in sorted(cards.values(),
+                                 key=lambda c: c.get("created_at") or 0, reverse=True)]
     cards_html = table(["Issued", "Contract", "Mode", "Final state", "Score"], card_rows)
 
-    # ---- learning ledger ----
     led_rows = []
-    for e in reversed(ledger[-14:]):
+    for e in reversed(ledger[-21:]):
         sep = e.get("top_separating_features") or {}
         cal = e.get("score_calibration") or {}
         led_rows.append([
@@ -137,29 +164,37 @@ def build() -> str:
             "🔥 ready" if e.get("ignition_ready") else "waiting",
         ])
     ledger_html = table(["Night", "Graded", "Top separating features (effect size)",
-                         "Score calibration", "Research ignition"], led_rows)
+                         "Score calibration", "Ignition"], led_rows)
 
-    # ---- ignition countdown ----
     last = ledger[-1] if ledger else {}
     n_train = last.get("train_rows", 0)
     pct = min(100, int(100 * n_train / IGNITION_ROWS))
     countdown = (
         f'<div class="bar"><div class="fill" style="width:{pct}%"></div></div>'
-        f'<p>{n_train} / {IGNITION_ROWS} training rows · holdout {last.get("holdout_rows", 0)} '
-        f'(locked) · needs {IGNITION_MONTHS}+ months spread. The harness launches itself '
-        f"the night both gates pass.</p>"
-    )
+        f"<p><b>{n_train} / {IGNITION_ROWS}</b> training rows · "
+        f"holdout {last.get('holdout_rows', 0)} (locked) · needs {IGNITION_MONTHS}+ months "
+        f"spread. The harness launches itself the night both gates pass — no one has to "
+        f"remember.</p>")
 
-    # ---- harness results ----
     res_p = REC / "experiment" / "results.tsv"
-    if res_p.exists():
+    if res_p.exists() and len(res_p.read_text().splitlines()) > 1:
         lines = [l.split("\t") for l in res_p.read_text().splitlines()]
-        harness = table(lines[0], lines[1:]) if len(lines) > 1 else '<p class="empty">header only</p>'
+        harness = table(lines[0], lines[1:])
+        training_state = "🔥 RESEARCH RUNNING — see verdicts below"
     else:
-        harness = ('<p class="empty">No research runs yet — starts automatically at the '
-                   'countdown above. The rules it will follow: recorder/experiment/PROGRAM.md</p>')
+        harness = ('<p class="empty">No research runs yet — this table fills automatically '
+                   'once the countdown completes. Rules: recorder/experiment/PROGRAM.md</p>')
+        training_state = "⏳ COLLECTING EVIDENCE — model training has NOT started (by design)"
 
-    # ---- NSE + capture health ----
+    trained_now = table(["Learner", "Status"], [
+        ["T1 targets (upstream)", "Self-tunes from winners' MFE — needs 30+ clean fills; static ladder until then"],
+        ["Stop calibrator (upstream)", "Shadow twins active since 05-Aug — live stop unchanged until 30+ diverged pairs"],
+        ["Exit A/B (upstream)", "Grading trail vs bank-at-QT on every fill — decision at 30+ diverged"],
+        ["Persistence gate (upstream)", "Live since 05-Aug — one bar above 78 is a watch, not an offer"],
+        ["Nightly learning ledger (ours)", "Runs every close — feature separation + score calibration, logged forever"],
+        ["Karpathy harness (ours)", "Armed, auto-ignites at 40 rows / 2 months — see countdown"],
+    ])
+
     nse = cap = '<p class="empty">db missing</p>'
     db_p = DATA / "tradewell_history.db"
     if db_p.exists():
@@ -169,60 +204,107 @@ def build() -> str:
                 return db.execute(sql).fetchall()
             except sqlite3.Error:
                 return []
-        days = q("SELECT COUNT(DISTINCT day) FROM nse_fo_eod")
-        rows_eod = q("SELECT COUNT(*) FROM nse_fo_eod")
-        poi = q("SELECT COUNT(DISTINCT day) FROM nse_participant_oi")
+        days = (q("SELECT COUNT(DISTINCT day) FROM nse_fo_eod") or [[0]])[0][0]
+        rows_eod = (q("SELECT COUNT(*) FROM nse_fo_eod") or [[0]])[0][0]
+        poi = (q("SELECT COUNT(DISTINCT day) FROM nse_participant_oi") or [[0]])[0][0]
         fii = q("SELECT day, fut_idx_long - fut_idx_short FROM nse_participant_oi "
                 "WHERE participant='FII' ORDER BY day DESC LIMIT 5")
-        nse = table(
-            ["Metric", "Value"],
-            [["Option EOD history", f"{(days or [[0]])[0][0]} days · {(rows_eod or [[0]])[0][0]:,} contracts"],
-             ["Participant OI days", str((poi or [[0]])[0][0])]]
-        ) + "<h3>FII net index-future position (latest days)</h3>" + table(
-            ["Day", "Net contracts (long − short)"],
-            [[esc(d), f"{v:+,.0f}"] for d, v in fii])
+        nse = table(["Metric", "Value"],
+                    [["Option EOD history", f"{days} days · {rows_eod:,} contracts"],
+                     ["Participant OI days", str(poi)]]) \
+            + "<h3>FII net index-future position (latest days)</h3>" \
+            + table(["Day", "Net contracts (long − short)"],
+                    [[esc(d), f"{v:+,.0f}"] for d, v in fii])
         snaps = q("SELECT endpoint, COUNT(*) FROM snapshots GROUP BY endpoint ORDER BY 2 DESC")
-        births = q("SELECT COUNT(*) FROM card_births")
-        cap = table(["Stream", "Rows"], [[esc(e), f"{n:,}"] for e, n in snaps]
-                    + [["card-birth snapshots", str((births or [[0]])[0][0])]])
+        births = (q("SELECT COUNT(*) FROM card_births") or [[0]])[0][0]
+        cap = table(["Stream", "Rows"],
+                    [[esc(e), f"{n:,}"] for e, n in snaps] + [["card-birth snapshots", str(births)]])
+
+    # Mirror daily text reports into public/ so they are linkable.
+    PUB_REPORTS.mkdir(parents=True, exist_ok=True)
+    txts = sorted((DATA / "reports").glob("??-??-????.txt"), reverse=True)
+    for t in txts:
+        shutil.copy2(t, PUB_REPORTS / t.name)
+    links = " · ".join(f'<a href="/reports/{t.name}">{t.stem}</a>' for t in txts[:30])
+    history = f"<p>{links or 'first report lands at the next 16:00'}</p>"
+
+    gloss = "".join(f"<dt>{esc(t)}</dt><dd>{esc(d)}</dd>" for t, d in GLOSSARY)
 
     style = """
-    body{background:#0d1117;color:#c9d1d9;font:14px/1.5 -apple-system,system-ui,sans-serif;
-         max-width:960px;margin:0 auto;padding:24px}
-    h1{color:#e6edf3;font-size:22px} h2{color:#e6edf3;font-size:16px;border-bottom:1px solid #21262d;
-         padding-bottom:6px;margin-top:28px} h3{font-size:13px;color:#8b949e}
+    body{background:#0d1117;color:#c9d1d9;font:14px/1.55 -apple-system,system-ui,sans-serif;
+         max-width:980px;margin:0 auto;padding:24px}
+    h1{color:#e6edf3;font-size:22px;margin-bottom:4px}
+    h2{color:#e6edf3;font-size:16px;border-bottom:1px solid #21262d;padding-bottom:6px;margin-top:26px}
+    h3{font-size:13px;color:#8b949e}
     table{border-collapse:collapse;width:100%;font-size:13px}
     th{color:#8b949e;text-align:left;padding:6px 10px;border-bottom:1px solid #30363d}
     td{padding:6px 10px;border-bottom:1px solid #21262d}
     .scroll{overflow-x:auto} .pos{color:#3fb950} .neg{color:#f85149}
-    .empty,.note{color:#8b949e;font-size:12px}
+    .empty,.note,.meta{color:#8b949e;font-size:12px}
     .bar{background:#21262d;border-radius:6px;height:14px;overflow:hidden;margin:8px 0}
     .fill{background:linear-gradient(90deg,#1f6feb,#3fb950);height:100%}
-    .meta{color:#8b949e;font-size:12px}
+    .state{font-size:15px;padding:10px 14px;border:1px solid #30363d;border-radius:8px;
+           background:#161b22;margin:14px 0}
+    nav{display:flex;gap:6px;margin:18px 0;border-bottom:1px solid #21262d;padding-bottom:10px}
+    nav button{background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;
+               padding:7px 16px;font-size:13px;cursor:pointer}
+    nav button.on{background:#1f6feb;border-color:#1f6feb;color:#fff}
+    .tab{display:none}.tab.on{display:block}
+    dt{color:#e6edf3;font-weight:600;margin-top:12px} dd{margin:2px 0 0 0;color:#9da7b1}
+    a{color:#58a6ff;text-decoration:none}
+    """
+    js = """
+    function show(id){
+      document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+      document.querySelectorAll('nav button').forEach(b=>b.classList.remove('on'));
+      document.getElementById(id).classList.add('on');
+      document.getElementById('b-'+id).classList.add('on');
+      location.hash=id;
+    }
+    window.onload=()=>show(location.hash?location.hash.slice(1):'findings');
     """
     return f"""<!doctype html><meta charset="utf-8">
-<title>Tradewell — Research Dashboard</title><style>{style}</style>
-<h1>Tradewell Research Dashboard</h1>
-<p class="meta">Regenerated {now.strftime('%d-%b-%Y %H:%M IST')} · refreshed nightly at 16:00 ·
-data never leaves this machine</p>
+<title>Tradewell — Research</title><style>{style}</style><script>{js}</script>
+<h1>Tradewell Research</h1>
+<p class="meta">Regenerated {now.strftime('%d-%b-%Y %H:%M IST')} · auto-refreshes nightly at
+16:00 · served by your own stack · data never leaves this machine ·
+<a href="/">← back to trading dashboard</a></p>
+<div class="state">{training_state}</div>
+<nav>
+<button id="b-findings" onclick="show('findings')">Findings</button>
+<button id="b-training" onclick="show('training')">Training status</button>
+<button id="b-glossary" onclick="show('glossary')">Glossary</button>
+</nav>
+
+<div class="tab" id="findings">
 {section("Paper book scoreboard", scoreboard,
-         "Net-of-charges figures live on the dashboard Paper tab; this page shows the raw ledger.")}
+         "Gross figures; net-of-charges lives on the dashboard Paper tab.")}
 {section("Every fill, graded", fills)}
 {section("Every card the engine issued", cards_html)}
-{section("Research ignition countdown", countdown)}
-{section("Nightly learning ledger", ledger_html,
-         "Effect size = how many standard deviations separate winners from losers on that feature. "
-         "Tiny samples wobble — trends across weeks are what matter.")}
-{section("Karpathy research runs (results.tsv)", harness)}
 {section("NSE data collection (free archives, nightly)", nse)}
 {section("Live capture health", cap)}
-<p class="meta">Deeper digging: recorder/data/reports/*.txt (daily) ·
-recorder/data/learning_ledger.jsonl · recorder/HOW-TO-READ-THE-DASHBOARD.md ·
-recorder/TRAINING.md · recorder/GOAL.md</p>
+{section("Daily report archive (full history)", history)}
+</div>
+
+<div class="tab" id="training">
+{section("What is learning right now", trained_now,
+         "Ledgers accumulate evidence automatically; policy flips stay human — by design.")}
+{section("Research ignition countdown", countdown)}
+{section("Nightly learning ledger", ledger_html,
+         "Effect size = standard deviations separating winners from losers. Tiny samples wobble; watch trends across weeks.")}
+{section("Karpathy research runs (every experiment, PASS/FAIL)", harness)}
+</div>
+
+<div class="tab" id="glossary">
+{section("Every term, in plain language", f"<dl>{gloss}</dl>")}
+</div>
 """
 
 
 if __name__ == "__main__":
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(build())
-    print(f"research dashboard → {OUT}")
+    page = build()
+    OUT_PUB.parent.mkdir(parents=True, exist_ok=True)
+    OUT_PUB.write_text(page)
+    OUT_COPY.parent.mkdir(parents=True, exist_ok=True)
+    OUT_COPY.write_text(page)
+    print(f"research page → http://localhost:3777/research.html (file: {OUT_PUB})")
