@@ -13,6 +13,7 @@ from app.patterns.analysis import (
 )
 from app.patterns.data import sync
 from app.patterns.levels import find_levels
+from app.patterns.opening import opening_study
 from app.patterns.tendencies import conditional_outcomes, exclude_current_day, volume_pace_curve
 
 log = logging.getLogger("tradewell.patterns")
@@ -69,6 +70,10 @@ def run_analysis() -> dict:
         # The CAS auction-print ledger (05-Aug, user-spotted): official close
         # vs last free tape, daily — the expiry-settlement bias question.
         "auction_print": auction_print(df),
+        # Opening-window study (Phase 0 of the Opening tab): loudness + the
+        # conditional tables a 10:00 live read would match against. Excludes
+        # the current day for the same reason conditional_outcomes does.
+        "opening": opening_study(exclude_current_day(df)),
         "levels": find_levels(df),
     }
     store.save_results(results)
