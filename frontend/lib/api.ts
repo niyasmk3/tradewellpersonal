@@ -687,6 +687,140 @@ export interface PatternsLiveRead {
   note: string;
 }
 
+/** A signed-outcome cell from the opening study (coin band applies). */
+export interface OpeningCell {
+  n: number;
+  hit_rate: number;
+  avg_bps: number;
+  median_bps: number;
+  verdict?: string;
+}
+
+/** A rate cell judged against its own base rate, not 50%. */
+export interface OpeningRateCell {
+  n: number;
+  rate: number;
+  base_rate: number;
+  edge_pp: number;
+  verdict?: string;
+}
+
+export interface OpeningGapBucketCell {
+  n: number;
+  fade_rate: number;
+  fill_by_close: OpeningRateCell;
+  fill_by_10: number;
+  fill_by_11: number;
+}
+
+/** The stored Phase-0 opening-window study (results JSON "opening" key). */
+export interface OpeningStudy {
+  window?: string;
+  sessions?: { n: number; from: string; to: string };
+  volatility?: {
+    per_bar: { hhmm: string; n: number; median_range_bps: number; vol_share: number | null }[];
+    first45_vs_rest_bar_range: { n: number; median_ratio?: number; sessions_louder_than_rest?: number; note?: string };
+    or45_share_of_day_range: { median: number; note?: string };
+    first45_vol_share_median: number | null;
+  };
+  gap?: {
+    buckets_bps: { flat: number; big: number };
+    fill_base_rate: number;
+    by_bucket: Record<string, OpeningGapBucketCell>;
+  };
+  or30_breakout?: {
+    sessions_with_break: number;
+    break_rate: number;
+    break_up_share: number | null;
+    median_break_minutes_after_open: number | null;
+    fwd_30m?: OpeningCell;
+    fwd_60m?: OpeningCell;
+    fwd_30m_by_gap?: Record<string, OpeningCell>;
+  };
+  continuation_10_to_close?: {
+    note?: string;
+    all?: OpeningCell;
+    by_gap?: Record<string, OpeningCell>;
+    by_or45_size?: Record<string, OpeningCell>;
+    vwap_confirms?: OpeningCell;
+    vwap_diverges?: OpeningCell;
+    by_pace?: Record<string, OpeningCell>;
+    by_weekday?: Record<string, OpeningCell>;
+  };
+  trend_day?: {
+    base: { n: number; rate: number };
+    by_or45_size?: Record<string, OpeningRateCell>;
+    by_gap?: Record<string, OpeningRateCell>;
+    by_pace?: Record<string, OpeningRateCell>;
+  };
+  or45_tercile_bps?: [number, number];
+  note?: string;
+}
+
+/** One graded morning on the scoreboard (offline, from the stored spine). */
+export interface OpeningMorning {
+  date: string;
+  gap_bps: number | null;
+  gap_bucket: string | null;
+  or45_bps: number;
+  outcomes: {
+    gap_faded: boolean | null;
+    filled_by_close: boolean | null;
+    continued_to_close: boolean | null;
+    trend_day: boolean;
+  };
+  matched: {
+    gap?: OpeningGapBucketCell | null;
+    continuation?: OpeningCell | null;
+    trend_day?: OpeningRateCell | null;
+  };
+}
+
+export interface OpeningScoreboard {
+  mornings: OpeningMorning[];
+  headline: { tendency: string; n: number; hits: number }[];
+  note?: string;
+}
+
+export interface OpeningResponse {
+  study: OpeningStudy;
+  recent_mornings: OpeningScoreboard;
+}
+
+/** Today's forming 09:15-10:00 state matched against the stored study. */
+export interface OpeningLive {
+  study_sessions?: { n: number; from: string; to: string } | null;
+  note: string;
+  status?: string;
+  bars_in_window: number;
+  bars_today: number;
+  window_complete: boolean;
+  state: {
+    prev_session: { date: string; close: number; high: number; low: number } | null;
+    aligned_0915: boolean;
+    gap_bps: number | null;
+    gap_bucket: string | null;
+    or15: { high: number; low: number } | null;
+    or30: { high: number; low: number } | null;
+    or45: { high: number; low: number; complete: boolean };
+    f45_dir_so_far: number | null;
+    last_close: number;
+    or45_bps_so_far?: number;
+    or45_tercile?: "small" | "mid" | "large";
+    above_proxy_vwap?: boolean;
+    pace_vs_typical?: number;
+  } | null;
+  matched: {
+    gap?: OpeningGapBucketCell | null;
+    continuation?: OpeningCell | null;
+    trend_day?: OpeningRateCell | null;
+    /** Present once the window is complete and the OR45 tercile is known. */
+    continuation_by_or45?: OpeningCell | null;
+    trend_day_by_or45?: OpeningRateCell | null;
+    or30_breakout?: OpeningStudy["or30_breakout"] | null;
+  } | null;
+}
+
 /** Outcome grade attached to a callout over the hour after it fired. */
 export interface LevelAlertOutcome {
   spot_max: number;
@@ -909,6 +1043,8 @@ export const api = {
   patternsSync: (years = 3) => postJSON<{ total_bars: number }>(`/patterns/sync?years=${years}`, {}),
   patternsAnalyze: () => postJSON<PatternsResults>("/patterns/analyze", {}),
   patternsLiveRead: () => getJSON<PatternsLiveRead>("/patterns/live-read"),
+  patternsOpening: () => getJSON<OpeningResponse>("/patterns/opening"),
+  patternsOpeningLive: () => getJSON<OpeningLive>("/patterns/opening/live"),
   levelAlerts: () => getJSON<LevelAlertsResponse>("/patterns/level-alerts"),
   marketChat: (question: string, history: { role: string; content: string }[]) =>
     postJSON<{ enabled: boolean; answer: string }>("/market/chat", { question, history }),
