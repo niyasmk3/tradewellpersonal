@@ -21,8 +21,10 @@ from app.patterns.opening import (
     FIRST45_BARS,
     PACE_MIN_SESSIONS,
     PACE_SESSIONS,
+    assemble_opening_live,
     build_sessions,
     opening_study,
+    recent_mornings,
 )
 
 IST_OFFSET = 19800
@@ -189,6 +191,114 @@ def test_study_refuses_thin_samples_and_labels_rates_vs_base():
     td = out["trend_day"]
     assert "base" in td and 0.0 <= td["base"]["rate"] <= 1.0
     print("  STUDY -> thin sample refused; rate cells carry their base")
+
+
+_STUDY_STUB = {
+    "opening": {
+        "sessions": {"n": 99},
+        "or45_tercile_bps": [5.0, 15.0],
+        "gap": {"by_bucket": {"big_up": {"marker": "gap-cell"}}},
+        "continuation_10_to_close": {"by_gap": {"big_up": {"marker": "cont-cell"}}},
+        "trend_day": {"by_gap": {"big_up": {"marker": "trend-cell"}}},
+        "or30_breakout": {"marker": "orb-cell"},
+    },
+    "volume_pace": {"cum_median": [100.0 * (i + 1) for i in range(75)]},
+}
+
+
+def test_live_frozen_features_match_the_study_builder():
+    """The whole point of the live read: at 10:00 its state must equal what
+    build_sessions would later compute for the same day — one definition of
+    the features, not two drifting ones."""
+    prev = _flat_day(2, px=100.0)
+    day = _flat_day(1, px=101.0)                      # big_up gap day
+    day[4].update(high=101.6, low=100.8)
+    # Nonzero first-45 direction: a flat day pins f45_dir at 0 == 0, which a
+    # sign flip in the live read would pass (review catch).
+    day[8].update(close=101.2, high=101.25)
+    live = assemble_opening_live(_frame(day), _frame(prev), _STUDY_STUB)
+    combined = build_sessions(_frame(prev + day)).iloc[-1]
+    st = live["state"]
+    assert live["window_complete"] and st["aligned_0915"]
+    assert st["gap_bps"] == combined["gap_bps"]
+    assert st["gap_bucket"] == combined["gap_bucket"] == "big_up"
+    assert st["or45_bps_so_far"] == combined["or45_bps"]
+    assert st["f45_dir_so_far"] == combined["f45_dir"] == 1
+    assert st["above_proxy_vwap"] == combined["above_vwap"]
+    # OR15/OR30 LEVELS reconciled against the builder's bps (review catch:
+    # presence was asserted, values never were)
+    o = 101.0
+    assert round((st["or15"]["high"] - st["or15"]["low"]) / o * 1e4, 1) == combined["or15_bps"]
+    assert round((st["or30"]["high"] - st["or30"]["low"]) / o * 1e4, 1) == combined["or30_bps"]
+    assert st["or45_tercile"] == "large"              # 79bps vs [5, 15]
+    assert st["prev_session"]["close"] == 100.0
+    # cum vol 9*100 vs curve[8]=900 -> exactly 1.0x
+    assert st["pace_vs_typical"] == 1.0
+    # matched cells pass through from the stored study verbatim
+    assert live["matched"]["gap"] == {"marker": "gap-cell"}
+    assert live["matched"]["continuation"] == {"marker": "cont-cell"}
+    assert live["matched"]["trend_day"] == {"marker": "trend-cell"}
+    assert live["matched"]["or30_breakout"] == {"marker": "orb-cell"}
+    print("  LIVE -> frozen 10:00 state == build_sessions, cells pass through")
+
+
+def test_live_mid_window_empty_and_misaligned():
+    prev = _flat_day(2, px=100.0)
+    # empty today
+    live = assemble_opening_live(pd.DataFrame(), _frame(prev), _STUDY_STUB)
+    assert live["bars_in_window"] == 0 and live["state"] is None
+    # mid-window: 4 closed bars — OR15 set, OR30/tercile absent, gap matched
+    live = assemble_opening_live(_frame(_flat_day(1, px=101.0)[:4]),
+                                 _frame(prev), _STUDY_STUB)
+    st = live["state"]
+    assert not live["window_complete"] and live["bars_in_window"] == 4
+    assert st["or15"] is not None and st["or30"] is None
+    assert "or45_tercile" not in st
+    assert st["gap_bucket"] == "big_up" and live["matched"]["gap"] == {"marker": "gap-cell"}
+    # misaligned: first closed bar is 09:30 — no gap, no gap-keyed cells, and
+    # CRUCIALLY no pace/vwap (bar count is not time-of-day when the anchor
+    # slips — the review's probe showed a wrong 1.0x served here)
+    live = assemble_opening_live(_frame(_flat_day(1, px=101.0)[3:]),
+                                 _frame(prev), _STUDY_STUB)
+    st = live["state"]
+    assert not st["aligned_0915"] and st["gap_bps"] is None
+    assert "pace_vs_typical" not in st and "above_proxy_vwap" not in st
+    assert st["or15"] is None, "a 09:30 anchor must not relabel bars as OR15"
+    assert live["matched"] == {"or30_breakout": {"marker": "orb-cell"}}
+    print("  LIVE -> empty/mid-window/misaligned degrade honestly")
+
+
+def test_recent_mornings_grades_and_headline_tallies():
+    rows = _flat_day(5, px=100.0) + _flat_day(4, px=100.0)
+    # big_up FADE day: +100bps gap, morning up, afternoon below 10:00 close,
+    # lows never reach 100 -> unfilled
+    fade = _flat_day(3, px=101.0)
+    fade[8].update(close=101.5, high=101.55)          # f45_dir = +1
+    for k in range(9, 75):
+        fade[k].update(open=100.8, close=100.8, high=100.85, low=100.75)
+    # big_down TREND day vs fade day's 100.8 close: 99 open, walks down
+    trend = _flat_day(2, px=99.0)
+    for k in range(9, 75):
+        px = 99.0 - 0.02 * (k - 8)
+        trend[k].update(open=px + 0.02, close=px, high=px + 0.05, low=px - 0.05)
+    # flat-gap day vs trend day's ~97.68 close
+    flat = _flat_day(1, px=97.68)
+    rows += fade + trend + flat
+    board = recent_mornings(_frame(rows), {}, n=10)
+    by_bucket = {m["gap_bucket"]: m for m in board["mornings"]}
+    f = by_bucket["big_up"]
+    assert f["outcomes"]["continued_to_close"] is False
+    assert f["outcomes"]["filled_by_close"] is False
+    assert f["outcomes"]["gap_faded"] is True
+    t = by_bucket["big_down"]
+    assert t["outcomes"]["trend_day"] is True
+    assert t["outcomes"]["filled_by_close"] is False
+    heads = {h["tendency"]: h for h in board["headline"]}
+    assert heads["big gaps don't fill by close"] == {
+        "tendency": "big gaps don't fill by close", "n": 2, "hits": 2}
+    assert heads["big gap-up morning fades to close"]["hits"] == 1
+    assert heads["big gap-down day trends"]["hits"] == 1
+    print("  SCOREBOARD -> outcomes graded per morning; headline tallies exact")
 
 
 if __name__ == "__main__":

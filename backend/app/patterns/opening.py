@@ -372,6 +372,199 @@ def _or30_breakout_cells(sess: pd.DataFrame) -> dict:
     return out
 
 
+# ---- live read + scoreboard (Phase 1) ---------------------------------------
+
+def _prev_session(tail: pd.DataFrame, today_date: str):
+    """Last stored session strictly before today, as {date, close, high, low}.
+    The caller sees the DATE — a stale spine (sync not run) is visible, never
+    silently treated as yesterday."""
+    if tail.empty:
+        return None
+    pt = _with_ist(tail)
+    pt = pt[pt["date"] < today_date]
+    if pt.empty:
+        return None
+    last = pt[pt["date"] == pt["date"].iloc[-1]]
+    return {"date": str(last["date"].iloc[0]),
+            "close": float(last["close"].iloc[-1]),
+            "high": float(last["high"].max()),
+            "low": float(last["low"].min())}
+
+
+def _range_levels(w: pd.DataFrame, bars: int):
+    """OR levels only when the slice is REALLY the first `bars*5` minutes — a
+    feed hole inside the forming window must not relabel 25 minutes as OR15."""
+    if len(w) < bars:
+        return None
+    seg = w.iloc[:bars]
+    mins = 9 * 60 + 15 + 5 * (bars - 1)
+    if seg["hhmm"].iloc[0] != "09:15" or seg["hhmm"].iloc[-1] != f"{mins // 60:02d}:{mins % 60:02d}":
+        return None
+    return {"high": float(seg["high"].max()), "low": float(seg["low"].min())}
+
+
+def assemble_opening_live(today: pd.DataFrame, tail: pd.DataFrame, results: dict) -> dict:
+    """Today's forming opening state matched against the stored study tables.
+
+    Pure assembly — no I/O and no clock: "window complete" means nine CLOSED
+    bars starting 09:15, not wall time; closed bars are the only honest input.
+    Mid-window values are labelled so_far/forming; matched cells appear as
+    soon as the gap is classifiable (one closed bar).
+    """
+    op = results.get("opening") or {}
+    out = {
+        "study_sessions": op.get("sessions"),
+        "note": ("Frequencies from the stored study, not forecasts. Features "
+                 "freeze when the ninth bar closes at 10:00."),
+    }
+    if today.empty:
+        out.update(bars_in_window=0, bars_today=0, window_complete=False,
+                   state=None, matched=None, status="No closed bars yet today.")
+        return out
+
+    t = _with_ist(today.sort_values("ts").reset_index(drop=True))
+    w = t.iloc[:FIRST45_BARS]
+    aligned = w["hhmm"].iloc[0] == "09:15"
+    # Contiguous = bar COUNT equals elapsed session time, so a bar index is a
+    # valid index into time-of-day yardsticks (the pace curve). A feed hole
+    # breaks that equivalence even when the open is aligned.
+    mins = 9 * 60 + 15 + 5 * (len(w) - 1)
+    contiguous = bool(aligned and w["hhmm"].iloc[-1] == f"{mins // 60:02d}:{mins % 60:02d}")
+    complete = bool(contiguous and len(w) == FIRST45_BARS)
+    prev = _prev_session(tail, t["date"].iloc[0])
+
+    o = float(w["open"].iloc[0]) if aligned else None
+    gap_bps = gap_bucket = None
+    if o is not None and prev is not None:
+        gap_bps = _bps((o - prev["close"]) / prev["close"])
+        gap_bucket = _gap_bucket(gap_bps)
+
+    c_last = float(w["close"].iloc[-1])
+    state = {
+        "prev_session": prev,
+        "aligned_0915": bool(aligned),
+        "gap_bps": gap_bps,
+        "gap_bucket": gap_bucket,
+        "or15": _range_levels(w, OR15_BARS),
+        "or30": _range_levels(w, OR30_BARS),
+        "or45": {"high": float(w["high"].max()), "low": float(w["low"].min()),
+                 "complete": complete},
+        "f45_dir_so_far": int(np.sign(c_last - o)) if o is not None else None,
+        "last_close": c_last,
+    }
+    if o is not None:
+        state["or45_bps_so_far"] = _bps((float(w["high"].max())
+                                         - float(w["low"].min())) / o)
+        terc = op.get("or45_tercile_bps")
+        if complete and terc:
+            v = state["or45_bps_so_far"]
+            state["or45_tercile"] = ("small" if v <= terc[0]
+                                     else "large" if v >= terc[1] else "mid")
+    # VWAP and pace only on a contiguous 09:15-anchored window: the pace curve
+    # is indexed by bar-of-day, and build_sessions would disqualify a
+    # misaligned window outright — a wrong NUMBER is worse than no number
+    # (review catch: a 09:30-anchored morning read pace 1.0 where truth was
+    # 0.75, because bar count is not time-of-day when the anchor slips).
+    vsum = float(w["vol_proxy"].sum())
+    if vsum > 0 and contiguous:
+        tp = (w["high"] + w["low"] + w["close"]) / 3
+        state["above_proxy_vwap"] = bool(c_last >= float((tp * w["vol_proxy"]).sum() / vsum))
+        curve = (results.get("volume_pace") or {}).get("cum_median") or []
+        i = min(len(w) - 1, len(curve) - 1, FIRST45_BARS - 1)
+        if curve and i >= 0 and curve[i] > 0:
+            state["pace_vs_typical"] = round(vsum / curve[i], 2)
+
+    matched = None
+    if op:
+        # The unconditional cells ride along even when the gap is unreadable
+        # (no prev close / misaligned open) — a stale spine hides the gap
+        # cells, not the whole study.
+        matched = {"or30_breakout": op.get("or30_breakout")}
+        if gap_bucket is not None:
+            matched.update(
+                gap=(op.get("gap") or {}).get("by_bucket", {}).get(gap_bucket),
+                continuation=(op.get("continuation_10_to_close") or {})
+                             .get("by_gap", {}).get(gap_bucket),
+                trend_day=(op.get("trend_day") or {}).get("by_gap", {}).get(gap_bucket),
+            )
+        terc_key = state.get("or45_tercile")
+        if terc_key:
+            matched["continuation_by_or45"] = ((op.get("continuation_10_to_close") or {})
+                                              .get("by_or45_size", {}).get(terc_key))
+            matched["trend_day_by_or45"] = ((op.get("trend_day") or {})
+                                            .get("by_or45_size", {}).get(terc_key))
+    out.update(bars_in_window=int(len(w)), bars_today=int(len(t)),
+               window_complete=complete, state=state, matched=matched)
+    return out
+
+
+def recent_mornings(df: pd.DataFrame, op: dict, n: int = 10) -> dict:
+    """The scoreboard: the last n graded mornings vs the study's matched cells.
+
+    Graded OFFLINE from the stored spine — the frozen 10:00 state is fully
+    reconstructable from stored bars, so there is no live capture to lose on
+    a restart and nothing new to persist. Call on exclude_current_day(df):
+    outcomes are final only at the close.
+    """
+    sess = build_sessions(df)
+    if sess.empty:
+        return {"mornings": [], "headline": [], "note": "No gradable sessions."}
+    rows = []
+    for r in sess.tail(n).itertuples():
+        continued = bool(r.drift * r.f45_dir > 0) if r.f45_dir else None
+        gradable_fill = r.gap_bucket not in (None, "flat")
+        rows.append({
+            "date": r.date,
+            # float64 column: a no-prev-close row holds NaN, which json.dumps
+            # would emit as spec-invalid literal NaN — wrap to None.
+            "gap_bps": None if pd.isna(r.gap_bps) else float(r.gap_bps),
+            "gap_bucket": r.gap_bucket,
+            "or45_bps": r.or45_bps,
+            "outcomes": {
+                "gap_faded": r.gap_faded,
+                "filled_by_close": (bool(not pd.isna(r.fill_idx))
+                                    if gradable_fill else None),
+                "continued_to_close": continued,
+                "trend_day": bool(r.trend_day),
+            },
+            "matched": {
+                "gap": (op.get("gap") or {}).get("by_bucket", {}).get(r.gap_bucket),
+                "continuation": (op.get("continuation_10_to_close") or {})
+                                .get("by_gap", {}).get(r.gap_bucket),
+                "trend_day": (op.get("trend_day") or {}).get("by_gap", {})
+                             .get(r.gap_bucket),
+            },
+        })
+    # The three headline tendencies, tallied over the same window. Small-n by
+    # construction — the note says so rather than the tally pretending.
+    tail = sess.tail(n)
+    heads = []
+    big = tail[tail["gap_bucket"].isin(["big_up", "big_down"])]
+    if len(big):
+        heads.append({"tendency": "big gaps don't fill by close",
+                      "n": int(len(big)),
+                      "hits": int(big["fill_idx"].isna().sum())})
+    bu = tail[(tail["gap_bucket"] == "big_up") & (tail["f45_dir"] != 0)]
+    if len(bu):
+        heads.append({"tendency": "big gap-up morning fades to close",
+                      "n": int(len(bu)),
+                      "hits": int((bu["drift"] * bu["f45_dir"] <= 0).sum())})
+    bd = tail[tail["gap_bucket"] == "big_down"]
+    if len(bd):
+        heads.append({"tendency": "big gap-down day trends",
+                      "n": int(len(bd)), "hits": int(bd["trend_day"].sum())})
+    return {
+        "mornings": rows,
+        "headline": heads,
+        "note": ("Graded offline from the stored spine; a graded session may "
+                 "itself sit inside the study tables (weight 1/n_study). "
+                 "CAS era (03-Aug-2026 on): the session's last bar carries the "
+                 "auction print, so close-judged outcomes include it while the "
+                 "matched tables are mostly pre-CAS history. Headline tallies "
+                 "are observational — judge at 30+, like everything else here."),
+    }
+
+
 def opening_study(df: pd.DataFrame) -> dict:
     """The full Phase-0 table set. Call on exclude_current_day(df) only."""
     sess = build_sessions(df)

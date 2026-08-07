@@ -97,6 +97,68 @@ async def live_read() -> dict:
         raise HTTPException(status_code=500, detail=f"Live read error: {exc}")
 
 
+@router.get("/opening")
+async def opening() -> dict:
+    """The stored opening-window study plus the recent-mornings scoreboard —
+    the Opening tab's historical half. The scoreboard grades the last 10 full
+    sessions offline from the spine (no live capture; current day excluded
+    because outcomes are final only at the close)."""
+    data = store.load_results()
+    if data is None:
+        raise HTTPException(status_code=404, detail="No results yet — POST /patterns/analyze")
+    if "opening" not in data:
+        raise HTTPException(
+            status_code=409,
+            detail="Results predate the opening study — POST /patterns/analyze to rebuild")
+
+    from app.patterns.opening import recent_mornings
+    from app.patterns.tendencies import exclude_current_day
+
+    def _board() -> dict:
+        # ~20 sessions of spine: 10 graded + prior-close context for the oldest.
+        return recent_mornings(exclude_current_day(store.load_tail(75 * 20)),
+                               data["opening"], n=10)
+
+    try:
+        board = await asyncio.to_thread(_board)
+    except Exception as exc:  # pragma: no cover - unexpected
+        log.exception("Opening scoreboard failed")
+        raise HTTPException(status_code=500, detail=f"Scoreboard error: {exc}")
+    return {"study": data["opening"], "recent_mornings": board}
+
+
+@router.get("/opening/live")
+async def opening_live() -> dict:
+    """Today's forming opening state (gap, OR levels, first-45 direction,
+    pace) matched against the stored study's conditional cells. Features
+    freeze when the ninth bar closes at 10:00; before that, values are
+    labelled so_far/forming. Reads the stored analysis — POST
+    /patterns/analyze after a sync to (re)build it."""
+    if not kite_service.is_authenticated:
+        raise HTTPException(status_code=401, detail="Kite login required")
+    data = store.load_results()
+    if data is None:
+        raise HTTPException(status_code=404, detail="No results yet — POST /patterns/analyze")
+    if "opening" not in data:
+        raise HTTPException(
+            status_code=409,
+            detail="Results predate the opening study — POST /patterns/analyze to rebuild")
+
+    from app.patterns.opening import assemble_opening_live
+    from app.patterns.tendencies import fetch_today
+
+    def _read() -> dict:
+        today = fetch_today(kite_service.kite)
+        # ~2 sessions of tail: the full prior session for gap/prev-day context.
+        return assemble_opening_live(today, store.load_tail(160), data)
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as exc:  # pragma: no cover - Kite/network
+        log.exception("Opening live read failed")
+        raise HTTPException(status_code=500, detail=f"Opening live error: {exc}")
+
+
 @router.get("/level-alerts")
 async def level_alerts() -> dict:
     """Recent level-touch callouts + the levels currently on watch — the
