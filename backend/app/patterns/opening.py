@@ -372,6 +372,136 @@ def _or30_breakout_cells(sess: pd.DataFrame) -> dict:
     return out
 
 
+# ---- the fade backtest (Phase-3 gate) ---------------------------------------
+
+def _bt_cell(pnls: list) -> dict:
+    """Nearest-rank stats (upper median — a deliberate, documented divergence
+    from _cell's interpolated median). Under MIN_CELL only n is emitted, per
+    the module's own vanishing-cell rule."""
+    n = len(pnls)
+    if n == 0:
+        return {"n": 0}
+    if n < MIN_CELL:
+        return {"n": n, "note": f"under n={MIN_CELL} — stats suppressed"}
+    s = sorted(pnls)
+    return {
+        "n": n,
+        "win_rate": round(sum(1 for p in pnls if p > 0) / n, 3),
+        "avg_bps": round(sum(pnls) / n, 1),
+        "median_bps": round(s[n // 2], 1),
+        "total_bps": round(sum(pnls), 1),
+        "worst_bps": round(s[0], 1),
+        "best_bps": round(s[-1], 1),
+    }
+
+
+def fade_backtest(df: pd.DataFrame, sess: "pd.DataFrame | None" = None) -> dict:
+    """Phase-3 gate for the opening-fade idea: on a big-gap-up morning, enter
+    at the 10:00 freeze AGAINST the first-45 direction; exit at close (the
+    study cell's exact definition) and, separately, with a stop at the OR45
+    extreme — a real trade needs an invalidation and the stop reshapes the
+    distribution by cutting the tail where continuation rips.
+
+    Index bps, no charges, entry at the 09:55 bar's close print — the shadow
+    ledger is the net-of-charges test; this only decides whether the idea
+    earns that slot. Stops are graded conservatively: a bar that OPENS beyond
+    the stop exits at its open (gap-through), else at the stop level; a bar
+    where both stop and close could apply counts as stopped.
+    """
+    if sess is None:
+        sess = build_sessions(df)
+    if sess.empty:
+        return {"note": "No qualifying sessions."}
+    # Same defensive sort as build_sessions — two consumers of one df must not
+    # hold different ordering assumptions (review catch).
+    d = _with_ist(df).sort_values("ts")
+    bars_by_date = dict(tuple(d.groupby("date")))
+
+    def _run(bucket: str):
+        raw, stopped, maes, stop_hits, stop_dists, dates = [], [], [], 0, [], []
+        rows = sess[(sess["gap_bucket"] == bucket) & (sess["f45_dir"] != 0)]
+        for r in rows.itertuples():
+            g = bars_by_date.get(r.date)
+            if g is None:
+                continue
+            g = g.reset_index(drop=True)
+            after = g.iloc[FIRST45_BARS:]
+            if after.empty:
+                continue
+            entry = float(r.c0955)
+            short = r.f45_dir > 0            # fade = opposite the morning
+            sign = -1.0 if short else 1.0
+            close = float(g["close"].iloc[-1])
+            # dates appended in lockstep with raw — the year split must never
+            # desync from the pnl list if a session is ever skipped above
+            dates.append(r.date)
+            raw.append(sign * (close - entry) / entry * 1e4)
+            # MAE of the raw hold: worst excursion against the fade
+            mae = ((float(after["high"].max()) - entry) if short
+                   else (entry - float(after["low"].min()))) / entry * 1e4
+            maes.append(max(mae, 0.0))
+            # stopped variant: invalidation at the OR45 extreme
+            hi = float(g["high"].iloc[:FIRST45_BARS].max())
+            lo = float(g["low"].iloc[:FIRST45_BARS].min())
+            stop = hi if short else lo
+            stop_dists.append(abs(stop - entry) / entry * 1e4)
+            exit_px, hit = close, False
+            for b in after.itertuples():
+                if short and float(b.open) >= stop:
+                    exit_px, hit = float(b.open), True
+                    break
+                if short and float(b.high) >= stop:
+                    exit_px, hit = stop, True
+                    break
+                if not short and float(b.open) <= stop:
+                    exit_px, hit = float(b.open), True
+                    break
+                if not short and float(b.low) <= stop:
+                    exit_px, hit = stop, True
+                    break
+            stopped.append(sign * (exit_px - entry) / entry * 1e4)
+            stop_hits += 1 if hit else 0
+        return raw, stopped, maes, stop_hits, stop_dists, dates
+
+    raw, stopped, maes, stop_hits, stop_dists, dates = _run("big_up")
+    if len(raw) < MIN_TENDENCY:
+        return {"note": f"Only {len(raw)} qualifying big-gap-up mornings — "
+                        f"no verdict under n={MIN_TENDENCY}."}
+    year_pnls: dict = {}
+    for pnl, date_s in zip(raw, dates):
+        year_pnls.setdefault(date_s[:4], []).append(pnl)
+    by_year = {y: _bt_cell(year_pnls[y]) for y in sorted(year_pnls)}
+    mirror_raw = _run("big_down")[0]
+    maes_sorted = sorted(maes)
+    return {
+        "rule": ("big gap up (>+45bps) and first-45 direction nonzero: enter at "
+                 "the 10:00 freeze AGAINST that direction, exit at close; "
+                 "stopped variant invalidates at the OR45 extreme"),
+        "raw_hold_to_close": _bt_cell(raw),
+        "stopped_at_or45_extreme": {
+            **_bt_cell(stopped),
+            "stop_hit_rate": round(stop_hits / len(stopped), 3) if stopped else None,
+            "median_stop_distance_bps": (round(sorted(stop_dists)[len(stop_dists) // 2], 1)
+                                         if stop_dists else None),
+        },
+        "mae_of_raw_hold_bps": {
+            "median": round(maes_sorted[len(maes_sorted) // 2], 1) if maes else None,
+            # nearest-rank on n-1 so a 10-sample p90 is the 9th value, not the max
+            "p90": (round(maes_sorted[int((len(maes_sorted) - 1) * 0.9)], 1)
+                    if maes else None),
+        },
+        # _raw suffix: these grade the HOLD-TO-CLOSE variant only — the year
+        # split the verdict hangs on must say which arm it judged.
+        "by_year_raw": by_year,
+        # The noise check: the study says big-gap-DOWN days trend, so the same
+        # fade rule there should LOSE. If it wins too, we found noise.
+        "big_down_mirror_raw": _bt_cell(mirror_raw),
+        "note": ("Index bps, no charges or slippage, entry at the 09:55 bar's "
+                 "close print, conservative gap-through stops. This gates the "
+                 "shadow-detector slot; the paper ledger is the net test."),
+    }
+
+
 # ---- live read + scoreboard (Phase 1) ---------------------------------------
 
 def _prev_session(tail: pd.DataFrame, today_date: str):
@@ -583,6 +713,9 @@ def opening_study(df: pd.DataFrame) -> dict:
         "continuation_10_to_close": _continuation_cells(sess, or45_q),
         "trend_day": _trend_day_cells(sess, or45_q),
         "or45_tercile_bps": [round(or45_q[0], 1), round(or45_q[1], 1)],
+        # Phase-3 gate: the fade rule backtested with a stop, a year split and
+        # the big-down mirror — decides whether it earns a shadow-detector slot.
+        "fade_backtest": fade_backtest(df, sess),
         "note": (
             "Historical frequencies, not predictions. Continuation cells are "
             "signed returns on the coin band (45-55% = coin); rate cells are "

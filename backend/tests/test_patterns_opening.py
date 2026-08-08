@@ -23,6 +23,7 @@ from app.patterns.opening import (
     PACE_SESSIONS,
     assemble_opening_live,
     build_sessions,
+    fade_backtest,
     opening_study,
     recent_mornings,
 )
@@ -299,6 +300,142 @@ def test_recent_mornings_grades_and_headline_tallies():
     assert heads["big gap-up morning fades to close"]["hits"] == 1
     assert heads["big gap-down day trends"]["hits"] == 1
     print("  SCOREBOARD -> outcomes graded per morning; headline tallies exact")
+
+
+def _big_up_fade_day(day: int, prev_px: float = 100.0, afternoon: float = 100.6):
+    """Big gap up (+100bps), morning rises (f45_dir=+1: bar 8 closes 101.4),
+    afternoon settles at `afternoon` — fade SHORT enters 101.4 at 10:00."""
+    d = _flat_day(day, px=101.0)
+    d[8].update(close=101.4, high=101.45)
+    for k in range(9, 75):
+        d[k].update(open=afternoon, close=afternoon,
+                    high=afternoon + 0.05, low=afternoon - 0.05)
+    return d
+
+
+def test_fade_backtest_exact_pnls_and_stop():
+    rows = _flat_day(4, px=100.0)
+    rows += _big_up_fade_day(3)                        # winner: 101.4 -> 100.6
+    bt = fade_backtest(_frame(rows))
+    assert "note" in bt and "no verdict" in bt["note"].lower()
+
+    # 40 winners: enough for a verdict, exact numbers. Interleaved flat days
+    # (each closing 100.0) reset the prev close so every fade day gaps +100bps.
+    rows = _flat_day(90, px=100.0)
+    for i in range(40):
+        rows += _big_up_fade_day(89 - 2 * i)
+        rows += _flat_day(88 - 2 * i, px=100.0)
+    bt = fade_backtest(_frame(rows))
+    raw = bt["raw_hold_to_close"]
+    assert raw["n"] == 40
+    expected = (101.4 - 100.6) / 101.4 * 1e4           # short fade GAIN, exact
+    assert abs(raw["avg_bps"] - round(expected, 1)) < 0.2
+    assert raw["win_rate"] == 1.0
+    # stopped variant: no stop day here -> identical to raw
+    st = bt["stopped_at_or45_extreme"]
+    assert st["stop_hit_rate"] == 0.0
+    assert abs(st["avg_bps"] - raw["avg_bps"]) < 0.2
+    # MAE on these clean winners: afternoon high 100.65 < entry 101.4 -> 0
+    assert bt["mae_of_raw_hold_bps"]["median"] == 0.0
+    print("  FADE BT -> exact short-fade pnl, stop untouched, MAE zero")
+
+
+def test_fade_backtest_stop_hit_is_conservative_gap_through():
+    rows = _flat_day(121, px=100.0)
+    days = []
+    for i in range(35):
+        days.append(_big_up_fade_day(120 - 2 * i))
+        days.append(_flat_day(119 - 2 * i, px=100.0))
+    # replace the first fade day with the stop day: afternoon OPENS at 102.3,
+    # beyond the OR45 high 102.05 -> gap-through exit at the OPEN. The close
+    # (102.6) differs from the open so exit-at-close grades -118.3, not -88.8
+    # — the review proved the two were indistinguishable in the old frame.
+    stop_day = _flat_day(120, px=101.0)
+    stop_day[8].update(close=101.4, high=102.05)       # or45 high = 102.05
+    for k in range(9, 75):
+        stop_day[k].update(open=102.3, close=102.6, high=102.65, low=102.25)
+    days[0] = stop_day
+    for d in days:
+        rows += d
+    bt = fade_backtest(_frame(rows))
+    st = bt["stopped_at_or45_extreme"]
+    assert st["n"] == 35
+    assert abs(st["stop_hit_rate"] - round(1 / 35, 3)) < 1e-9
+    # graded at the 102.3 OPEN: not the stop (102.05 -> -64.1) and not the
+    # close (102.6 -> -118.3) — both mutations now fail this exact value
+    worst_expected = (101.4 - 102.3) / 101.4 * 1e4
+    assert abs(st["worst_bps"] - round(worst_expected, 1)) < 0.05
+    # the raw variant held to the 102.6 close and must be STRICTLY worse
+    raw_worst = (101.4 - 102.6) / 101.4 * 1e4
+    assert abs(bt["raw_hold_to_close"]["worst_bps"] - round(raw_worst, 1)) < 0.05
+    assert bt["raw_hold_to_close"]["worst_bps"] < st["worst_bps"]
+    print("  FADE BT -> gap-through stop graded at the open, conservatively")
+
+
+def test_fade_backtest_wick_to_stop_grades_at_the_stop_level():
+    """The review proved three stop mutations survived the old tests: a
+    wrong-side stop, a wick graded at the bar's high, and gap-through vs wick
+    confusion. This day kills all three: bar 9 OPENS inside (101.5), WICKS
+    through the short stop (102.05, high 102.10), and the afternoon settles
+    at a would-be-winning 101.0 — only exit-AT-the-stop yields -64.1bps."""
+    rows = _flat_day(121, px=100.0)
+    days = []
+    for i in range(35):
+        days.append(_big_up_fade_day(120 - 2 * i))
+        days.append(_flat_day(119 - 2 * i, px=100.0))
+    wick = _flat_day(120, px=101.0)
+    wick[8].update(close=101.4, high=102.05)           # short stop = 102.05
+    wick[9].update(open=101.5, high=102.10, low=101.35, close=101.4)
+    for k in range(10, 75):
+        wick[k].update(open=101.0, close=101.0, high=101.05, low=100.95)
+    days[0] = wick
+    for d in days:
+        rows += d
+    st = fade_backtest(_frame(rows))["stopped_at_or45_extreme"]
+    assert st["n"] == 35
+    assert abs(st["stop_hit_rate"] - round(1 / 35, 3)) < 1e-9
+    expected = (101.4 - 102.05) / 101.4 * 1e4          # AT the stop: -64.1
+    # wrong-side stop would gap-through at 101.5 (-9.9); at-the-high grades
+    # 102.10 (-69.0); both fail this exact value
+    assert abs(st["worst_bps"] - round(expected, 1)) < 0.05
+    print("  FADE BT -> wick-to-stop graded AT the stop; mutations killed")
+
+
+def test_fade_backtest_long_side_wick_and_mirror():
+    rows = _flat_day(90, px=100.0)
+    days = []
+    for i in range(31):
+        # big gap UP but morning goes DOWN: bar 8 closes 100.7 (f45_dir=-1),
+        # afternoon recovers to 101.2 -> fade is a LONG that wins
+        d = _flat_day(89 - 2 * i, px=101.0)
+        d[8].update(close=100.7, low=100.65)
+        for k in range(9, 75):
+            d[k].update(open=101.2, close=101.2, high=101.25, low=101.15)
+        days.append(d)
+        days.append(_flat_day(88 - 2 * i, px=100.0))
+    # replace one with a LONG-side wick: bar 9 opens ABOVE the or45-low stop
+    # (100.65), wicks down through it (low 100.60) -> graded AT the stop:
+    # (100.65-100.7)/100.7 = -5.0bps. A wrong-side stop (101.05) would
+    # gap-through at the 100.9 open (+19.9); grading at the bar low gives -9.9.
+    wick = _flat_day(89, px=101.0)
+    wick[8].update(close=100.7, low=100.65)
+    wick[9].update(open=100.9, high=100.95, low=100.60, close=100.9)
+    for k in range(10, 75):
+        wick[k].update(open=101.2, close=101.2, high=101.25, low=101.15)
+    days[0] = wick
+    for d in days:
+        rows += d
+    bt = fade_backtest(_frame(rows))
+    raw = bt["raw_hold_to_close"]
+    assert raw["n"] == 31 and raw["win_rate"] == 1.0   # raw holds ride to 101.2
+    expected = (101.2 - 100.7) / 100.7 * 1e4           # long fade, exact
+    assert abs(raw["avg_bps"] - round(expected, 1)) < 0.2
+    st = bt["stopped_at_or45_extreme"]
+    assert abs(st["stop_hit_rate"] - round(1 / 31, 3)) < 1e-9
+    assert abs(st["worst_bps"] - round((100.65 - 100.7) / 100.7 * 1e4, 1)) < 0.05
+    assert bt["big_down_mirror_raw"]["n"] == 0         # no big_down days here
+    assert "by_year_raw" in bt
+    print("  FADE BT -> long-side fade + wick exact; mirror empty on this frame")
 
 
 if __name__ == "__main__":
