@@ -214,6 +214,22 @@ class SignalCard(BaseModel):
     # refute) the floor. A card with this set must never be offered to trade.
     hollow_reason: Optional[str] = None
 
+    # TAPE STATE at birth (09-Aug study): how one-sided today's session was
+    # when this card was born. "developing" = one-sided but 35-60% of the
+    # day's range resolved, "stretched" = >=60% (late in a traveled move),
+    # "two-way" = <=35% (chop). tape_aligned = card direction matches the
+    # day's side. DISPLAY + LEDGER ONLY — never a gate, never a score input.
+    tape_state: Optional[str] = None
+    tape_resolved_pct: Optional[float] = None   # 0-100+, |close-open|/range
+    tape_aligned: Optional[bool] = None
+    # GOLDEN = every filter that measured positive stacked at once: a
+    # confirm-gated mode, developing tape, direction with the day. A LABEL,
+    # not a promise — the paper book grades golden vs ordinary fills and 30+
+    # fills decide whether the label means anything (weekend sizing: the
+    # components measured 49% / 85%-touch / 43%-clean-win on small samples;
+    # the composite is UNPROVEN until its own ledger votes).
+    golden: bool = False
+
     # Contract multiplier, so the UI can turn premium levels into rupees BEFORE
     # the trade is placed. 0/None means the instrument dump hasn't loaded a lot
     # size — the UI must then show no rupee figures rather than guess one.

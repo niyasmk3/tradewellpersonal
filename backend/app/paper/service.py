@@ -504,6 +504,11 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "hollow": hollow,
             "shadow_class": cls,
             "mode": t.mode.value,
+            # GOLDEN label + tape state (09-Aug): ride every row so the UI
+            # can chip golden fills and audits can split by tape without
+            # re-joining against the signal archive. None on pre-label rows.
+            "golden": getattr(t, "golden", None),
+            "tape": getattr(t, "tape_state", None),
         }
         if cls == "setup":
             # Per-setup grouping key, parsed from the atomic fill tag
@@ -866,6 +871,36 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
                  "on both sides, not the full counterfactual."),
     } if derisked else None
 
+    # ---- THE GOLDEN LABEL'S OWN LEDGER (09-Aug) -----------------------------
+    # GOLDEN = confirm-gated mode + developing tape + direction with the day,
+    # stamped on the card at birth. The label is a HYPOTHESIS: its components
+    # measured well individually on small samples, the composite never has.
+    # This split is the arbiter — golden fills must beat ordinary fills over
+    # 30+ golden rows or the colour comes off. Rows from before the label
+    # existed carry golden=None and are excluded from BOTH arms (an untagged
+    # row in the ordinary arm would dilute the exact comparison this exists
+    # to make).
+    def _lbl_stats(rs: list[float]) -> dict:
+        return {
+            "trades": len(rs),
+            "net_pnl": round(sum(rs), 2),
+            "expectancy": round(sum(rs) / len(rs), 2) if rs else 0.0,
+            "win_rate": (round(100 * sum(1 for v in rs if v > 0) / len(rs), 1)
+                         if rs else 0.0),
+        }
+
+    golden_vals, plain_vals = [], []
+    for t in closed:
+        if (shadow_class(t) is not None or t.entered_at < HONEST_FILLS_FROM
+                or getattr(t, "golden", None) is None):
+            continue
+        qty = t.initial_quantity or t.quantity
+        (golden_vals if t.golden else plain_vals).append(
+            chg.net_pnl(t.entry_premium, t.exit_premium, qty))
+    golden_block = (
+        {"golden": _lbl_stats(golden_vals), "ordinary": _lbl_stats(plain_vals)}
+        if (golden_vals or plain_vals) else None)
+
     return {
         "trades": len(rows),
         "open": len(open_clean),
@@ -983,6 +1018,10 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             "win_rate": (round(100 * sum(1 for r in confirm_rows if r["net_pnl"] > 0)
                                / len(confirm_rows), 1) if confirm_rows else 0.0),
         } if (confirm_rows or open_confirm) else None,
+        # THE GOLDEN LABEL'S LEDGER (09-Aug, see the block above): clean fills
+        # split golden vs ordinary. Verdict at 30+ golden fills — golden must
+        # BEAT ordinary, not merely exist, or the label is decoration.
+        "golden": golden_block,
         # THE EXIT-POLICY A/B (see the block above): same trades, two exits.
         "exit_ab": exit_ab,
         # THE STOP-BASIS A/B (audit P1-5, see the block above): same trades,

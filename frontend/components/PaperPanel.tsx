@@ -190,6 +190,23 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
         </div>
       )}
 
+      {/* GOLDEN-label ledger (09-Aug): clean fills split golden vs ordinary.
+          The amber card colour survives only if golden BEATS ordinary. */}
+      {data.golden && (
+        <div className="mt-2 rounded bg-amber-400/10 px-2 py-1 text-[10px] text-amber-300">
+          🌟 Golden-label ledger: golden {data.golden.golden.trades} fill(s), ₹
+          {signed(data.golden.golden.expectancy, 0)}/trade ({data.golden.golden.win_rate}% wins)
+          {" vs ordinary "}
+          {data.golden.ordinary.trades} fill(s), ₹{signed(data.golden.ordinary.expectancy, 0)}/trade
+          ({data.golden.ordinary.win_rate}% wins).{" "}
+          {data.golden.golden.trades < 30
+            ? `Verdict at 30+ golden fills — ${30 - data.golden.golden.trades} to go; the label must BEAT ordinary or the colour comes off.`
+            : data.golden.golden.expectancy > data.golden.ordinary.expectancy
+              ? "Golden is beating ordinary at sample size — the label has earned its colour."
+              : "Golden is NOT beating ordinary — retire the label."}
+        </div>
+      )}
+
       {/* The +5% early-derisk lock's scoreboard: after each breakeven
           lock-out, did the premium crash (lock saved us) or run (lock cost
           us)? Same-session window — a floor on both sides, not the full
@@ -335,6 +352,14 @@ export function PaperPanel({ data, error }: { data: PaperSummary | null; error?:
                               : r.shadow_class === "confirm"
                                 ? "watch"
                                 : "hollow"}
+                  </span>
+                )}
+                {r.golden && (
+                  <span
+                    className="tag bg-amber-400/15 text-[9px] text-amber-300"
+                    title="This fill's card was GOLDEN at birth (confirm-gated + developing tape + with the day). The golden ledger above grades whether the label earns its colour."
+                  >
+                    🌟 golden
                   </span>
                 )}
                 {r.era?.startsWith("inflated") && (

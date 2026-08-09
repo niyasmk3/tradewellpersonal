@@ -595,6 +595,28 @@ class SignalService:
 
         self._apply_sizing(fresh, symbol)
 
+        # TAPE STATE + GOLDEN label (09-Aug weekend study). Display and
+        # ledger material ONLY — no gate, no score input. Attached before the
+        # veto block on purpose: vetoed copies land in the shadow stores with
+        # their tags intact, so every ledger can later split by tape state.
+        if fresh.signal is not None:
+            tape = self._tape_state(df, now)
+            if tape is not None:
+                t_state, t_pct, t_side = tape
+                card = fresh.signal
+                card.tape_state = t_state
+                card.tape_resolved_pct = t_pct
+                card.tape_aligned = (t_side == "up") == (card.direction.value == "CE")
+                # GOLDEN = confirm-gated mode + developing tape + with the
+                # day. The label is itself a hypothesis: the paper book grades
+                # golden vs ordinary fills, verdict at 30+ golden fills.
+                card.golden = bool(
+                    t_state == "developing"
+                    and card.tape_aligned
+                    and card.mode.value in ("intraday", "scalp")
+                    and int(getattr(self.cfg, "signal_confirm_bars", 0) or 0) >= 2
+                )
+
         # Late-day positional cards carry the overnight-gap caution (advisory
         # text; the 28->29 Jul +230-point gap against the evening read is why).
         if fresh.signal is not None:
@@ -824,6 +846,42 @@ class SignalService:
                          or (meta.lot_size if meta and meta.lot_size else 0)) or None
         return card
 
+    @staticmethod
+    def _tape_state(df, now: int):
+        """(state, resolved_pct, side) of TODAY's session so far, or None
+        while the day is too young to classify (<3 closed bars).
+
+        resolved = |close - day open| / (day high - day low): how one-sided
+        the session has been. The weekend study's split points (35/60) are
+        FROZEN here — tuning them against outcomes would be fitting the
+        label to the ledger it is supposed to test.
+        """
+        try:
+            day = (int(now) + 19800) // 86400
+            ts = df["ts"].astype(int)
+            g = df[(ts + 19800) // 86400 == day]
+            if len(g) < 3:
+                return None
+            # 30-minute session-age floor: the study that froze the 35/60
+            # splits measured on 5-min bars — on the scalp 1m frame "3 bars"
+            # is 09:18, when the ratio is coin-flip noise. Age gates DATA
+            # QUALITY, not outcomes; it is not a tunable.
+            if int(g["ts"].iloc[-1]) - int(g["ts"].iloc[0]) < 1800:
+                return None
+            o = float(g["open"].iloc[0])
+            hi = float(g["high"].max())
+            lo = float(g["low"].min())
+            c = float(g["close"].iloc[-1])
+            rng = hi - lo
+            if rng <= 0:
+                return None
+            sf = abs(c - o) / rng
+            state = ("developing" if 0.35 < sf < 0.60
+                     else "stretched" if sf >= 0.60 else "two-way")
+            return state, round(sf * 100.0, 1), ("up" if c >= o else "down")
+        except Exception:
+            return None
+
     def _trace_bar(self, symbol, profile, df, fresh, final, veto, shadow_tag, now,
                    setup=None) -> None:
         """Blind-spot instrumentation (audit P1-2): one trace line per closed
@@ -869,6 +927,9 @@ class SignalService:
                          if final is not None and final.signal is not None else None),
                 # P1-4: which setup detector (if any) fired on this bar.
                 "setup": setup,
+                # 09-Aug: tape state per bar — lets future audits split every
+                # veto/outcome by developing/stretched/two-way without replay.
+                "tape": (self._tape_state(df, now) or (None,))[0],
             })
         except Exception:
             log.debug("eval trace hook failed", exc_info=True)

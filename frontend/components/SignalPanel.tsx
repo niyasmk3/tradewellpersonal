@@ -362,7 +362,13 @@ export function SignalPanel({
   const dirBg = ce ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear";
   const conf = signal.confidence;
   const confLabel = conf >= 80 ? "strong" : conf >= 70 ? "valid" : "wait";
-  const border = ce ? "border-bull/40" : "border-bear/40";
+  // GOLDEN cards wear an unmistakable amber shell — every measured filter
+  // stacked at once (confirm-gated, developing tape, with the day). The
+  // colour is a label on trial, not a promise: the Paper tab's golden
+  // ledger decides at 30+ fills whether it stays.
+  const border = signal.golden
+    ? "border-amber-400/80 ring-2 ring-amber-400/40 bg-amber-500/[0.07]"
+    : ce ? "border-bull/40" : "border-bear/40";
 
   return (
     // Pinned shell: header, contract, key numbers and the action row never
@@ -372,6 +378,14 @@ export function SignalPanel({
     <div className={`card flex flex-col overflow-hidden border ${border} ${className}`}>
       {/* header */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pt-3">
+        {signal.golden && (
+          <span
+            className="tag bg-amber-400/20 text-amber-300 text-xs font-semibold"
+            title="GOLDEN: confirm-gated + tape developing (one-sided, 35-60% resolved) + direction with the day — the profile that measured best. Label on trial: the Paper tab's golden ledger renders the verdict at 30+ fills."
+          >
+            🌟 GOLDEN
+          </span>
+        )}
         <span className={`tag ${dirBg} text-xs`}>{ce ? "BUY CE" : "BUY PE"}</span>
         <span className="tag bg-panel2 text-muted">{signal.mode === "positional" ? "Positional" : "Intraday"}</span>
         <span className="text-sm font-semibold">{signal.title}</span>
@@ -404,6 +418,21 @@ export function SignalPanel({
             title={`Scheduled event nearby: ${signal.event_note}. The size suggestion is halved — event windows gap through stops.`}
           >
             ⚠ {signal.event_note}
+          </span>
+        )}
+        {signal.tape_state && (
+          <span
+            className={`tag ${
+              signal.golden
+                ? "bg-amber-400/15 text-amber-300"
+                : signal.tape_state === "two-way"
+                  ? "bg-panel2 text-muted"
+                  : "bg-sky-500/10 text-sky-300"
+            }`}
+            title={`Tape at issue: the day was ${signal.tape_state} (${signal.tape_resolved_pct ?? "?"}% of its range resolved), and this card's direction is ${signal.tape_aligned ? "WITH" : "AGAINST"} the day's side. Context label only — measured meaning is still on trial in the Paper tab.`}
+          >
+            tape: {signal.tape_state}
+            {signal.tape_aligned === false ? " · against day" : ""}
           </span>
         )}
         {/* Pricing freshness + one-click re-price, both modes. Available from 2m

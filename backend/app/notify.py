@@ -111,6 +111,18 @@ def _body(card: SignalCard, include_sizing: bool = True) -> str:
         f"Entry ₹{card.entry_low}–{card.entry_high}",
         f"SL ₹{card.premium_sl} · T1 ₹{card.target1} · T2 ₹{card.target2}",
     ]
+    # Tape state at birth (09-Aug): the same label the card shows on screen,
+    # so the phone knows a GOLDEN card without opening the dashboard. Body
+    # text only — headers stay latin-1-safe via _header_safe.
+    if getattr(card, "golden", False):
+        lines.insert(0, "🌟 GOLDEN — developing tape, with the day (label on "
+                        "trial: ledger decides at 30 fills)")
+    elif getattr(card, "tape_state", None):
+        align = ("with" if card.tape_aligned else "against") \
+            if card.tape_aligned is not None else "?"
+        pct = f"{card.tape_resolved_pct:g}% resolved, " \
+            if card.tape_resolved_pct is not None else ""
+        lines.append(f"Tape: {card.tape_state} ({pct}{align} the day)")
     if exp:
         # Strike is already in the contract name; the expiry is what the
         # notification was missing — the wrong-series trade is the mistake
@@ -347,6 +359,8 @@ def push_signal(card: SignalCard, cfg: Settings, on_result=None) -> bool:
                 # Routing flag for json consumers (Telegram bots, HA automations)
                 # so an overnight-hold candidate can ring a different bell.
                 "evening_positional": _is_evening_positional(card),
+                # 09-Aug: golden cards can ring their own bell too.
+                "golden": bool(getattr(card, "golden", False)),
             }).encode(), {"Content-Type": "application/json"}
         return (f"{title}\n{body}".encode(),
                 {"Content-Type": "text/plain; charset=utf-8", "Title": _header_safe(title)})

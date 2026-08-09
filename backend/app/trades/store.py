@@ -206,6 +206,8 @@ class TradeStore:
                 quick_target=quick_target,
                 invalidation_level=card.invalidation_level, invalidation_dir=card.invalidation_dir,
                 entry_score=card.confidence,
+                tape_state=getattr(card, "tape_state", None),
+                golden=getattr(card, "golden", None),
                 created_at=now, entered_at=now,
                 # Set at creation (not a follow-up update) so a hollow tag is
                 # ATOMIC with the fill — an untagged hollow row would be

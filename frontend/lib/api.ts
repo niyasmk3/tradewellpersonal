@@ -224,6 +224,12 @@ export interface SignalCard {
   fund_note: string | null;
   /** Scheduled macro event nearby (from .events.json); sizing is halved while set. */
   event_note: string | null;
+  /** Tape state at birth: "developing" | "stretched" | "two-way" (null while the day is too young). */
+  tape_state: string | null;
+  tape_resolved_pct: number | null;
+  tape_aligned: boolean | null;
+  /** GOLDEN label: confirm-gated + developing tape + with the day. Display + ledger only. */
+  golden: boolean;
   /** Contract multiplier — required to turn premium levels into rupees. */
   lot_size: number | null;
   trading_capital: number | null;
@@ -365,6 +371,9 @@ export interface Trade {
   broker_checked_at: number | null;
   notes: string | null;
   events: TradeEvent[];
+  /** Tape state + GOLDEN label copied from the card at fill (null on older rows). */
+  tape_state?: string | null;
+  golden?: boolean | null;
 }
 
 // ---- Market pulse (live tape analytics under the score card) ----
@@ -419,6 +428,9 @@ export interface PaperRow {
   /** Which setup detector booked this row (setup-class rows only). */
   setup?: string;
   mode?: string;
+  /** GOLDEN label + tape state at the card's birth (null on pre-label rows). */
+  golden?: boolean | null;
+  tape?: string | null;
 }
 
 export interface PaperSummary {
@@ -448,6 +460,11 @@ export interface PaperSummary {
   /** WATCH->CONFIRM ledger (P2-3): fills of first-gate-bar cards the
       persistence gate refused. Negative = the gate earns its keep. */
   confirm_shadow?: { trades: number; open: number; net_pnl: number; expectancy: number; win_rate: number } | null;
+  /** Golden-label ledger: clean fills split golden vs ordinary. Golden must BEAT ordinary at 30+ fills. */
+  golden?: {
+    golden: { trades: number; net_pnl: number; expectancy: number; win_rate: number };
+    ordinary: { trades: number; net_pnl: number; expectancy: number; win_rate: number };
+  } | null;
   /** Setup detectors' ledger (P1-4): structural candidates the score engine
       cannot see, per-setup verdicts at 30+ fills each. */
   setup_shadow?: {

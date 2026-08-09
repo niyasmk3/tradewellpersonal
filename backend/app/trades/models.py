@@ -127,6 +127,12 @@ class Trade(BaseModel):
     # close when positional score > X" — without the score ON the row, X could
     # only ever be guessed. None on rows recorded before the field existed.
     entry_score: Optional[float] = None
+    # Tape state + GOLDEN label copied from the card at fill time (09-Aug):
+    # the paper ledger splits fills by these to decide whether the golden
+    # label (confirm-gated + developing tape + with the day) earns its
+    # colour. None on rows recorded before the fields existed.
+    tape_state: Optional[str] = None
+    golden: Optional[bool] = None
     # First premium print of the first session AFTER entry, latched once by the
     # monitor. entry -> next_open isolates the overnight gap — the component no
     # intraday exit can manage (a gap settles before any stop can act), which
