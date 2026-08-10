@@ -40,6 +40,15 @@ def load_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def excluded_ids() -> set[str]:
+    """Trade ids the human has ruled out — see data/journal_overrides.json."""
+    p = ROOT / "recorder" / "data" / "journal_overrides.json"
+    try:
+        return {e["id"] for e in json.loads(p.read_text()).get("exclude", [])}
+    except Exception:
+        return set()
+
+
 def load_json(path: Path) -> object | None:
     if not path.exists():
         return None
@@ -88,13 +97,13 @@ def summarize_trades(trades: list[dict], label: str) -> None:
     status = Counter(str(t.get("status")) for t in trades if t.get("status"))
     if status:
         print(f"  by status: {', '.join(f'{k}:{n}' for k, n in status.most_common())}")
-    # Never count bookkeeping mistakes: dismissed rows, and rows a human has
-    # flagged PHANTOM in notes (mis-typed fills the app faithfully graded —
-    # the `ignore` endpoint only works on OPEN trades, so a closed mistake can
-    # only be neutralised by the note).
+    # Never count bookkeeping mistakes: dismissed rows, plus any row listed in
+    # data/journal_overrides.json (the app refuses to edit or ignore a CLOSED
+    # trade, so a mistake caught after the fact can only be excluded here).
+    excluded = excluded_ids()
     graded = [t for t in trades
               if str(t.get("status", "")).lower() != "ignored"
-              and not str(t.get("notes") or "").upper().startswith("PHANTOM")]
+              and t.get("id") not in excluded]
     reasons = Counter(str(t.get("exit_reason")) for t in graded if t.get("exit_reason"))
     if reasons:
         print(f"  by exit: {', '.join(f'{k}:{n}' for k, n in reasons.most_common())}")

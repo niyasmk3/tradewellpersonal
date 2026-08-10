@@ -86,6 +86,17 @@ def load_trades(path: Path) -> list[dict]:
     return []
 
 
+def _load_excluded() -> set[str]:
+    p = DATA / "journal_overrides.json"
+    try:
+        return {e["id"] for e in json.loads(p.read_text()).get("exclude", [])}
+    except Exception:
+        return set()
+
+
+_EXCLUDED_IDS = _load_excluded()
+
+
 def outcome_by_signal(trades: list[dict]) -> dict[str, dict]:
     """signal_id → closed trade row (first terminal match wins)."""
     out: dict[str, dict] = {}
@@ -93,8 +104,9 @@ def outcome_by_signal(trades: list[dict]) -> dict[str, dict]:
         sid = t.get("signal_id")
         if not sid or str(sid) in out:
             continue
-        # Human-flagged bookkeeping mistakes never become training labels.
-        if str(t.get("notes") or "").upper().startswith("PHANTOM"):
+        # Human-ruled-out rows never become training labels — see
+        # data/journal_overrides.json.
+        if t.get("id") in _EXCLUDED_IDS:
             continue
         status = str(t.get("status", "")).lower()
         closed = (
