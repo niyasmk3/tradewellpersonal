@@ -48,6 +48,39 @@ def main() -> int:
         "holdout_rows": max(n_hold, 0),
     }
 
+    # Exit-style counterfactual on the REAL book only (shadow fills carry a
+    # "hollow:" note and are research hypotheses, not results). Three exits:
+    # the written rules (actual), owner-style bank at first +5% touch, and
+    # symmetric fast exits (bank +5% / cut −5%).
+    paper_p = ROOT.parent / "backend" / ".paper_trades.json"
+    try:
+        fills = [t for t in json.loads(paper_p.read_text())
+                 if t.get("exited_at")
+                 and not str(t.get("notes") or "").startswith("hollow")]
+    except Exception:
+        fills = []
+    if fills:
+        a = b = s = touched = 0.0
+        for t in fills:
+            e, x = t["entry_premium"], t.get("exit_premium") or t["entry_premium"]
+            q = t.get("quantity") or 0
+            mfe = t.get("mfe_premium") or 0
+            r_act = (x - e) / e if e else 0
+            hit5 = e and (mfe - e) / e >= 0.05
+            touched += bool(hit5)
+            r_bank = 0.05 if hit5 else r_act
+            r_sym = 0.05 if hit5 else max(r_act, -0.05)
+            a += r_act * e * q
+            b += r_bank * e * q
+            s += r_sym * e * q
+        entry["exit_cf"] = {
+            "real_fills": len(fills),
+            "touched_5pct": int(touched),
+            "gross_actual": round(a),
+            "gross_bank5": round(b),
+            "gross_bank5_cut5": round(s),
+        }
+
     if n_train >= 10 and "label_win" in train:
         num = train.select_dtypes("number").drop(
             columns=[c for c in ("label_win", "net_R", "net_pnl", "created_at") if c in train],
@@ -77,6 +110,11 @@ def main() -> int:
 
     print(f"learning pass: {total} graded cards "
           f"({n_train} train / {entry['holdout_rows']} holdout)")
+    if "exit_cf" in entry:
+        c = entry["exit_cf"]
+        print(f"  exit counterfactual (real book, {c['real_fills']} fills, "
+              f"{c['touched_5pct']} touched +5%): written rules ₹{c['gross_actual']:+,} | "
+              f"bank@+5% ₹{c['gross_bank5']:+,} | bank+cut ±5% ₹{c['gross_bank5_cut5']:+,}")
     if "top_separating_features" in entry:
         print(f"  separating features so far: {entry['top_separating_features']}")
     if "score_calibration" in entry:

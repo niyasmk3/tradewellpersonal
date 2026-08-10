@@ -120,24 +120,47 @@ def build() -> str:
     archive = load_jsonl(ROOT / "backend" / ".signals_archive.jsonl")
     ledger = load_jsonl(DATA / "learning_ledger.jsonl")
 
-    closed = [t for t in paper if t.get("exited_at")
+    def is_shadow(t: dict) -> bool:
+        return str(t.get("notes") or "").startswith("hollow")
+
+    real = [t for t in paper if not is_shadow(t)]
+    shadow = [t for t in paper if is_shadow(t)]
+    closed = [t for t in real if t.get("exited_at")
               and isinstance(t.get("realized_pnl"), (int, float))]
     wins = [t for t in closed if t["realized_pnl"] > 0]
     gross = sum(t["realized_pnl"] for t in closed)
-    scoreboard = table(
-        ["Closed fills", "Win / Loss", "Total P&L (gross)", "Avg / trade"],
-        [[str(len(closed)), f"{len(wins)}W / {len(closed) - len(wins)}L",
-          money(gross), money(gross / len(closed))]] if closed else [])
+    sh_closed = [t for t in shadow if t.get("exited_at")
+                 and isinstance(t.get("realized_pnl"), (int, float))]
+    sh_gross = sum(t["realized_pnl"] for t in sh_closed)
+    score_rows = []
+    if closed:
+        score_rows.append(["REAL book", str(len(closed)),
+                           f"{len(wins)}W / {len(closed) - len(wins)}L",
+                           money(gross), money(gross / len(closed))])
+    if sh_closed:
+        sh_w = sum(1 for t in sh_closed if t["realized_pnl"] > 0)
+        score_rows.append(['<span class="note">shadow research fills (vetoed/refire — never counted)</span>',
+                           str(len(sh_closed)),
+                           f"{sh_w}W / {len(sh_closed) - sh_w}L",
+                           money(sh_gross), money(sh_gross / len(sh_closed))])
+    scoreboard = table(["Book", "Closed", "Win / Loss", "Total P&L (gross)", "Avg / trade"],
+                       score_rows)
+
+    def book_tag(t: dict) -> str:
+        if not is_shadow(t):
+            return "real"
+        return "shadow-refire" if "refire" in str(t.get("notes")) else "shadow-hollow"
 
     fill_rows = [[
         fmt_ts(t.get("entered_at")), esc(t.get("contract", "")), esc(t.get("mode", "")),
+        esc(book_tag(t)),
         f"{t.get('entry_premium', 0):.2f} → "
         + (f"{t.get('exit_premium'):.2f}" if t.get("exit_premium") else "open"),
         money(t["realized_pnl"]) if t.get("exited_at") and isinstance(t.get("realized_pnl"), (int, float)) else "—",
         esc(t.get("auto_close_reason") or t.get("exit_reason") or t.get("status", "")),
         f"score {t.get('entry_score', '—')}",
     ] for t in sorted(paper, key=lambda t: t.get("entered_at") or 0, reverse=True)]
-    fills = table(["Entered", "Contract", "Mode", "Premium", "P&L (gross)",
+    fills = table(["Entered", "Contract", "Mode", "Book", "Premium", "P&L (gross)",
                    "Exit / status", "Entry score"], fill_rows)
 
     cards: dict[str, dict] = {}
@@ -167,6 +190,15 @@ def build() -> str:
                          "Score calibration", "Ignition"], led_rows)
 
     last = ledger[-1] if ledger else {}
+    cf = last.get("exit_cf") or {}
+    if cf:
+        exit_cf_html = table(
+            ["Real fills", "Touched +5%", "Written rules", "Bank @ +5%", "Bank +5% / cut −5%"],
+            [[str(cf.get("real_fills")), str(cf.get("touched_5pct")),
+              money(cf.get("gross_actual", 0)), money(cf.get("gross_bank5", 0)),
+              money(cf.get("gross_bank5_cut5", 0))]])
+    else:
+        exit_cf_html = '<p class="empty">appears after the next nightly learning pass</p>'
     n_train = last.get("train_rows", 0)
     pct = min(100, int(100 * n_train / IGNITION_ROWS))
     countdown = (
@@ -216,9 +248,7 @@ def build() -> str:
             + table(["Day", "Net contracts (long − short)"],
                     [[esc(d), f"{v:+,.0f}"] for d, v in fii])
         snaps = q("SELECT endpoint, COUNT(*) FROM snapshots GROUP BY endpoint ORDER BY 2 DESC")
-        births = (q("SELECT COUNT(*) FROM card_births") or [[0]])[0][0]
-        cap = table(["Stream", "Rows"],
-                    [[esc(e), f"{n:,}"] for e, n in snaps] + [["card-birth snapshots", str(births)]])
+        cap = table(["Stream", "Rows"], [[esc(e), f"{n:,}"] for e, n in snaps])
 
     # Mirror daily text reports into public/ so they are linkable.
     PUB_REPORTS.mkdir(parents=True, exist_ok=True)
@@ -289,6 +319,10 @@ def build() -> str:
 <div class="tab" id="training">
 {section("What is learning right now", trained_now,
          "Ledgers accumulate evidence automatically; policy flips stay human — by design.")}
+{section("Exit-style counterfactual (owner-style, real book only)", exit_cf_html,
+         "Same fills, three exit policies. Bank@+5% = sell at the first +5% touch. "
+         "Bank+cut = also exit the moment a trade goes −5% against you. Tiny sample — "
+         "treat as a hypothesis being graded, not a verdict.")}
 {section("Research ignition countdown", countdown)}
 {section("Nightly learning ledger", ledger_html,
          "Effect size = standard deviations separating winners from losers. Tiny samples wobble; watch trends across weeks.")}

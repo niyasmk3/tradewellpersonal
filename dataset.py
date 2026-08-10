@@ -93,6 +93,9 @@ def outcome_by_signal(trades: list[dict]) -> dict[str, dict]:
         sid = t.get("signal_id")
         if not sid or str(sid) in out:
             continue
+        # Human-flagged bookkeeping mistakes never become training labels.
+        if str(t.get("notes") or "").upper().startswith("PHANTOM"):
+            continue
         status = str(t.get("status", "")).lower()
         closed = (
             any(s in status for s in CLOSED_STATUSES)
@@ -322,8 +325,17 @@ def main() -> int:
 
     import pandas as pd  # backend venv dependency
     df = pd.DataFrame(rows).sort_values("created_at")
-    cutoff = (datetime.now(IST) - timedelta(days=HOLDOUT_DAYS)).timestamp()
-    train, hold = df[df["created_at"] < cutoff], df[df["created_at"] >= cutoff]
+    span_days = (df["created_at"].max() - df["created_at"].min()) / 86400
+    if span_days >= 2 * HOLDOUT_DAYS:
+        # Mature dataset: newest 28 days stay locked.
+        cutoff = (datetime.now(IST) - timedelta(days=HOLDOUT_DAYS)).timestamp()
+        train, hold = df[df["created_at"] < cutoff], df[df["created_at"] >= cutoff]
+    else:
+        # Young dataset: a fixed 28-day window would lock EVERYTHING and
+        # starve the nightly learning pass for a month. Lock the newest third
+        # (min 3 rows) instead — still a genuinely unseen tail.
+        k = max(3, round(len(df) * 0.33))
+        hold, train = df.tail(k), df.head(len(df) - k)
     DATA.mkdir(parents=True, exist_ok=True)
     train.to_csv(DATA / "dataset.csv", index=False)
     hold.to_csv(DATA / "dataset_holdout.csv", index=False)
