@@ -140,6 +140,78 @@ def save_candles(db: sqlite3.Connection, symbol: str, tf: str, bars: object) -> 
     return len(rows)
 
 
+def _env_value(name: str) -> str | None:
+    env = Path(__file__).resolve().parents[1] / "backend" / ".env"
+    if not env.exists():
+        return None
+    for line in env.read_text().splitlines():
+        if line.startswith(f"{name}=") and not line.startswith("#"):
+            return line.split("=", 1)[1].strip() or None
+    return None
+
+
+def devils_advocate(card: dict, pulse: dict | None, ind: dict | None) -> dict | None:
+    """One Claude call arguing AGAINST the card (idea borrowed from
+    TauricResearch/TradingAgents' bull-vs-bear debate, transplanted into our
+    evidence culture): it decides nothing, blocks nothing — its counter-score
+    is stamped into the birth snapshot as one more feature for the dataset,
+    on the same probation as everything else. Off-switch: DEVILS_ADVOCATE=false
+    in backend/.env. Cost ≈ ₹1/card on the existing ANTHROPIC_API_KEY.
+    """
+    if (_env_value("DEVILS_ADVOCATE") or "true").lower() == "false":
+        return None
+    key = _env_value("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    try:
+        import anthropic  # backend venv dependency
+
+        comp = {c.get("name"): c.get("points")
+                for c in (card.get("score") or {}).get("components", [])}
+        digest = {
+            "direction": card.get("direction"), "contract": card.get("contract"),
+            "mode": card.get("mode"), "score": card.get("confidence"),
+            "components": comp, "reasons": (card.get("reasons") or [])[:5],
+            "entry_zone": [card.get("entry_low"), card.get("entry_high")],
+            "sl": card.get("premium_sl"), "t1": card.get("target1"),
+            "pulse": {k: v for k, v in (pulse or {}).items()
+                      if isinstance(v, (int, float))},
+            "indicators": {k: (ind or {}).get(k) for k in ("rsi", "adx", "vwap", "atr")},
+        }
+        client = anthropic.Anthropic(api_key=key)
+        resp = client.messages.create(
+            model="claude-opus-5",
+            max_tokens=3000,  # thinking shares this cap on Opus 5 — leave room
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": {
+                "type": "object",
+                "properties": {
+                    "counter_strength": {"type": "integer",
+                                         "description": "0-100; 100 = the opposite case is overwhelming"},
+                    "top_risks": {"type": "array", "items": {"type": "string"},
+                                  "description": "up to 3 short reasons this trade fails"},
+                    "one_line": {"type": "string"},
+                },
+                "required": ["counter_strength", "top_risks", "one_line"],
+                "additionalProperties": False,
+            }}},
+            messages=[{"role": "user", "content":
+                       "You are the devil's advocate on an Indian index-options desk. "
+                       "A rule engine just issued this trade card. Argue the OPPOSITE "
+                       "side as strongly as the evidence allows, using only the data "
+                       "given. Be specific, not generic.\n\n"
+                       + json.dumps(digest, default=str)}],
+        )
+        if resp.stop_reason == "refusal":
+            return None
+        text = next(b.text for b in resp.content if b.type == "text")
+        out = json.loads(text)
+        out["model"] = "claude-opus-5"
+        return out
+    except Exception as exc:  # advocate is optional — never break the capture
+        log(f"  advocate skipped: {type(exc).__name__}: {exc}")
+        return None
+
+
 def capture_card_births(db: sqlite3.Connection, seen: set[str]) -> bool:
     """Event-driven capture: the moment a NEW signal card appears, snapshot the
     full market state (chain + pulse + indicators) tagged with the card id.
@@ -159,12 +231,15 @@ def capture_card_births(db: sqlite3.Connection, seen: set[str]) -> bool:
             cid = card.get("id") if isinstance(card, dict) else None
             if not cid or cid in seen:
                 continue
+            pulse = http_json(f"/market/{s}/pulse")
+            ind = http_json(f"/market/{s}/indicators")
             birth = {
                 "mode": mode,
                 "response": resp,
                 "chain": http_json(f"/options/{s}"),
-                "pulse": http_json(f"/market/{s}/pulse"),
-                "indicators": http_json(f"/market/{s}/indicators"),
+                "pulse": pulse,
+                "indicators": ind,
+                "advocate": devils_advocate(card, pulse, ind),
             }
             save_snapshot(db, "card_birth", s, birth)
             db.execute(
@@ -245,6 +320,15 @@ def selftest() -> int:
 
 
 def main() -> int:
+    if "--advocate-test" in sys.argv:
+        fake = {"direction": "PE", "contract": "NIFTY 24600 PE", "mode": "intraday",
+                "confidence": 84.0, "reasons": ["breakdown below VWAP", "volume 15/15"],
+                "entry_low": 120.0, "entry_high": 124.0, "premium_sl": 98.0,
+                "target1": 155.0,
+                "score": {"components": [{"name": "Volume confirmation", "points": 15.0}]}}
+        out = devils_advocate(fake, {"vwap_stretch": -1.2, "range_pos": 30.0}, {"rsi": 41.0, "adx": 22.0})
+        log(f"advocate test → {json.dumps(out, indent=2) if out else 'DISABLED or failed'}")
+        return 0
     if "--selftest" in sys.argv:
         return selftest()
 

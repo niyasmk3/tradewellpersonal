@@ -27,6 +27,7 @@ FEATURES = [
     "pcr",
     "oi_change_skew",
     "vix_close",
+    "advocate_counter",
     "mode",
     "direction",
 ]

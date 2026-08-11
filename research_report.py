@@ -110,6 +110,7 @@ GLOSSARY: list[tuple[str, str]] = [
     ("Meta-labeling", "Our ML design: the model never predicts the market. It predicts 'given THIS card, what's the probability it wins' — a quality filter over the rule engine."),
     ("Karpathy harness", "The self-running research loop: change one thing → evaluate walk-forward → keep only what consistently wins → log every attempt. Ignites itself when data gates pass."),
     ("Ignition gates", "40+ training rows across 2+ months. Below that, any 'finding' is likely luck; the harness refuses to start early by design."),
+    ("Devil's advocate", "Borrowed from the TradingAgents research idea of bull-vs-bear debate: when a card fires, one Claude call argues the OPPOSITE case and scores how strong that counter-case is (0–100). It never blocks a trade — the score is just one more dataset ingredient, graded at 30+ fills like everything else."),
 ]
 
 
@@ -225,6 +226,7 @@ def build() -> str:
         ["Persistence gate (upstream)", "Live since 05-Aug — one bar above 78 is a watch, not an offer"],
         ["Nightly learning ledger (ours)", "Runs every close — feature separation + score calibration, logged forever"],
         ["Karpathy harness (ours)", "Armed, auto-ignites at 40 rows / 2 months — see countdown"],
+        ["Devil's advocate (ours, 11-Aug)", "One Claude call argues AGAINST each new card; its counter-score is stamped into the birth snapshot as a dataset feature — decides nothing, on probation like everything else"],
     ])
 
     nse = cap = '<p class="empty">db missing</p>'

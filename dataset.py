@@ -323,6 +323,9 @@ def main() -> int:
         f.update(chain_features(chain))
         f.update(indicator_features(ind, card.get("ref_spot")))
         f.update(pulse_features(pulse))
+        adv = (birth or {}).get("advocate") or {}
+        if isinstance(adv.get("counter_strength"), (int, float)):
+            f["advocate_counter"] = adv["counter_strength"]
         vix = vix_close_before(db, created)
         if vix is not None:
             f["vix_close"] = vix
