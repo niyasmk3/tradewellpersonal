@@ -932,6 +932,230 @@ export interface PatternsResults {
   };
 }
 
+// ---- Iron Condor module (advisory, trial) ----
+// Types mirror backend/app/condor/models.py — keep them in sync.
+
+export interface CondorLeg {
+  side: "SELL" | "BUY";
+  right: string; // "CE" | "PE"
+  strike: number;
+  token?: number | null;
+  tradingsymbol?: string | null;
+  /** Entry fill on position legs; live LTP on card legs. */
+  ltp?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  mid?: number | null;
+  spread_pct?: number | null;
+  oi?: number | null;
+  /** Fraction, e.g. 0.143. */
+  iv?: number | null;
+  delta?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+  gamma?: number | null;
+  quote_age_s?: number | null;
+}
+
+export interface ScorePart {
+  name: string;
+  points: number;
+  max: number;
+  detail: string;
+}
+
+export interface CondorCard {
+  id: string;
+  symbol: string;
+  expiry: string | null;
+  dte: number;
+  dte_trading: number;
+  spot: number | null;
+  state: string; // active / expired / withdrawn
+  /** Shadow-first: rendered, never pushed. */
+  trial: boolean;
+  legs: CondorLeg[];
+  /** Wing width, points (same both sides). */
+  width: number;
+  lot_size: number;
+  lots: number;
+  /** Credit economics: points per unit; rupee fields already × lot × lots. */
+  credit_mid: number;
+  credit_ideal_low: number;
+  credit_ideal_high: number;
+  credit_min_acceptable: number;
+  credit_avoid_below: number;
+  max_profit: number; // rupees, net of est. charges
+  max_loss: number; // rupees, incl. est. charges
+  be_low: number;
+  be_high: number;
+  pop: number | null; // 0..1
+  risk_reward: number | null;
+  margin_estimate: number | null; // rupees, LABELLED estimate
+  charges_estimate: number;
+  net_delta: number | null; // per structure, 1 lot
+  net_theta: number | null;
+  net_vega: number | null;
+  net_gamma: number | null;
+  regime: string;
+  regime_confidence: number;
+  breakout_band: string;
+  breakout_score: number;
+  vol_regime: string;
+  vix: number | null;
+  vix_percentile: number | null;
+  iv_over_rv: number | null;
+  em_primary: number | null;
+  em_straddle: number | null;
+  em_iv: number | null;
+  em_atr: number | null;
+  em_rv: number | null;
+  range_low: number | null;
+  range_high: number | null;
+  score: number;
+  score_parts: ScorePart[];
+  quality: string; // HIGH QUALITY / WATCHLIST / NO TRADE
+  reasons: string[];
+  risks: string[];
+  created_at: number;
+  valid_until: number;
+  updated_at: number;
+}
+
+export interface CondorPosition {
+  id: string;
+  card_id: string | null;
+  symbol: string;
+  expiry: string | null;
+  /** Entry fills ride in each leg's .ltp. */
+  legs: CondorLeg[];
+  width: number;
+  lot_size: number;
+  lots: number;
+  /** Points collected at entry. */
+  credit_fill: number;
+  status: string; // open / closed
+  entered_at: number;
+  exited_at: number | null;
+  exit_debit: number | null;
+  exit_reason: string | null;
+  realized_pnl: number | null;
+  adjustments: number;
+  notes: string | null;
+  prem_min: number | null;
+  prem_max: number | null;
+}
+
+/** Suggested roll for a threatened side (monitor._adjustment dict). */
+export interface CondorAdjustment {
+  action: string;
+  close: string;
+  open: string;
+  added_credit: number;
+  new_total_credit: number;
+  new_max_loss: number;
+  new_breakevens: string;
+}
+
+export interface PositionView {
+  position: CondorPosition;
+  combined_mid: number | null; // points to close now
+  pnl: number | null; // rupees net of est. exit charges
+  pnl_pct_of_max: number | null;
+  captured_pct: number | null; // 1 - combined/credit, already ×100
+  dist_short_ce: number | null;
+  dist_short_pe: number | null;
+  dist_short_ce_em: number | null; // ÷ remaining EM
+  dist_short_pe_em: number | null;
+  net_delta: number | null;
+  net_theta: number | null;
+  health: number | null; // 0-100
+  health_band: string | null; // Healthy / Warning / Critical
+  status_advice: string;
+  status_detail: string;
+  breakout_band: string | null;
+  adjustment: CondorAdjustment | null;
+}
+
+export interface CondorResponse {
+  symbol: string;
+  evaluated_at: number;
+  data_ok: boolean;
+  data_problems: string[];
+  regime: string;
+  regime_confidence: number;
+  /** V1..V7 vote name -> pass (bool; tolerate 0/1 from serialization). */
+  regime_votes: Record<string, boolean | number>;
+  regime_vetoes: string[];
+  breakout_band: string; // LOW / MEDIUM / HIGH / EXTREME
+  breakout_score: number;
+  breakout_parts: string[];
+  vol_regime: string;
+  vix: number | null;
+  vix_percentile: number | null;
+  em_straddle: number | null;
+  em_iv: number | null;
+  em_atr: number | null;
+  em_rv: number | null;
+  em_primary: number | null;
+  iv_over_rv: number | null;
+  expected_low: number | null;
+  expected_high: number | null;
+  spot: number | null;
+  expiry: string | null;
+  dte: number | null;
+  card: CondorCard | null;
+  no_trade_reasons: string[];
+}
+
+export interface EnterCondorRequest {
+  card_id?: string | null;
+  symbol: string;
+  expiry?: string | null;
+  lots: number;
+  /** Entry fills, points per unit. Shorts positive premium received. */
+  short_ce_strike: number;
+  short_ce_fill: number;
+  short_pe_strike: number;
+  short_pe_fill: number;
+  wing_ce_strike: number;
+  wing_ce_fill: number;
+  wing_pe_strike: number;
+  wing_pe_fill: number;
+  notes?: string | null;
+}
+
+export interface ExitCondorRequest {
+  /** Points paid to close the structure. */
+  exit_debit: number;
+  reason?: string;
+}
+
+export interface WhatIfRequest {
+  card_id?: string | null;
+  position_id?: string | null;
+  spots?: number[];
+  iv_shifts?: number[];
+  days_forward?: number[];
+}
+
+export interface CondorWhatIfRow {
+  days: number | "expiry";
+  iv_shift: number;
+  cells: { spot: number; pnl: number }[];
+}
+
+export interface CondorWhatIf {
+  spots: number[];
+  rows: CondorWhatIfRow[];
+}
+
+/** History row: an archived CondorCard dump + lifecycle bookkeeping. */
+export interface CondorHistoryRow extends CondorCard {
+  _event?: string;
+  _at?: number;
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) {
@@ -1065,4 +1289,24 @@ export const api = {
   levelAlerts: () => getJSON<LevelAlertsResponse>("/patterns/level-alerts"),
   marketChat: (question: string, history: { role: string; content: string }[]) =>
     postJSON<{ enabled: boolean; answer: string }>("/market/chat", { question, history }),
+
+  // ---- Iron Condor (advisory, trial) ----
+  /** 409 = module disabled/feed stopped; 503 = no evaluation yet (warming up). */
+  condorState: (symbol: string) => getJSON<CondorResponse>(`/condor/${symbol}`),
+  condorHistory: (symbol: string, days = 7) =>
+    getJSON<{ rows: CondorHistoryRow[]; count: number; days: number }>(
+      `/condor/${symbol}/history?days=${days}`,
+    ),
+  condorTrace: (symbol: string, days = 1) =>
+    getJSON<{ rows: Record<string, unknown>[]; count: number; days: number }>(
+      `/condor/${symbol}/trace?days=${days}`,
+    ),
+  condorPositions: () =>
+    getJSON<{ open: PositionView[]; closed: CondorPosition[] }>("/condor/positions/all"),
+  condorEnter: (req: EnterCondorRequest) =>
+    postJSON<{ status: string; position: CondorPosition }>("/condor/positions", req),
+  condorExit: (pid: string, req: ExitCondorRequest) =>
+    postJSON<{ status: string; position: CondorPosition }>(`/condor/positions/${pid}/exit`, req),
+  condorWhatif: (req: WhatIfRequest) => postJSON<CondorWhatIf>("/condor/whatif", req),
+  condorConfig: () => getJSON<Record<string, unknown>>("/condor/config/view"),
 };

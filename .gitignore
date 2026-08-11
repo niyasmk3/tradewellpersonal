@@ -33,6 +33,11 @@ venv/
 .instruments_cache.json
 .patterns_candles.db
 .patterns_results.json
+.condor_signals.json
+.condor_positions.json
+.condor_archive.jsonl
+.condor_eval.jsonl
+.condor_chain.db
 
 # Node / Next
 node_modules/

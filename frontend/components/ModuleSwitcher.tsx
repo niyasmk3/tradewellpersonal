@@ -14,6 +14,7 @@ const MODULES = [
   { key: "pulse", label: "Pulse", href: "/", title: "Live trading module — signals, journal, paper evidence" },
   { key: "patterns", label: "Patterns", href: "/patterns", title: "Research module — 3y NIFTY 5-min patterns lab" },
   { key: "opening", label: "Opening", href: "/opening", title: "Opening window — first-45 live read, study tables, scoreboard" },
+  { key: "condor", label: "Condor", href: "/condor", title: "Iron Condor — range-regime credit structures (advisory, trial)" },
 ] as const;
 
 export function ModuleSwitcher() {
@@ -22,7 +23,9 @@ export function ModuleSwitcher() {
     ? "patterns"
     : path.startsWith("/opening")
       ? "opening"
-      : "pulse";
+      : path.startsWith("/condor")
+        ? "condor"
+        : "pulse";
   return (
     <nav className="inline-flex rounded-md border border-edge bg-panel p-0.5" aria-label="Module">
       {MODULES.map((m) => (

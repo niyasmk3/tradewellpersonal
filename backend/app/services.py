@@ -109,6 +109,7 @@ class FeedController:
         self.paper: "PaperTradingService | None" = None
         self.news_service: NewsService | None = None
         self.level_watch = None
+        self.condor = None
         self.running: bool = False
         self._tasks: list[asyncio.Task] = []
         # One lock serialises start/stop/restart. Without it, two concurrent
@@ -320,6 +321,25 @@ class FeedController:
             self._tasks.append(asyncio.create_task(
                 self._level_loop(settings.signal_eval_seconds)))
 
+        if settings.condor_enabled:
+            # Iron Condor module (advisory, shadow-first — cards render on the
+            # /condor tab, nothing is pushed). Own loop at a slow cadence:
+            # condor conditions move at regime speed, not tick speed. The
+            # snapshot logger inside it is the module's real day-one payload —
+            # per-strike IV/OI/spread history that cannot be reconstructed.
+            from app.condor.service import CondorService
+            from app.condor.snapshots import SnapshotLogger
+            from app.condor.store import condor_store, condor_trace
+
+            condor_trace.prune()
+            self.condor = CondorService(
+                settings, market_state, universes, condor_store, condor_trace,
+                snapshots=SnapshotLogger(market_state))
+            self._tasks.append(asyncio.create_task(
+                self._condor_loop(settings.condor_eval_s)))
+            log.info("Iron Condor module enabled (%s, profile=%s)",
+                     settings.condor_symbols, settings.condor_profile)
+
         self._tasks.append(asyncio.create_task(self._option_loop(settings.option_poll_seconds)))
         self._tasks.append(asyncio.create_task(self._signal_loop(settings.signal_eval_seconds)))
         self._tasks.append(asyncio.create_task(self._trade_loop(settings.signal_eval_seconds)))
@@ -517,6 +537,18 @@ class FeedController:
                 log.warning("trade loop error: %s", exc)
             await asyncio.sleep(interval)
 
+    async def _condor_loop(self, interval: float) -> None:
+        """Iron Condor evaluation + chain snapshots. Off the event loop: one
+        pass solves IV for dozens of strikes and walks pandas frames."""
+        await asyncio.sleep(min(interval, 5))
+        while True:
+            try:
+                if self.condor is not None:
+                    await asyncio.to_thread(self.condor.run_once)
+            except Exception as exc:  # pragma: no cover
+                log.warning("condor loop error: %s", exc)
+            await asyncio.sleep(interval)
+
     @staticmethod
     def _news_hours() -> bool:
         """Trading days 07:00-17:00 IST (holiday-aware via the shared calendar).
@@ -563,6 +595,9 @@ class FeedController:
         # Cleared with the rest (review catch): a stale watcher surviving a
         # stop/restart would keep serving old cfg/state to the alerts route.
         self.level_watch = None
+        # Same rule for the condor service — a stale one would keep serving
+        # last feed generation's universes/expiries to /condor routes.
+        self.condor = None
         self._token_in_use = None
         self.running = False
         # A stopped feed cannot deliver alerts; the chip must not keep a stale

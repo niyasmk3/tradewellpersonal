@@ -71,7 +71,8 @@ def backup_paths(src_dir: Path) -> list[Path]:
     knobs), the dot-JSON stores/journals, the append-only archives, and the
     Patterns lab's candle cache."""
     out = []
-    for pat in (".env", ".*.json", ".*.jsonl", ".patterns_candles.db"):
+    for pat in (".env", ".*.json", ".*.jsonl", ".patterns_candles.db",
+                ".condor_chain.db"):
         for p in sorted(src_dir.glob(pat)):
             if p.is_file() and p.name not in _BACKUP_EXCLUDE:
                 out.append(p)

@@ -354,6 +354,66 @@ class Settings(BaseSettings):
     # Max bars a positional backtest trade is held before a time-based exit.
     backtest_max_hold_bars: int = Field(default=80, ge=1, alias="BACKTEST_MAX_HOLD_BARS")
 
+    # --- Iron Condor module (docs/iron-condor-spec-2026-08-11.md) ---
+    # Advisory-only, shadow-first: OFF by default; cards render on /condor
+    # labelled TRIAL and are never pushed. Every threshold below is a
+    # pre-registered spec default — changes follow the house 30-sample rule.
+    condor_enabled: bool = Field(default=False, alias="CONDOR_ENABLED")
+    condor_symbols: str = Field(default="NIFTY", alias="CONDOR_SYMBOLS")
+    condor_profile: str = Field(default="balanced", alias="CONDOR_PROFILE")
+    condor_eval_s: float = Field(default=60.0, gt=0, alias="CONDOR_EVAL_S")
+    condor_min_dte: int = Field(default=2, ge=0, alias="CONDOR_MIN_DTE")
+    condor_max_dte: int = Field(default=7, ge=1, alias="CONDOR_MAX_DTE")
+    condor_score_min: float = Field(default=80, ge=0, le=100, alias="CONDOR_SCORE_MIN")
+    condor_watch_min: float = Field(default=70, ge=0, le=100, alias="CONDOR_WATCH_MIN")
+    condor_max_open: int = Field(default=1, ge=0, alias="CONDOR_MAX_OPEN")
+    condor_lots: int = Field(default=1, ge=1, alias="CONDOR_LOTS")
+    # Credit floor as a fraction of wing width, and the EM distance floor for
+    # short strikes (MILD regimes force 1.0x on the drift side regardless).
+    condor_min_credit_pct: float = Field(default=0.20, gt=0, lt=1, alias="CONDOR_MIN_CREDIT_PCT")
+    condor_min_em_dist: float = Field(default=0.75, gt=0, alias="CONDOR_MIN_EM_DIST")
+    condor_wing_widths: str = Field(default="100,150,200,250,300", alias="CONDOR_WING_WIDTHS")
+    condor_min_oi_short: float = Field(default=100_000, ge=0, alias="CONDOR_MIN_OI_SHORT")
+    condor_min_oi_wing: float = Field(default=50_000, ge=0, alias="CONDOR_MIN_OI_WING")
+    condor_max_spread_pct_short: float = Field(default=0.05, gt=0, alias="CONDOR_MAX_SPREAD_PCT_SHORT")
+    condor_max_spread_pct_wing: float = Field(default=0.15, gt=0, alias="CONDOR_MAX_SPREAD_PCT_WING")
+    condor_spread_abs_floor: float = Field(default=0.30, ge=0, alias="CONDOR_SPREAD_ABS_FLOOR")
+    condor_min_pop: float = Field(default=0.60, gt=0, lt=1, alias="CONDOR_MIN_POP")
+    condor_max_loss_per_trade: float = Field(default=15_000, gt=0, alias="CONDOR_MAX_LOSS_PER_TRADE")
+    # Margin shown as width*qty*factor - credit, LABELLED estimate. Review
+    # catch: factor 1.0 reduces to bare max loss, which understates real NSE
+    # SPAN+exposure margin for a hedged condor ~2-4x — a trader capital-
+    # planning off the card would get a rejected order. 2.0 lands in the
+    # observed ballpark; the Kite basket_order_margins API is the accuracy
+    # upgrade when it matters.
+    condor_margin_factor: float = Field(default=2.0, gt=0, alias="CONDOR_MARGIN_FACTOR")
+    condor_sl_mult: float = Field(default=1.75, gt=1, alias="CONDOR_SL_MULT")
+    condor_profit_target_pct: float = Field(default=50, gt=0, le=100, alias="CONDOR_PROFIT_TARGET_PCT")
+    condor_max_adjustments: int = Field(default=1, ge=0, alias="CONDOR_MAX_ADJUSTMENTS")
+    condor_adj_min_credit: float = Field(default=8, ge=0, alias="CONDOR_ADJ_MIN_CREDIT")
+    condor_entry_from: str = Field(default="10:00", alias="CONDOR_ENTRY_FROM")
+    condor_entry_to: str = Field(default="14:30", alias="CONDOR_ENTRY_TO")
+    # Expiry-day hard exit deadline. CAS freezes NIFTY 15:15-15:35 (live since
+    # 03-Aug-2026) — the last clean exit is well before the close print.
+    condor_expiry_exit_ist: str = Field(default="14:30", alias="CONDOR_EXPIRY_EXIT_IST")
+    condor_event_window_h: float = Field(default=24.0, ge=0, alias="CONDOR_EVENT_WINDOW_H")
+    condor_snapshot_s: float = Field(default=300.0, gt=0, alias="CONDOR_SNAPSHOT_S")
+    condor_snapshot_keep_days: int = Field(default=180, ge=1, alias="CONDOR_SNAPSHOT_KEEP_DAYS")
+
+    @property
+    def condor_symbol_list(self) -> list[str]:
+        return [s.strip().upper() for s in self.condor_symbols.split(",") if s.strip()]
+
+    @property
+    def condor_wing_width_list(self) -> list[int]:
+        out = []
+        for w in self.condor_wing_widths.split(","):
+            try:
+                out.append(int(w.strip()))
+            except ValueError:
+                continue
+        return sorted(out)
+
     @property
     def news_feed_list(self) -> list[str]:
         return [f.strip() for f in self.news_feeds.split(",") if f.strip()]
