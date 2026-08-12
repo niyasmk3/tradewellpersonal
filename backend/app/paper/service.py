@@ -93,6 +93,16 @@ def shadow_class(x) -> str | None:
             return "setup"
         if notes.startswith("hollow: confirm:"):
             return "confirm"
+        # R&D policy twins (R3) — each its own class so they can never squat
+        # another ledger's capacity bucket or fall through to "floor".
+        if notes.startswith("hollow: rnd-p5w:"):
+            return "rnd-p5w"
+        if notes.startswith("hollow: rnd-p5t:"):
+            return "rnd-p5t"
+        if notes.startswith("hollow: rnd-plad:"):
+            return "rnd-plad"
+        if notes.startswith("hollow: rnd-base2:"):
+            return "rnd-base2"
         return "floor"
     reason = getattr(x, "hollow_reason", None)
     if reason:
@@ -382,6 +392,22 @@ class PaperTradingService:
                 except Exception:
                     log.warning("paper: stop-calibration twin failed for %s — "
                                 "pair skipped", card.contract, exc_info=True)
+
+        # R&D POLICY TWINS (R3, docs/rnd-tab-plan-2026-08-12.md). Three
+        # pre-registered exit policies, each a full twin of the clean fill —
+        # same entry, same ladder, same monitor — differing only in the
+        # policy overlay applied in run_once. Same notes channel, same
+        # capacity exemption, same never-undo-the-clean-fill rule.
+        if not card_hollow and getattr(self.cfg, "rnd_policy_ledgers", False):
+            from app.rnd import policies as rnd_policies
+
+            rnd_policies.book_policy_twins(
+                self.store, card, lots, fill, lot,
+                disaster_pct=(self.cfg.premium_disaster_pct
+                              if self.cfg.stop_primary == "underlying"
+                              and self.cfg.trading_capital > 0 else None),
+                quick_pct=self.cfg.quick_target_pct or None,
+                sl_pct=sl_pct, rr1=rr1, rr2=rr2, cfg=self.cfg)
         return t
 
     # ---- exit --------------------------------------------------------------
@@ -417,6 +443,19 @@ class PaperTradingService:
                              early_derisk_pct=self.cfg.early_derisk_mfe_pct)
 
         self.store.apply_monitor(updater, include_reversible=True)
+
+        # R&D policy overlays fire before ANY standard exit machinery — the
+        # half-book sweep included (review C3: on a gap cycle the +12% sweep
+        # could stamp P-LAD's partial with the standard reason first; the
+        # fills are identical either way, the attribution must not be).
+        # Premiums are fresh: apply_monitor's evaluate ran this same cycle.
+        if getattr(self.cfg, "rnd_policy_ledgers", False):
+            try:
+                from app.rnd import policies as rnd_policies
+                rnd_policies.apply_policy_exits(
+                    self.store, self.cfg, self.cfg.paper_slippage_pct, now)
+            except Exception:
+                log.warning("rnd policy exits failed this cycle", exc_info=True)
 
         # Book half at the early target before considering exits. Without this
         # the simulator would record the stop-to-entry benefit but never the
@@ -478,6 +517,8 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
     stopc_rows = []
     setup_rows = []
     confirm_rows = []
+    # Diverted, never reported here: the R&D policy ledger owns these rows.
+    rnd_rows = []
     for t in closed:
         qty = t.initial_quantity or t.quantity
         net = chg.net_pnl(t.entry_premium, t.exit_premium, qty)
@@ -528,6 +569,12 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
          else stopc_rows if (honest and cls == "stopc")
          else setup_rows if (honest and cls == "setup")
          else confirm_rows if (honest and cls == "confirm")
+         # R&D policy twins are graded ONLY by app/rnd/policies.policy_summary;
+         # without this branch they fell through to hollow_rows and swamped
+         # the participation-floor's own verdict with exit-policy P&L (review
+         # critical C1 — the floor's 30-fill read would have been poisoned
+         # the moment RND_POLICY_LEDGERS went live).
+         else rnd_rows if (honest and cls is not None and cls.startswith("rnd-"))
          else hollow_rows if (honest and hollow)
          else rows if honest else inflated).append(row)
     wins = [r for r in rows if r["net_pnl"] > 0]

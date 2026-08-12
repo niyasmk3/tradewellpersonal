@@ -409,6 +409,12 @@ class Settings(BaseSettings):
     rnd_window_positional_min: int = Field(default=240, ge=1, alias="RND_WINDOW_POSITIONAL_MIN")
     rnd_positional_cutoff_ist: str = Field(default="14:50", alias="RND_POSITIONAL_CUTOFF_IST")
     rnd_min_sample: int = Field(default=30, ge=1, alias="RND_MIN_SAMPLE")
+    # R3 policy ledgers: four pre-registered exit-policy twins per clean
+    # paper fill (P-5W / P-5T / P-LAD + its 2-lot baseline), graded at 30+
+    # diverged pairs. OFF by default — the paper suite's row-count
+    # expectations predate the twins; the deliberate enable lives in .env,
+    # same pattern as CONDOR_ENABLED.
+    rnd_policy_ledgers: bool = Field(default=False, alias="RND_POLICY_LEDGERS")
 
     @property
     def condor_symbol_list(self) -> list[str]:

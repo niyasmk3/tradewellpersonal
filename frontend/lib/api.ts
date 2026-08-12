@@ -1263,6 +1263,41 @@ export interface RndLedgerResponse {
   total: number;
 }
 
+/** R3 policy-ledger state for one policy in one mode. */
+export interface RndPolicyMode {
+  pairs: number;
+  diverged: number;
+  graded: number;
+  delta_sum: number;
+  avg_delta: number | null;
+  /** Non-null only at >= min_diverged diverged pairs — the ledger's read. */
+  verdict: string | null;
+}
+
+export interface RndPolicies {
+  enabled: boolean;
+  min_diverged: number;
+  policies: Record<string, { desc: string; modes: Record<string, RndPolicyMode> }>;
+}
+
+export interface RndCandidate {
+  dim: string;
+  key: string;
+  n: number;
+  gap_pp: number;
+  dev_gap_pp: number;
+  test_gap_pp: number;
+  direction: "favorable" | "adverse";
+}
+
+export interface RndCandidates {
+  generated_at: number;
+  frozen: { dev_test_split_ist: string; min_n: number; gap_pp: number };
+  cells_checked: number;
+  candidates: RndCandidate[];
+  note: string;
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) {
@@ -1420,4 +1455,6 @@ export const api = {
   // ---- R&D (read-only window analytics) ----
   rndSummary: () => getJSON<RndSummary>("/rnd/summary"),
   rndLedger: (limit = 200) => getJSON<RndLedgerResponse>(`/rnd/ledger?limit=${limit}`),
+  rndPolicies: () => getJSON<RndPolicies>("/rnd/policies"),
+  rndCandidates: () => getJSON<RndCandidates>("/rnd/candidates"),
 };

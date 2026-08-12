@@ -12,9 +12,11 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api,
+  RndCandidates,
   RndCutCell,
   RndLedgerResponse,
   RndModeKpi,
+  RndPolicies,
   RndSummary,
 } from "@/lib/api";
 import { fmt, istDateTime, signed } from "@/lib/format";
@@ -378,6 +380,8 @@ function BucketChip({ bucket }: { bucket: string | null }) {
 export function RndLab() {
   const [summary, setSummary] = useState<RndSummary | null>(null);
   const [ledger, setLedger] = useState<RndLedgerResponse | null>(null);
+  const [policies, setPolicies] = useState<RndPolicies | null>(null);
+  const [candidates, setCandidates] = useState<RndCandidates | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [ledgerErr, setLedgerErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -385,11 +389,15 @@ export function RndLab() {
 
   const refresh = useCallback(async () => {
     setBusy(true);
-    const [s, l] = await Promise.allSettled([api.rndSummary(), api.rndLedger(200)]);
+    const [s, l, p, c] = await Promise.allSettled([
+      api.rndSummary(), api.rndLedger(200), api.rndPolicies(), api.rndCandidates(),
+    ]);
     if (s.status === "fulfilled") { setSummary(s.value); setErr(null); }
     else setErr(s.reason instanceof Error ? s.reason.message : String(s.reason));
     if (l.status === "fulfilled") { setLedger(l.value); setLedgerErr(null); }
     else setLedgerErr(l.reason instanceof Error ? l.reason.message : String(l.reason));
+    if (p.status === "fulfilled") setPolicies(p.value);
+    if (c.status === "fulfilled") setCandidates(c.value);
     setBusy(false);
   }, []);
 
@@ -418,7 +426,7 @@ export function RndLab() {
           R&amp;D — Signal Window Analytics
         </h1>
         <span className="tag bg-panel2 text-[9px] text-muted">
-          read-only research — suggestions come only from cleared ledgers (R3 pending)
+          read-only research — suggestions come only from cleared policy ledgers
         </span>
         <button
           onClick={refresh}
@@ -574,6 +582,105 @@ export function RndLab() {
 
         </>
       )}
+
+      {/* f2. Policy ledgers (R3) */}
+      <section className="card p-3">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          Policy ledgers — pre-registered exits, graded live against baseline
+        </h2>
+        {!policies ? (
+          <p className="text-[11px] text-muted">loading…</p>
+        ) : !policies.enabled ? (
+          <p className="text-[11px] text-muted">
+            RND_POLICY_LEDGERS is off (or the paper book is stopped) — twins are
+            not being booked.
+          </p>
+        ) : Object.keys(policies.policies).length === 0 ? (
+          <p className="text-[11px] text-muted">no policy pairs yet — twins book with the next clean paper fill.</p>
+        ) : (
+          Object.entries(policies.policies).map(([tag, p]) => (
+            <div key={tag} className="border-t border-edge/40 py-2 first:border-t-0">
+              <p className="text-[11px]">
+                <span className="font-mono font-semibold uppercase">{tag}</span>{" "}
+                <span className="text-muted">{p.desc}</span>
+              </p>
+              <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1">
+                {Object.keys(p.modes).length === 0 && (
+                  <span className="text-[10px] text-muted">no closed pairs yet</span>
+                )}
+                {Object.entries(p.modes).map(([mode, m]) => (
+                  <span key={mode} className="text-[11px]">
+                    <span className="uppercase text-muted">{mode}</span>{" "}
+                    {m.verdict ? (
+                      <span className={`tag ${
+                        m.verdict.startsWith("BEATS")
+                          ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"
+                      }`}>
+                        {m.verdict}
+                      </span>
+                    ) : (
+                      <span className="tag bg-panel2 text-muted">
+                        accumulating ({m.diverged}/{policies.min_diverged} diverged
+                        {m.avg_delta != null ? ` · Δ₹${fmt(m.avg_delta, 0)}/pair so far` : ""})
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))
+        )}
+        <p className="mt-2 text-[10px] text-muted">
+          Each policy runs as a full paper twin of every clean fill (stops still
+          apply); a verdict exists only at {policies?.min_diverged ?? 30}+ diverged
+          pairs, and acting on one is a human decision, never the code's.
+        </p>
+      </section>
+
+      {/* f3. Scanner candidates (R3) */}
+      <section className="card p-3">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          Insight scanner — candidates, not suggestions
+        </h2>
+        {!candidates ? (
+          <p className="text-[11px] text-muted">loading…</p>
+        ) : candidates.candidates.length === 0 ? (
+          <p className="text-[11px] text-muted">
+            No cell clears the frozen bars (n≥{candidates.frozen.min_n},
+            gap≥{candidates.frozen.gap_pp}pp, DEV/TEST sign agreement across{" "}
+            {candidates.frozen.dev_test_split_ist} IST) — an empty list is a
+            valid, and common, result.
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {candidates.candidates.map((c) => (
+              <div key={`${c.dim}:${c.key}`} className="flex flex-wrap items-center gap-2 text-[11px]">
+                <span className={`tag ${
+                  c.direction === "favorable" ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"
+                }`}>
+                  {c.direction}
+                </span>
+                <span className="font-mono">{c.dim} = {c.key}</span>
+                <span className="text-muted">
+                  n={c.n} · gap {signed(c.gap_pp, 2)}pp (DEV {signed(c.dev_gap_pp, 2)} /
+                  TEST {signed(c.test_gap_pp, 2)})
+                </span>
+                <span className="tag bg-yellow-500/15 text-[9px] text-yellow-400">
+                  candidate — needs its own pre-registered ledger
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {candidates && (
+          // Sweep breadth rendered ALWAYS, not only when empty: a candidate
+          // shown without its comparison count reads stronger than it is
+          // (review C10 — multiple comparisons, uncorrected by design).
+          <p className="mt-2 text-[10px] text-muted">
+            {candidates.note} ({candidates.cells_checked} cells checked, uncorrected)
+          </p>
+        )}
+      </section>
 
       {/* g. Ledger */}
       <section className="card p-3">

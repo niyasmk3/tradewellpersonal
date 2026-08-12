@@ -84,12 +84,21 @@ Two engines, both deterministic:
    - `P-LADDER`: book ½ at +5%, trail the rest (vs the current ratchet).
    Each pre-registered here (thresholds frozen at the windows/buckets above),
    graded net of charges, verdict at **30+ diverged pairs** per mode, human
-   flips any knob — never the code. The tab shows each policy's ledger state:
+   flips any knob — never the code.
+   [Amended at R3 build: P-LADDER needs ≥2 lots to physically halve, so it
+   books at 2 lots and is paired against a dedicated 2-lot standard-policy
+   twin (`rnd-base2`) — identical sizing on both arms — instead of the 1-lot
+   clean fill. Standard stops keep applying to every twin: a policy that
+   ignores stops isn't comparable to anything we'd trade. Twins enabled via
+   RND_POLICY_LEDGERS in .env (code default false — the paper suite's
+   row-count expectations predate them).] The tab shows each policy's ledger state:
    `accumulating (n=x/30)` → `VERDICT: beats/loses to baseline by ₹X/trade`.
 2. **Deterministic insight scanner** — a fixed rule sweep over the R2 matrices
    that surfaces CANDIDATE hypotheses only when a cell clears: n ≥ 30, gap vs
    complement ≥ +0.5% premium expectancy, and the sign holds on a frozen
-   DEV/TEST date split. Output is explicitly labelled "candidate — needs its
+   DEV/TEST date split. [Registered at R3 build: split = 2026-08-04 00:00 IST;
+   metric = gross realized premium move % per trade; changing any frozen
+   parameter resets every candidate's standing.] Output is explicitly labelled "candidate — needs its
    own pre-registered ledger before anything acts on it". No LLM in this path;
    optionally the existing assistant (Haiku) summarizes the tables into prose,
    display-only, same rules as the dashboard chat.
