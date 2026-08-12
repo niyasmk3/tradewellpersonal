@@ -1156,6 +1156,113 @@ export interface CondorHistoryRow extends CondorCard {
   _at?: number;
 }
 
+// ---- R&D module (read-only window analytics over the paper book) ----
+// Types mirror backend/app/rnd/analytics.py summary()/ledger() — keep in sync.
+
+/** One bucket cell of the highest-level-touched distribution. */
+export interface RndBucketCell {
+  n: number;
+  /** Null when the mode has no fills at all. */
+  pct: number | null;
+}
+
+/** Reach-by-time point: % of fills that touched each +level by `minutes`.
+ *  Deliberately UNcapped by the mode window — the window verdict lives in
+ *  p5_in_window; this shows the raw shape. */
+export interface RndReachPoint {
+  minutes: number;
+  p3: number | null;
+  p5: number | null;
+  p10: number | null;
+  p20: number | null;
+}
+
+export interface RndModeKpi {
+  n: number;
+  /** Rows carrying the R1 touch ladder — first-crossing timestamps, the real answer. */
+  n_exact: number;
+  /** Pre-ladder rows — a LOWER BOUND inferred from the max's timestamp. */
+  n_approx: number;
+  /** % of fills that touched +5% inside their own mode's window; null when n=0. */
+  p5_in_window: number | null;
+  /** Open rows whose window hasn't resolved — excluded from every aggregate. */
+  n_pending: number;
+  /** Positional rows entered at/after the cutoff — no window exists; excluded. */
+  n_no_window: number;
+  /** Median first-crossing time, EXACT (ladder) evidence only; null until it accumulates. */
+  median_min_to_5_exact: number | null;
+  n_exact_times: number;
+  /** Median time-of-PEAK for approx reachers — an UPPER bound on time-to-5. */
+  median_min_to_peak_approx: number | null;
+  /** Keys: "<3" | "3-5" | "5-10" | "10-20" | ">20". */
+  buckets: Record<string, RndBucketCell>;
+  reach_curve: RndReachPoint[];
+}
+
+/** One cell of a single-dimension conditioning cut (all modes pooled;
+ *  each trade judged against its own mode's window). */
+export interface RndCutCell {
+  key: string;
+  n: number;
+  p5_in_window: number;
+  /** n >= min_sample — insufficient cells render grey, never as evidence. */
+  sufficient: boolean;
+}
+
+export interface RndSummary {
+  generated_at: number;
+  windows_min: { scalp: number; intraday: number; positional: number };
+  /** Positional window is additionally capped at this IST time on entry day. */
+  positional_cutoff_ist: string;
+  min_sample: number;
+  modes: { scalp: RndModeKpi; intraday: RndModeKpi; positional: RndModeKpi };
+  cuts: {
+    score_band: RndCutCell[];
+    tape_state: RndCutCell[];
+    golden: RndCutCell[];
+    entry_hour: RndCutCell[];
+    day_of_week: RndCutCell[];
+    direction: RndCutCell[];
+  };
+  /** For +5-in-window reachers: deepest adverse level first-touched before the
+   *  +5 touch. Label ("none" | "-3" | "-5" | "-10" | "-20") -> count. */
+  heat_before_capture: {
+    exact?: Record<string, number>;
+    approx?: Record<string, number>;
+  };
+  notes: string[];
+}
+
+export interface RndLedgerRow {
+  id: string | null;
+  mode: string | null;
+  contract: string | null;
+  entered_at: number | null;
+  entry: number;
+  score: number | null;
+  tape: string | null;
+  golden: boolean;
+  exit_reason: string | null;
+  realized_pnl: number | null;
+  mfe_pct: number | null;
+  mae_pct: number | null;
+  bucket: string | null;
+  /** null = not gradeable (window pending, or no window exists) — never a fake false. */
+  p5_in_window: boolean | null;
+  not_gradeable_reason: string | null;
+  min_to_5: number | null;
+  /** True = R1 touch ladder present AND observed from entry; false = approx row. */
+  exact: boolean;
+  touches: Record<string, number>;
+}
+
+export interface RndLedgerResponse {
+  rows: RndLedgerRow[];
+  count: number;
+  /** Pre-slice clean-fill total — "showing X of total" means the book, not the fetch cap. */
+  total: number;
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) {
@@ -1309,4 +1416,8 @@ export const api = {
     postJSON<{ status: string; position: CondorPosition }>(`/condor/positions/${pid}/exit`, req),
   condorWhatif: (req: WhatIfRequest) => postJSON<CondorWhatIf>("/condor/whatif", req),
   condorConfig: () => getJSON<Record<string, unknown>>("/condor/config/view"),
+
+  // ---- R&D (read-only window analytics) ----
+  rndSummary: () => getJSON<RndSummary>("/rnd/summary"),
+  rndLedger: (limit = 200) => getJSON<RndLedgerResponse>(`/rnd/ledger?limit=${limit}`),
 };

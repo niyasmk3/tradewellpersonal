@@ -23,6 +23,7 @@ from app.api import (
     routes_news,
     routes_options,
     routes_patterns,
+    routes_rnd,
     routes_signals,
     routes_trades,
 )
@@ -126,6 +127,7 @@ app.include_router(routes_paper.router)
 app.include_router(routes_settings.router)
 app.include_router(routes_patterns.router)
 app.include_router(routes_condor.router)
+app.include_router(routes_rnd.router)
 
 
 @app.get("/health", tags=["meta"])

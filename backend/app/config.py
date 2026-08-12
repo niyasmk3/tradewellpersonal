@@ -400,6 +400,16 @@ class Settings(BaseSettings):
     condor_snapshot_s: float = Field(default=300.0, gt=0, alias="CONDOR_SNAPSHOT_S")
     condor_snapshot_keep_days: int = Field(default=180, ge=1, alias="CONDOR_SNAPSHOT_KEEP_DAYS")
 
+    # --- R&D tab (docs/rnd-tab-plan-2026-08-12.md) ---
+    # Windows for the "+5% after entry" question, per mode; positional is
+    # additionally capped at a fixed IST time on the entry day. Touch-ladder
+    # LEVELS are frozen in trades/monitor.py, deliberately not here.
+    rnd_window_scalp_min: int = Field(default=30, ge=1, alias="RND_WINDOW_SCALP_MIN")
+    rnd_window_intraday_min: int = Field(default=120, ge=1, alias="RND_WINDOW_INTRADAY_MIN")
+    rnd_window_positional_min: int = Field(default=240, ge=1, alias="RND_WINDOW_POSITIONAL_MIN")
+    rnd_positional_cutoff_ist: str = Field(default="14:50", alias="RND_POSITIONAL_CUTOFF_IST")
+    rnd_min_sample: int = Field(default=30, ge=1, alias="RND_MIN_SAMPLE")
+
     @property
     def condor_symbol_list(self) -> list[str]:
         return [s.strip().upper() for s in self.condor_symbols.split(",") if s.strip()]
