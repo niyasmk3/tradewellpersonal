@@ -501,6 +501,13 @@ class TradeStore:
                 t.mae_premium is None or t.post_close_mae < t.mae_premium
             ):
                 t.mae_premium, t.mae_at = t.post_close_mae, t.post_close_mae_at
+            # The ladder folds under the same doctrine, with the REAL
+            # observation timestamps; setdefault keeps any earlier genuine
+            # stamp (a level touched in trade-life AND in the blind window
+            # keeps the trade-life time — that IS the first touch).
+            for key, ts_ in (t.post_close_touch_times or {}).items():
+                t.touch_times.setdefault(key, ts_)
+            t.post_close_touch_times = {}
             t.post_close_mfe = t.post_close_mfe_at = None
             t.post_close_mae = t.post_close_mae_at = None
             t.events.append(TradeEvent(ts=_now(), kind="reopened",

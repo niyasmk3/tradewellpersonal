@@ -159,6 +159,24 @@ class Trade(BaseModel):
     mfe_at: Optional[int] = None
     mae_premium: Optional[float] = None
     mae_at: Optional[int] = None
+    # R&D touch ladder (docs/rnd-tab-plan-2026-08-12.md, R1): FIRST-touch
+    # epoch per fixed premium level, e.g. {"+5": ts, "-10": ts}. mfe/mae hold
+    # the extreme's size and the extreme's time — a window question ("did it
+    # give +5% within 30 min?") needs the first crossing, which the extremes
+    # cannot reconstruct (a trade touching +5% at minute 20 and peaking at
+    # minute 200 reports mfe_at=200). Latched once, never overwritten.
+    touch_times: dict[str, int] = {}
+    # Epoch when ladder OBSERVATION began for this trade. The exact-evidence
+    # class requires touch_from ≈ entered_at: a trade that predates the ladder
+    # deploy (or was blind through a gap) gets stamps that are NOT first
+    # crossings, and without this marker such rows are indistinguishable from
+    # clean ones — the exact contamination the R1 review caught (C1).
+    touch_from: Optional[int] = None
+    # Touches observed during the post-auto-close reversible window, where
+    # evaluate() is status-guarded. reopen() folds these into touch_times with
+    # their REAL observation timestamps ("the position was open the whole
+    # time" applies to the ladder exactly as it does to mfe/mae). (C2/C4)
+    post_close_touch_times: dict[str, int] = {}
 
     # live, updated by the monitor
     current_premium: Optional[float] = None

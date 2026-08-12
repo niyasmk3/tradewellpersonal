@@ -10,7 +10,17 @@ import time
 
 from app.trades.models import Trade, TradeAction, TradeEvent, TradeStatus
 
-_TRAIL_PCT = 0.12          # once in profit, trail 12% below the live premium
+_TRAIL_PCT = 0.12                   # once in profit, trail 12% below the live premium
+
+# R&D touch-ladder levels (premium % from entry, applied both signs). FROZEN,
+# not a config knob: changing levels mid-stream resets cross-trade
+# comparability, exactly the setup-detector parameter rule. The analysis
+# windows (30/120/240 min) live in the R&D layer; recording is unconditional.
+TOUCH_LEVELS_PCT = (3.0, 5.0, 10.0, 20.0)
+# Tolerance far below tick resolution: an exact tick-aligned level print
+# (entry 100.0 -> 105.0 is EXACTLY +5.0) must not miss its stamp to float
+# representation error (review C3).
+_TOUCH_EPS = 1e-9
 _INTRADAY_EXIT_MIN = 15 * 60 + 10   # 15:10 IST — start flagging intraday exit
 
 AUTO_CLOSE_NAMES = ("stop", "target1", "target2", "invalidation", "time_exit", "stall",
@@ -126,6 +136,18 @@ def track_reversible(trade: Trade, current_premium: float | None) -> None:
         trade.post_close_mfe, trade.post_close_mfe_at = current_premium, now_ts
     if trade.post_close_mae is None or current_premium < trade.post_close_mae:
         trade.post_close_mae, trade.post_close_mae_at = current_premium, now_ts
+    # Ladder observations continue through the reversible window into their
+    # own dict (same separation as post_close_mfe/mae): if the close proves
+    # FALSE, reopen() folds them into touch_times with these REAL timestamps;
+    # if it was real, they stay off the trade's record (review C2/C4).
+    entry = trade.entry_premium
+    if entry:
+        move_pct = (current_premium - entry) / entry * 100.0
+        for lv in TOUCH_LEVELS_PCT:
+            if move_pct >= lv - _TOUCH_EPS:
+                trade.post_close_touch_times.setdefault(f"+{lv:g}", now_ts)
+            if move_pct <= -(lv - _TOUCH_EPS):
+                trade.post_close_touch_times.setdefault(f"-{lv:g}", now_ts)
 
 
 def latch_invalidation(trade: Trade, invalidated: bool, now_ts: int) -> None:
@@ -232,6 +254,25 @@ def evaluate(
                f"({gap:+.1f}% vs entry ₹{entry}) — the overnight gap, on the record")
     trade.pnl = round((current_premium - entry) * trade.quantity + trade.realized_pnl, 2)
     trade.pnl_pct = round((current_premium - entry) / entry * 100, 1) if entry else None
+
+    # --- R&D touch ladder (docs/rnd-tab-plan-2026-08-12.md, R1) ---
+    # First observed crossing of each fixed level, both signs, latched once.
+    # setdefault IS the latch. A gap straight to +12% stamps +3/+5/+10 at the
+    # same observation — correct: that IS when each level was first seen.
+    # Sampled at monitor cadence (~5s), same precision class as mfe/mae.
+    # touch_from marks when observation BEGAN: the analysis layer treats a
+    # ladder as exact only when observation started at entry — a trade that
+    # predates the ladder deploy gets stamps that are not first crossings,
+    # and must be classed approx, not exact (review C1).
+    if entry:
+        move_pct = (current_premium - entry) / entry * 100.0
+        if trade.touch_from is None:
+            trade.touch_from = now_ts
+        for lv in TOUCH_LEVELS_PCT:
+            if move_pct >= lv - _TOUCH_EPS:
+                trade.touch_times.setdefault(f"+{lv:g}", now_ts)
+            if move_pct <= -(lv - _TOUCH_EPS):
+                trade.touch_times.setdefault(f"-{lv:g}", now_ts)
 
     # --- early partial level ---
     # Reaching it latches t0_hit and lifts the stop to entry, so the remainder
