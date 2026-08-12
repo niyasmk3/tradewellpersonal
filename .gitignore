@@ -38,6 +38,9 @@ venv/
 .condor_archive.jsonl
 .condor_eval.jsonl
 .condor_chain.db
+# SQLite WAL-mode sidecars (the snapshot logger runs PRAGMA journal_mode=WAL)
+.condor_chain.db-shm
+.condor_chain.db-wal
 
 # Node / Next
 node_modules/
