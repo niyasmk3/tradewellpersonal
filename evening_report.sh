@@ -25,6 +25,9 @@ mkdir -p "$OUT_DIR"
   echo
   echo "=== Nightly learning pass ========================================"
   "$PY" "$ROOT/recorder/nightly_learn.py" 2>&1
+  echo
+  echo "=== Seller shadows (fade / theta windows / overnight decay) ======"
+  "$PY" "$ROOT/recorder/seller_shadows.py" 2>&1
 } > "$OUT_DIR/$STAMP.txt"
 
 # One-page visual dashboard of everything above — bookmarkable.

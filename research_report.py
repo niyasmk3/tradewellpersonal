@@ -111,6 +111,9 @@ GLOSSARY: list[tuple[str, str]] = [
     ("Karpathy harness", "The self-running research loop: change one thing → evaluate walk-forward → keep only what consistently wins → log every attempt. Ignites itself when data gates pass."),
     ("Ignition gates", "40+ training rows across 2+ months. Below that, any 'finding' is likely luck; the harness refuses to start early by design."),
     ("Devil's advocate", "Borrowed from the TradingAgents research idea of bull-vs-bear debate: when a card fires, one Claude call argues the OPPOSITE case and scores how strong that counter-case is (0–100). It never blocks a trade — the score is just one more dataset ingredient, graded at 30+ fills like everything else."),
+    ("Option selling (the mirror)", "The seller collects the premium the buyer pays and profits when nothing dramatic happens — theta (the rent) works FOR them. Wins small and often, loses rarely but hugely. Naked selling needs ~₹1.5–2L margin per lot; the capped-risk form is a spread."),
+    ("Straddle", "One CE plus one PE at the same at-the-money strike. SELLING it is the classic 'collect rent from both sides' bet that the market stays quiet — and the classic way to get hurt when it doesn't."),
+    ("Seller shadows", "Our zero-risk studies of the sell side: the exact other side of our fills (fade), straddle-selling in specific windows, and overnight decay — all computed from our own recorded tape, graded nightly, decision at 30+ samples."),
 ]
 
 
@@ -189,6 +192,24 @@ def build() -> str:
         ])
     ledger_html = table(["Night", "Graded", "Top separating features (effect size)",
                          "Score calibration", "Ignition"], led_rows)
+
+    ss = load_json(DATA / "seller_shadows.json", {})
+    if ss:
+        f = ss.get("fade_the_cards", {})
+        t1s, t2s = ss.get("theta_toxic_window", {}), ss.get("theta_late_window", {})
+        od = ss.get("overnight_decay", {})
+        seller_html = table(
+            ["Study", "Samples", "Seller wins", "Seller net (est)"],
+            [["Fade the cards (other side of our fills)", str(f.get("fills", 0)),
+              str(f.get("seller_wins", 0)), money(f.get("net_est", 0))],
+             ["Sell ATM straddle 10:30→12:00", str(t1s.get("days", 0)),
+              str(t1s.get("wins", 0)), money(t1s.get("net_est", 0))],
+             ["Sell ATM straddle 14:15→15:20", str(t2s.get("days", 0)),
+              str(t2s.get("wins", 0)), money(t2s.get("net_est", 0))],
+             ["Overnight ATM straddle (close→close)", str(od.get("nights", 0)),
+              str(od.get("wins", 0)), money(od.get("net_est", 0))]])
+    else:
+        seller_html = '<p class="empty">appears after the next nightly run</p>'
 
     last = ledger[-1] if ledger else {}
     cf = last.get("exit_cf") or {}
@@ -325,6 +346,10 @@ def build() -> str:
          "Same fills, three exit policies. Bank@+5% = sell at the first +5% touch. "
          "Bank+cut = also exit the moment a trade goes −5% against you. Tiny sample — "
          "treat as a hypothesis being graded, not a verdict.")}
+{section("Seller shadows — would the umbrella shop have won?", seller_html,
+         "Zero-risk studies of option SELLING on our own tape, refreshed nightly. "
+         "No margin costs modelled; charges approximated. A decision needs 30+ samples "
+         "— and real selling needs capital and defined-risk spreads regardless.")}
 {section("Research ignition countdown", countdown)}
 {section("Nightly learning ledger", ledger_html,
          "Effect size = standard deviations separating winners from losers. Tiny samples wobble; watch trends across weeks.")}
