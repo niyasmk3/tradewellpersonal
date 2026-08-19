@@ -86,6 +86,18 @@ week — confounded experiments teach nothing, twice.
 - [ ] calibration wrapper (CalibratedClassifierCV, isotonic) — does the
       probability mean what it says?
 - [ ] feature pruning: keep top-8 by |coefficient| from the best model so far
+- [ ] ENTRY-QUALITY framing (added 19-Aug from the R&D ledger): treat
+      label_win_bankcut as the entry-quality target, not merely the exit-policy
+      label — 17 of 32 clean fills never touched +5% and ALL 17 lost (−₹13.6k
+      of the book's −₹12.2k; the touched 15 netted +₹1.4k with worst single
+      −₹100 thanks to the de-risk rule). A filter that raises the +5%-touch
+      rate attacks the dud pile directly; judge candidate filters by touch-rate
+      retained as well as net-R uplift.
+- [ ] tape feature: replicate upstream's tape classifier (developing / two-way
+      / stretched) from OUR recorded candles as-of card birth — deterministic
+      from prior price history, so retro-computable without leakage. The
+      owner's sole surviving filter (GOLDEN stack) deserves a dataset column
+      before the September run.
 
 ## Why these rules exist (read once, believe forever)
 

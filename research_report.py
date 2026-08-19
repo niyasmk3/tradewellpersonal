@@ -136,6 +136,29 @@ def build() -> str:
     sh_closed = [t for t in shadow if t.get("exited_at")
                  and isinstance(t.get("realized_pnl"), (int, float))]
     sh_gross = sum(t["realized_pnl"] for t in sh_closed)
+
+    # Entry quality, the book's north-star (19-Aug R&D-ledger finding): a fill
+    # that never touches +5% before exit has never won; the whole loss pile
+    # lives there. Exit policy can only redistribute the touched group.
+    def touched5(t: dict) -> bool:
+        e, m = t.get("entry_premium") or 0, t.get("mfe_premium") or 0
+        return bool(e) and (m - e) / e >= 0.05
+
+    touched = [t for t in closed if touched5(t)]
+    duds = [t for t in closed if not touched5(t)]
+    touch_html = ""
+    if closed:
+        t_pnl = sum(t["realized_pnl"] for t in touched)
+        d_pnl = sum(t["realized_pnl"] for t in duds)
+        pct = 100 * len(touched) / len(closed)
+        touch_html = (
+            f'<p class="note"><b>Entry quality (north-star): '
+            f'{len(touched)}/{len(closed)} real fills touched +5% before exit '
+            f'({pct:.0f}%).</b> Touched pile: {money(t_pnl)} gross · '
+            f'never-touched pile: {money(d_pnl)} gross. A signal that never '
+            f'moves +5% our way has never won a rupee here — raising this '
+            f'percentage is what "better signals" means; exits only decide '
+            f'how much of the touched pile we keep.</p>')
     score_rows = []
     if closed:
         score_rows.append(["REAL book", str(len(closed)),
@@ -330,7 +353,7 @@ def build() -> str:
 </nav>
 
 <div class="tab" id="findings">
-{section("Paper book scoreboard", scoreboard,
+{section("Paper book scoreboard", scoreboard + touch_html,
          "Gross figures; net-of-charges lives on the dashboard Paper tab.")}
 {section("Every fill, graded", fills)}
 {section("Every card the engine issued", cards_html)}
