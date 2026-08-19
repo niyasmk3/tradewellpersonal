@@ -98,6 +98,24 @@ week — confounded experiments teach nothing, twice.
       from prior price history, so retro-computable without leakage. The
       owner's sole surviving filter (GOLDEN stack) deserves a dataset column
       before the September run.
+- [ ] premium-momentum-at-birth feature (19-Aug, idea from aaryansinha16/
+      AI-trader's "option premium confirmation gate"): from recorder chain
+      snapshots, the card contract's premium change over the 60-120s BEFORE
+      birth. Three of our fills never traded a single tick positive — entered
+      exactly at a local premium top; a falling-knife flag at birth is aimed
+      straight at that failure mode.
+- [ ] thesis-level label (19-Aug, de Prado triple-barrier idea): label from
+      the UNDERLYING's path — did spot touch the card's T1 level before its
+      invalidation level within the window? — computed from recorded 3m bars.
+      Separates "thesis right" from "premium paid" (IV crush and charges can
+      fail a correct thesis); train entry filters on the thesis, grade P&L on
+      the premium.
+- [ ] tape-state instability (744-session climatology, 19-Aug): base rates at
+      11:00 are two-way 35.8% / stretched 35.1% / developing 29.2%, but only
+      47% of days keep their 11:00 state at 14:00 — and of days developing at
+      11:00 only 30% still are at 14:00. The label is a MOMENT, not a
+      day-type: model it as birth-time context (interaction with hour_ist),
+      and never extrapolate a morning label across the afternoon.
 
 ## Why these rules exist (read once, believe forever)
 

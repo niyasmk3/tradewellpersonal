@@ -155,6 +155,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=365,
                     help="how far back for intraday timeframes (day candles always pull ~5y)")
+    # Futures intraday history dies at contract listing (~3 months), but SPOT
+    # INDEX intraday history goes back to Jan-2015 on Kite — the 95-day wall
+    # never applied to indices. Deep index candles power the climatology
+    # studies (tape-state base rates, toxic-window stats over hundreds of
+    # sessions) that 12 days of live capture cannot: same formulae, 60x the
+    # sample. They do NOT manufacture graded signal cards — no lookahead
+    # shortcut exists; the card dataset still only grows live.
+    ap.add_argument("--deep-index-days", type=int, default=0,
+                    help="also pull spot-index 3m/15m candles this many days back "
+                         "(0 = off; index intraday exists since 2015)")
     args = ap.parse_args()
 
     api_key = read_env_key("KITE_API_KEY")
@@ -217,6 +227,13 @@ def main() -> int:
             kite, inst["instrument_token"], interval, 1800, chunk, False, False))
         total += n
         log(f"{sym} day: {n:,} bars")
+        if args.deep_index_days > 0 and sym != "INDIAVIX":
+            for interval, tf, chunk in INTRADAY_PULLS:
+                n = save(db, sym, tf, fetch_chunked(
+                    kite, inst["instrument_token"], interval,
+                    args.deep_index_days, chunk, False, False))
+                total += n
+                log(f"{sym} {tf} (deep): {n:,} bars")
 
     size_mb = DB_PATH.stat().st_size / 1e6
     log(f"backfill done — {total:,} bars total, db {size_mb:.1f} MB")
