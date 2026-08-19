@@ -4,11 +4,16 @@ Runs at CONDOR_EVAL_S (60s default — condor conditions move at regime speed,
 not tick speed). Shadow-first: cards land in the store/archive and render on
 the /condor tab labelled TRIAL; nothing is pushed to the phone until the
 ledger has its 30 graded outcomes and the user flips that switch deliberately.
+
+Off-session the loop idles: one final closed-state evaluation stays serveable
+via last_responses, reconcile keeps aging cards, and NO trace lines are
+written — a line per closed minute was ~the whole eval file.
 """
 from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from app.condor.engine import CondorEngine
 from app.condor.models import CondorCard, WhatIfRequest
@@ -19,6 +24,8 @@ from app.kite.instruments import chain_key
 from app.market import calendar as mcal
 from app.options.iv import bs_price
 from app.state import MarketState
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 log = logging.getLogger("tradewell.condor")
 
@@ -36,6 +43,9 @@ class CondorService:
         self.engine = CondorEngine(cfg, state)
         self.monitor = CondorMonitor(cfg, state, store)
         self.last_responses: dict[str, dict] = {}
+        # Symbols whose final "market closed" state has landed in
+        # last_responses since the session ended; cleared on the next open.
+        self._closed_published: set[str] = set()
 
     def universe_for(self, symbol: str):
         return self.universes.get(chain_key(symbol, "nearest"))
@@ -43,12 +53,40 @@ class CondorService:
     def run_once(self) -> None:
         cfg = self.cfg
         now = time.time()
-        if self.snapshots is not None and mcal.is_market_open():
+        # The branch decision and the evaluation must read the SAME clock: a
+        # wall-clock re-read could straddle the 15:30 boundary, letting the
+        # closed branch run an evaluation that does not fail G0 — and then
+        # latch it as the "final" state all night (review catch).
+        open_now = mcal.is_market_open(datetime.fromtimestamp(now, _IST))
+        if self.snapshots is not None and open_now:
             n = self.snapshots.maybe_snapshot(
                 self.universes, cfg.condor_snapshot_s,
                 cfg.condor_snapshot_keep_days, now)
             if n:
                 log.debug("condor snapshot: %d rows", n)
+        if not open_now:
+            # Off-session every evaluation fails G0 with "market closed" —
+            # one trace line per closed minute was ~the whole eval file
+            # (nights + weekends) and carries nothing the trace dataset can
+            # learn from. Evaluate ONCE so GET /condor/{symbol} serves the
+            # honest closed state, then idle; reconcile keeps running so an
+            # active card still ages out at its valid_until.
+            for symbol in cfg.condor_symbol_list:
+                try:
+                    self.store.reconcile(symbol, None, now)
+                    if symbol in self._closed_published:
+                        continue
+                    uni = self.universe_for(symbol)
+                    if uni is None:
+                        continue
+                    chain = self.state.get_option_chain(chain_key(symbol, "nearest"))
+                    resp = self.engine.evaluate(symbol, uni, chain, now)
+                    self.last_responses[symbol] = resp.model_dump()
+                    self._closed_published.add(symbol)
+                except Exception as exc:
+                    log.warning("condor evaluation failed for %s: %s", symbol, exc)
+            return
+        self._closed_published.clear()
         for symbol in cfg.condor_symbol_list:
             try:
                 uni = self.universe_for(symbol)
