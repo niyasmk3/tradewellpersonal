@@ -112,6 +112,13 @@ week — confounded experiments teach nothing, twice.
       Separates "thesis right" from "premium paid" (IV crush and charges can
       fail a correct thesis); train entry filters on the thesis, grade P&L on
       the premium.
+- [ ] pre-ignition hardening (de Prado purged-CV idea, 19-Aug): add a 1-day
+      embargo at walk-forward fold boundaries in harness.py — a positional
+      card opened at month-end can straddle the train/test line and leak its
+      outcome across it. Tiny effect at monthly folds and hour-scale trades,
+      but it is pure discipline and free. MUST land before the first real
+      run, in a calm dedicated session, with the selftest re-run — harness.py
+      is ground truth and does not get edited casually or late at night.
 - [ ] tape-state instability (744-session climatology, 19-Aug): base rates at
       11:00 are two-way 35.8% / stretched 35.1% / developing 29.2%, but only
       47% of days keep their 11:00 state at 14:00 — and of days developing at
