@@ -297,6 +297,37 @@ def vix_close_before(db: sqlite3.Connection, ts: int) -> float | None:
     return row[0] if row else None
 
 
+def premium_momentum(db: sqlite3.Connection, symbol: str, strike,
+                     direction, created: int, now_chain: dict | None) -> dict:
+    """AI-trader's 'option premium confirmation' idea, as a FEATURE (never a
+    gate here): the card contract's premium change over the ~1-2 minutes
+    before birth, from the recorder's 60s chain snapshots. Negative =
+    entering while the premium is already falling — the falling knife.
+    Three of our first 32 fills never traded one tick positive; this is the
+    column aimed at exactly them.
+    """
+    if not isinstance(strike, (int, float)) or direction not in ("CE", "PE"):
+        return {}
+    key = "ce_ltp" if direction == "CE" else "pe_ltp"
+
+    def ltp(chain: dict | None):
+        for r in (chain or {}).get("rows") or []:
+            if r.get("strike") == strike:
+                v = r.get(key)
+                return float(v) if isinstance(v, (int, float)) and v > 0 else None
+        return None
+
+    now_p = ltp(now_chain)
+    # One polling cycle earlier: nearest snapshot at least ~105s before birth
+    # (the now-chain is at most 90s old via birth capture / nearest_periodic,
+    # so the two reads can never be the same snapshot).
+    prev_p = ltp(nearest_periodic(db, "chain", symbol, created - 105,
+                                  tolerance_s=120))
+    if now_p is None or prev_p is None:
+        return {}
+    return {"premium_mom_pct": round((now_p - prev_p) / prev_p * 100, 3)}
+
+
 TAPE_SPLITS = (0.35, 0.60)   # FROZEN upstream (signals/service.py::_tape_state)
 
 
@@ -386,6 +417,8 @@ def main() -> int:
         adv = (birth or {}).get("advocate") or {}
         if isinstance(adv.get("counter_strength"), (int, float)):
             f["advocate_counter"] = adv["counter_strength"]
+        f.update(premium_momentum(db, sym, card.get("strike"),
+                                  f.get("direction"), created, chain))
         # Tape: prefer the engine-recorded value; back-compute only the gap.
         # Where both exist we count agreement — the proof the back-fill is a
         # faithful port and pre-11-Aug rows can be trusted.

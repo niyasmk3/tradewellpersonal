@@ -103,7 +103,9 @@ week — confounded experiments teach nothing, twice.
       snapshots, the card contract's premium change over the 60-120s BEFORE
       birth. Three of our fills never traded a single tick positive — entered
       exactly at a local premium top; a falling-knife flag at birth is aimed
-      straight at that failure mode.
+      straight at that failure mode. (Feature landed 19-Aug as
+      premium_mom_pct — 20/21 train rows covered; the model run decides
+      whether it earns a place.)
 - [ ] thesis-level label (19-Aug, de Prado triple-barrier idea): label from
       the UNDERLYING's path — did spot touch the card's T1 level before its
       invalidation level within the window? — computed from recorded 3m bars.

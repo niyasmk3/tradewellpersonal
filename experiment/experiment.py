@@ -32,6 +32,7 @@ FEATURES = [
     "tape_resolved_pct",
     "tape_aligned",
     "tape_state",
+    "premium_mom_pct",
     "mode",
     "direction",
 ]
