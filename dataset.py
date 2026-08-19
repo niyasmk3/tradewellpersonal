@@ -123,6 +123,14 @@ def label_fields(trade: dict) -> dict:
     if not isinstance(pnl, (int, float)):
         return {}
     out = {"label_win": int(pnl > 0), "net_pnl": pnl}
+    # Second label: success under the bank-at-+5% exit policy (the counter-
+    # factual currently leading the exit A/B). If that policy is adopted, the
+    # model must be trained against the world it will actually operate in —
+    # not the written-rules world being replaced. First-touch approximation
+    # from MFE, same as the nightly counterfactual.
+    entry_p, mfe = trade.get("entry_premium"), trade.get("mfe_premium")
+    if isinstance(entry_p, (int, float)) and isinstance(mfe, (int, float)) and entry_p:
+        out["label_win_bankcut"] = int((mfe - entry_p) / entry_p >= 0.05)
     entry = trade.get("entry_premium")
     stop = trade.get("stop_loss")
     qty = trade.get("initial_quantity") or trade.get("quantity")
@@ -149,6 +157,10 @@ def card_features(card: dict) -> dict:
         f["created_at"] = int(created)
         dt = datetime.fromtimestamp(created, IST)
         f["hour_ist"] = dt.hour + dt.minute / 60.0
+        # Two independent audits (owner's 52-session study + our fills) found
+        # 10:30-12:00 IST toxic for buyers — encode it explicitly so a small-n
+        # model doesn't have to rediscover a nonlinear hour effect.
+        f["toxic_window"] = int(10.5 <= f["hour_ist"] < 12.0)
         f["dow"] = dt.weekday()
         f["month"] = dt.strftime("%Y-%m")
     score = card.get("score") or {}

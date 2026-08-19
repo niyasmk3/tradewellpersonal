@@ -83,7 +83,12 @@ def main() -> int:
 
     if n_train >= 10 and "label_win" in train:
         num = train.select_dtypes("number").drop(
-            columns=[c for c in ("label_win", "net_R", "net_pnl", "created_at") if c in train],
+            # labels and known artifacts must never appear as "separating
+            # features": label_win_bankcut IS a label; had_birth_snapshot
+            # tracks recorder maturity, not the market (its 0.838 "effect"
+            # on 18-Aug was the ledger flagging our own artifact).
+            columns=[c for c in ("label_win", "label_win_bankcut", "net_R",
+                                 "net_pnl", "created_at", "had_birth_snapshot") if c in train],
             errors="ignore",
         )
         wins, losses = train[train.label_win == 1], train[train.label_win == 0]

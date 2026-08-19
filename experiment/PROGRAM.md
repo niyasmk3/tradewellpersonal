@@ -54,9 +54,28 @@ filter the signal engine's cards to a higher-expectancy subset? You edit
 3. Write a 5-line summary at the top of results.tsv's companion
    `NOTES.md`: what was tried, what survived, what the holdout said.
 
+## Sequencing rule (added 18-Aug, after the owner's stopd pre-registration)
+
+Decide the EXIT POLICY before training the model. The exit A/B reaches its
+30-fill verdict first; if bank+cut is adopted, train against
+`label_win_bankcut` (the deployed world), not `label_win` (the replaced
+world). Never run the exit switch and the first model run in the same
+week — confounded experiments teach nothing, twice.
+
+## Pre-registered expectations (frozen 18-Aug, n=19 train — so September's
+## run cannot quietly move the goalposts)
+
+- Score total will NOT survive as a top feature (wins 83.2 vs losses 82.6).
+- Candidates expected to matter, per current separations: vix_close (calm
+  days win), pulse_range_pos_pct (enter low wins), atm_pe_ce_oi.
+- If these three all flip sign at 40+, treat the 19-row separations as
+  noise and say so in NOTES.md.
+
 ## Idea queue (work top-down; add, never delete)
 
 - [ ] baseline as shipped (mandatory first run)
+- [ ] baseline against label_win_bankcut — the deployed-policy label (compare
+      to label_win baseline; adopt whichever matches the live exit policy)
 - [ ] drop news + OI components (they're live-only — do technicals alone hold?)
 - [ ] threshold sweep: 0.50 / 0.60 / 0.65 (one experiment each)
 - [ ] HistGradientBoostingClassifier instead of logistic regression

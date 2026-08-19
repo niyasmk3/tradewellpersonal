@@ -19,6 +19,7 @@ FEATURES = [
     "risk_reward",
     "inval_dist_pct",
     "hour_ist",
+    "toxic_window",
     "dow",
     "rsi",
     "adx",
