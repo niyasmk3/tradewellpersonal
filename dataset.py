@@ -173,6 +173,13 @@ def card_features(card: dict) -> dict:
     inval = card.get("invalidation_level")
     if isinstance(ref_spot, (int, float)) and isinstance(inval, (int, float)) and ref_spot:
         f["inval_dist_pct"] = round(abs(ref_spot - inval) / ref_spot * 100, 4)
+    # Tape at birth — recorded on cards since ~11-Aug (engine stamps it);
+    # older cards get the back-computed value in main().
+    for k in ("tape_state", "tape_resolved_pct"):
+        if card.get(k) is not None:
+            f[k] = card[k]
+    if isinstance(card.get("tape_aligned"), bool):
+        f["tape_aligned"] = int(card["tape_aligned"])
     return f
 
 
@@ -290,6 +297,46 @@ def vix_close_before(db: sqlite3.Connection, ts: int) -> float | None:
     return row[0] if row else None
 
 
+TAPE_SPLITS = (0.35, 0.60)   # FROZEN upstream (signals/service.py::_tape_state)
+
+
+def tape_from_candles(db: sqlite3.Connection, symbol: str, created: int) -> dict:
+    """Back-compute the engine's tape label for cards born before the field
+    existed (~11-Aug): the owner's sole surviving filter deserves a column on
+    EVERY row. Faithful port of signals/service.py::_tape_state onto our
+    recorded 3m bars — resolved = |close - day open| / (day high - day low)
+    of today's session strictly before card birth. The 0.35/0.60 splits are
+    frozen there and stay frozen here; only closed bars enter
+    (bar_ts + 180 <= created), matching the engine's forming-bar drop.
+    """
+    if not _table_exists(db, "candles"):
+        return {}
+    day = (int(created) + 19800) // 86400
+    day_start = day * 86400 - 19800
+    for sym in (symbol, f"{symbol}_FUT"):
+        rows = db.execute(
+            "SELECT open, high, low, close, bar_ts FROM candles "
+            "WHERE symbol=? AND tf='3m' AND bar_ts>=? AND bar_ts+180<=? "
+            "ORDER BY bar_ts",
+            (sym, day_start, int(created)),
+        ).fetchall()
+        if len(rows) < 3 or rows[-1][4] - rows[0][4] < 1800:
+            continue
+        o, c = rows[0][0], rows[-1][3]
+        hi = max(r[1] for r in rows)
+        lo = min(r[2] for r in rows)
+        rng = hi - lo
+        if rng <= 0:
+            return {}
+        sf = abs(c - o) / rng
+        state = ("developing" if TAPE_SPLITS[0] < sf < TAPE_SPLITS[1]
+                 else "stretched" if sf >= TAPE_SPLITS[1] else "two-way")
+        return {"tape_state": state,
+                "tape_resolved_pct": round(sf * 100.0, 1),
+                "tape_side": "up" if c >= o else "down"}
+    return {}
+
+
 def _table_exists(db: sqlite3.Connection, name: str) -> bool:
     return bool(db.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
@@ -316,6 +363,7 @@ def main() -> int:
 
     rows: list[dict] = []
     skipped_no_outcome = skipped_no_label = 0
+    tape_both = tape_match = tape_filled = 0
     for cid, card in cards.items():
         trade = outcomes.get(cid)
         if trade is None:
@@ -338,6 +386,20 @@ def main() -> int:
         adv = (birth or {}).get("advocate") or {}
         if isinstance(adv.get("counter_strength"), (int, float)):
             f["advocate_counter"] = adv["counter_strength"]
+        # Tape: prefer the engine-recorded value; back-compute only the gap.
+        # Where both exist we count agreement — the proof the back-fill is a
+        # faithful port and pre-11-Aug rows can be trusted.
+        calc = tape_from_candles(db, sym, created)
+        if calc:
+            if f.get("tape_state"):
+                tape_both += 1
+                tape_match += int(calc["tape_state"] == f["tape_state"])
+            else:
+                tape_filled += 1
+                f["tape_state"] = calc["tape_state"]
+                f["tape_resolved_pct"] = calc["tape_resolved_pct"]
+                f["tape_aligned"] = int(
+                    (calc["tape_side"] == "up") == (f.get("direction") == "CE"))
         vix = vix_close_before(db, created)
         if vix is not None:
             f["vix_close"] = vix
@@ -349,6 +411,10 @@ def main() -> int:
         log("no graded rows yet — dataset not written "
             f"(no-outcome: {skipped_no_outcome}, no-label: {skipped_no_label})")
         return 0
+
+    if tape_both:
+        log(f"tape back-fill check: computed matches recorded on "
+            f"{tape_match}/{tape_both} cards; gaps filled: {tape_filled}")
 
     import pandas as pd  # backend venv dependency
     df = pd.DataFrame(rows).sort_values("created_at")

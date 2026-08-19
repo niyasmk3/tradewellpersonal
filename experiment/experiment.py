@@ -29,11 +29,14 @@ FEATURES = [
     "oi_change_skew",
     "vix_close",
     "advocate_counter",
+    "tape_resolved_pct",
+    "tape_aligned",
+    "tape_state",
     "mode",
     "direction",
 ]
 
-CATEGORICALS = ["mode", "direction"]
+CATEGORICALS = ["mode", "direction", "tape_state"]
 
 THRESHOLD = 0.55
 
