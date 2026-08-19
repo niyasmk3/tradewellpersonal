@@ -42,6 +42,11 @@ venv/
 .condor_chain.db-shm
 .condor_chain.db-wal
 
+# Closing Day Strategy module (app/closing): India VIX bar store + results
+.closing_vix.db
+.closing_results.json
+.overnight_results.json
+
 # Node / Next
 node_modules/
 .next/

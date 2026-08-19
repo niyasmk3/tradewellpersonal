@@ -1298,6 +1298,389 @@ export interface RndCandidates {
   note: string;
 }
 
+
+// --- Closing Day Strategy (app/closing) ------------------------------------
+// Types mirror backend/app/closing/{study,service,validate}.py — keep in sync.
+// Two evidence classes ride every number and must never be blended in the UI:
+// `underlying` is measured from real index prints, `option` is MODELLED.
+
+export interface ClosingStatus {
+  vix_bars: number;
+  index_bars: number;
+  last_sync: string | null;
+  results_available: boolean;
+  results_generated_at: string | null;
+}
+
+export interface ClosingPctStats {
+  n: number;
+  win_rate_pct?: number;
+  mean_pct?: number;
+  median_pct?: number;
+  best_pct?: number;
+  worst_pct?: number;
+  stdev_pct?: number;
+}
+
+export interface ClosingUnderlying {
+  n: number;
+  continued_pct: number;
+  mean_signed_pts: number;
+  median_signed_pts: number;
+  stdev_pts: number;
+  mean_signed_ci95: [number, number] | null;
+  note: string;
+}
+
+export interface ClosingOption extends ClosingPctStats {
+  mean_gross_pct: number;
+  mean_net_pct_ci95: [number, number] | null;
+  total_net_rs: number;
+  mean_net_rs: number;
+  total_charges_rs: number;
+  mean_premium_rs: number;
+  final_rs: number;
+  max_drawdown_rs: number;
+}
+
+export interface ClosingMonthRow {
+  month: string;
+  trades: number;
+  net_rs: number;
+  mean_net_pct: number;
+  win_rate_pct: number;
+  best_rs: number;
+  worst_rs: number;
+}
+
+export interface ClosingTrust {
+  available: boolean;
+  reason?: string;
+  calibrated_vix_range?: [number, number];
+  trades_outside_pct?: number;
+  abs_pnl_outside_pct?: number;
+  net_rs_outside?: number;
+  net_rs_inside?: number;
+  note?: string;
+}
+
+export interface ClosingWindow {
+  n: number;
+  from?: string;
+  to?: string;
+  underlying?: ClosingUnderlying;
+  option?: ClosingOption;
+  trust?: ClosingTrust;
+  per_month?: {
+    rows: ClosingMonthRow[];
+    months: number;
+    mean_net_rs: number;
+    median_net_rs: number;
+    positive_months: number;
+    mean_trades: number;
+  };
+  by_direction?: Record<string, ClosingPctStats>;
+  by_dte?: Record<string, ClosingPctStats>;
+  by_gap?: Record<string, ClosingPctStats>;
+  by_vix?: Record<string, ClosingPctStats>;
+  skipped?: Record<string, number>;
+  lots?: number;
+  lot_size?: number;
+  qty?: number;
+}
+
+export interface ClosingVariant {
+  entry: string;
+  exit: string;
+  n: number;
+  continued_pct: number;
+  mean_signed_pts: number;
+  median_signed_pts: number;
+}
+
+export interface ClosingScore {
+  n: number;
+  median_abs_err_pct?: number;
+  mean_abs_err_pct?: number;
+  median_bias_pct?: number;
+  p90_abs_err_pct?: number;
+  carry_pct?: number;
+}
+
+export interface ClosingOvernightPair {
+  from: string;
+  to: string;
+  expiry: string;
+  strike: number;
+  right: string;
+  real_in: number;
+  real_out: number;
+  model_in: number;
+  model_out: number;
+  real_pct: number;
+  model_pct: number;
+  err_pp: number;
+}
+
+export interface ClosingValidation {
+  level: {
+    available: boolean;
+    reason?: string;
+    in_sample?: ClosingScore;
+    uncalibrated_baseline?: ClosingScore;
+    by_dte?: Record<string, ClosingScore>;
+  };
+  out_of_sample: {
+    available: boolean;
+    reason?: string;
+    sessions?: number;
+    pooled_median_abs_err_pct?: number | null;
+    per_session?: Record<string, ClosingScore>;
+  };
+  overnight: {
+    available: boolean;
+    reason?: string;
+    n_pairs?: number;
+    median_abs_err_pp?: number;
+    median_bias_pp?: number;
+    sign_agreement_pct?: number;
+    pairs?: ClosingOvernightPair[];
+  };
+}
+
+export interface ClosingResults {
+  generated_at?: string;
+  rule: Record<string, string>;
+  disclaimer: string;
+  data: {
+    index_bars: number;
+    vix_bars: number;
+    sessions: number;
+    spine_from: string | null;
+    spine_to: string | null;
+    last_sync: string | null;
+  };
+  model: {
+    carry_pct: number;
+    carry_fitted: boolean;
+    curve_points: { dte: number; ratio: number }[];
+    curve_is_fallback: boolean;
+  };
+  calibration: {
+    carry: { rate_pct?: number; n: number; sessions: number; iqr_pct?: number[]; caveats: string[] };
+    iv_curve: {
+      points: { dte: number; dte_mid: number; ratio: number; n: number; thin?: boolean }[];
+      n_obs: number;
+      sessions: number;
+      vix_min: number | null;
+      vix_max: number | null;
+      caveats: string[];
+    };
+    spread: Record<string, { n: number; spread_pct: number | null; spread_abs: number | null }>;
+  };
+  validation: ClosingValidation;
+  signal_search: ClosingSignalSearch;
+  signal_comparison: ClosingSignalComparison;
+  primary: ClosingWindow;
+  robustness: {
+    three_year: ClosingWindow;
+    debiased: {
+      applied_pp: number;
+      basis_n_pairs: number;
+      result: ClosingWindow;
+      note: string;
+    } | null;
+    variants: ClosingVariant[];
+    variants_note: string;
+  };
+}
+
+
+export interface ClosingSignalResult {
+  key: string;
+  label: string;
+  n: number;
+  traded_pct: number;
+  ce_share_pct: number;
+  hit_pct: number;
+  mean_pts: number;
+  median_pts: number;
+  mean_ci95: [number, number] | null;
+  skill_pts: number;
+  clears_zero: boolean;
+}
+
+export interface ClosingSignalWindow {
+  n: number;
+  drift_pts?: number;
+  drift_median_pts?: number;
+  results: ClosingSignalResult[];
+}
+
+export interface ClosingSignalSearch {
+  available: boolean;
+  reason?: string;
+  windows?: Record<string, ClosingSignalWindow>;
+  candidates_tested?: number;
+  survivors?: string[];
+  note?: string;
+}
+
+export interface ClosingComparisonRow {
+  signal_mode: string;
+  years: number;
+  n: number;
+  continued_pct: number;
+  median_signed_pts: number;
+  mean_signed_pts: number;
+  mean_signed_ci95: [number, number] | null;
+  ce_share_pct: number;
+  win_rate_pct: number;
+  mean_pct: number;
+  median_pct: number;
+  total_net_rs: number;
+  mean_net_pct_ci95: [number, number] | null;
+}
+
+export interface ClosingSignalComparison {
+  rows: ClosingComparisonRow[];
+  note: string;
+}
+
+export interface ClosingTrade {
+  date: string;
+  month: string;
+  exit_date: string;
+  prev_close: number;
+  signal_price: number;
+  gap_pts: number;
+  direction: string;
+  entry_spot: number;
+  exit_spot: number;
+  spot_move_pts: number;
+  signed_move_pts: number;
+  day_open: number | null;
+  p1400: number | null;
+  confirm?: string;
+  vix_vs_prev?: number | null;
+  vix_day_chg?: number | null;
+  range_pos?: number | null;
+  f_vol_expand?: boolean | null;
+  f_midrange?: boolean | null;
+  f_all_pass?: boolean | null;
+  reference: number;
+  signal_mode: string;
+  strike: number;
+  expiry: string;
+  dte_entry: number;
+  dte_bucket: string;
+  gap_bucket: string;
+  vix_bucket: string;
+  extrapolated: boolean;
+  vix_in: number;
+  vix_out: number;
+  mid_in: number;
+  mid_out: number;
+  fill_in: number;
+  fill_out: number;
+  gross_pct: number;
+  net_pct: number;
+  gross_rs: number;
+  charges_rs: number;
+  net_rs: number;
+  qty: number;
+}
+
+export interface ClosingTradesResponse {
+  rows: ClosingTrade[];
+  count: number;
+  total: number;
+}
+
+
+// --- Overnight tab (app/overnight) ------------------------------------------
+// The confirmed variant of Closing Day: same trade, plus the last-hour
+// agreement filter. Windows reuse the closing summariser's shape.
+
+
+export interface OvernightCompact {
+  n: number;
+  win_pct?: number;
+  mean_pct?: number;
+  median_pct?: number;
+  total_rs?: number;
+  max_dd_rs?: number;
+  positive_months?: number;
+  months?: number;
+}
+
+export interface OvernightLadderRung {
+  label: string;
+  kept: OvernightCompact;
+  removed?: OvernightCompact;
+  unknown_n?: number;
+}
+
+export interface OvernightFilters {
+  registered_on: string;
+  definitions: { key: string; label: string; rule: string; status: string; evidence: string }[];
+  note: string;
+  live: {
+    registered_on: string;
+    min_sample: number;
+    live_nights: number;
+    filtered_nights: number;
+    verdict_due: number;
+    all: OvernightCompact;
+    filters_pass: OvernightCompact;
+    filters_fail: OvernightCompact;
+    note: string;
+  };
+}
+
+export interface OvernightWindow {
+  nights_considered: number;
+  study_skipped?: Record<string, number>;
+  traded: ClosingWindow;
+  skipped: ClosingWindow;
+  unconfirmable: { n: number };
+  unfiltered: { underlying?: ClosingUnderlying; option?: ClosingOption };
+  filter_ladder?: OvernightLadderRung[];
+  trades?: ClosingTrade[];
+  skipped_trades?: ClosingTrade[];
+}
+
+export interface OvernightResults {
+  generated_at?: string;
+  rule: Record<string, string>;
+  disclaimer: string;
+  data: { index_bars: number; vix_bars: number; last_sync: string | null };
+  model: {
+    carry_pct: number;
+    carry_fitted: boolean;
+    curve_points: { dte: number; ratio: number }[];
+    curve_is_fallback: boolean;
+  };
+  validation_brief: {
+    oos_level_err_pct: number | null;
+    overnight_err_pp: number | null;
+    overnight_bias_pp: number | null;
+    overnight_n_pairs: number | null;
+    note: string;
+  };
+  primary: OvernightWindow;
+  three_year: OvernightWindow;
+  filters?: OvernightFilters;
+}
+
+export interface OvernightStatus {
+  index_bars: number;
+  vix_bars: number;
+  last_sync: string | null;
+  results_available: boolean;
+  results_generated_at: string | null;
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) {
@@ -1457,4 +1840,20 @@ export const api = {
   rndLedger: (limit = 200) => getJSON<RndLedgerResponse>(`/rnd/ledger?limit=${limit}`),
   rndPolicies: () => getJSON<RndPolicies>("/rnd/policies"),
   rndCandidates: () => getJSON<RndCandidates>("/rnd/candidates"),
+
+  closingStatus: () => getJSON<ClosingStatus>("/closing/status"),
+  closingResults: () => getJSON<ClosingResults>("/closing/results"),
+  closingTrades: (limit = 400) =>
+    getJSON<ClosingTradesResponse>(`/closing/trades?limit=${limit}`),
+  closingSync: () => postJSON<Record<string, unknown>>("/closing/sync", {}),
+  closingAnalyze: (lots?: number) =>
+    postJSON<ClosingResults>(`/closing/analyze${lots ? `?lots=${lots}` : ""}`, {}),
+
+  overnightStatus: () => getJSON<OvernightStatus>("/overnight/status"),
+  overnightResults: () => getJSON<OvernightResults>("/overnight/results"),
+  overnightTrades: (which: "traded" | "skipped" = "traded", limit = 400) =>
+    getJSON<ClosingTradesResponse>(`/overnight/trades?which=${which}&limit=${limit}`),
+  overnightSync: () => postJSON<Record<string, unknown>>("/overnight/sync", {}),
+  overnightAnalyze: (lots?: number) =>
+    postJSON<OvernightResults>(`/overnight/analyze${lots ? `?lots=${lots}` : ""}`, {}),
 };

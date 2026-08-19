@@ -416,6 +416,25 @@ class Settings(BaseSettings):
     # same pattern as CONDOR_ENABLED.
     rnd_policy_ledgers: bool = Field(default=False, alias="RND_POLICY_LEDGERS")
 
+    # --- Closing Day Strategy tab (app/closing) ---
+    # A research surface only: it places no orders and emits no signals, so
+    # there is no enable flag to forget. Almost every number the study needs
+    # (carry, the vol term structure, the ATM bid-ask) is FITTED from real
+    # quotes rather than configured — the two knobs below are the ones a
+    # reader might legitimately want to change.
+    closing_lots: int = Field(default=1, ge=1, alias="CLOSING_LOTS")
+    closing_lot_size: int = Field(default=65, ge=1, alias="CLOSING_LOT_SIZE")
+    # NIFTY weekly expiry moved Thursday -> Tuesday with effect from
+    # 2025-09-02. Nothing in this repo can verify the pre-switch leg, so it is
+    # stated as configuration rather than buried as a constant.
+    closing_expiry_switch: str = Field(default="2025-09-02", alias="CLOSING_EXPIRY_SWITCH")
+    # Which 15:00 reference decides CE vs PE: "day_open" (default) or
+    # "prev_close" (the original hypothesis). Not a tuning knob — the two are
+    # different hypotheses, and the tab reports both side by side regardless.
+    # day_open is the default because prev_close is barely separable from an
+    # always-buy-CE control; see docs/closing-day-strategy-2026-08-19.md.
+    closing_signal_mode: str = Field(default="day_open", alias="CLOSING_SIGNAL_MODE")
+
     @property
     def condor_symbol_list(self) -> list[str]:
         return [s.strip().upper() for s in self.condor_symbols.split(",") if s.strip()]

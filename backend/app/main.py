@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     routes_auth,
     routes_backtest,
+    routes_closing,
     routes_condor,
     routes_kite_basket,
     routes_paper,
@@ -22,6 +23,7 @@ from app.api import (
     routes_market,
     routes_news,
     routes_options,
+    routes_overnight,
     routes_patterns,
     routes_rnd,
     routes_signals,
@@ -128,6 +130,8 @@ app.include_router(routes_settings.router)
 app.include_router(routes_patterns.router)
 app.include_router(routes_condor.router)
 app.include_router(routes_rnd.router)
+app.include_router(routes_closing.router)
+app.include_router(routes_overnight.router)
 
 
 @app.get("/health", tags=["meta"])
