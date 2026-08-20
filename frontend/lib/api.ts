@@ -1482,6 +1482,7 @@ export interface ClosingResults {
   signal_search: ClosingSignalSearch;
   signal_comparison: ClosingSignalComparison;
   primary: ClosingWindow;
+  attribution?: ClosingAttribution;
   robustness: {
     three_year: ClosingWindow;
     debiased: {
@@ -1589,6 +1590,120 @@ export interface ClosingTrade {
   charges_rs: number;
   net_rs: number;
   qty: number;
+  // loss attribution + registered calendar flags (app/closing/attribution.py)
+  loss_reason?: string | null;
+  direction_pct?: number | null;
+  theta_pct?: number | null;
+  vega_pct?: number | null;
+  costs_pct?: number | null;
+  carry_days?: number;
+  f_holiday_bridge?: boolean | null;
+  f_month_end?: boolean | null;
+  f_calendar_clear?: boolean | null;
+  tags?: string[];
+}
+
+// --- loss attribution (app/closing/attribution.py) --------------------------
+
+export interface ClosingReasonRow {
+  reason: string;
+  label: string;
+  n: number;
+  share_of_losers_pct: number;
+  mean_pct: number;
+  total_rs: number;
+  index_right_way_n: number;
+}
+
+export interface ClosingReasons {
+  n_trades: number;
+  n_losers: number;
+  rows: ClosingReasonRow[];
+  note: string;
+}
+
+export interface ClosingBucketCell {
+  n: number;
+  mean_pct?: number;
+  total_rs?: number;
+}
+
+export interface ClosingBucketRow {
+  tag: string;
+  n: number;
+  registered: boolean;
+  in_sample: ClosingBucketCell;
+  holdout: ClosingBucketCell;
+  verdict: string;
+  below_house_n: boolean;
+}
+
+export interface ClosingLiveScoreboard {
+  registered_on: string;
+  min_sample: number;
+  live_nights: number;
+  flagged_nights: number;
+  verdict_due: number;
+  all: OvernightCompact;
+  flagged: OvernightCompact;
+  clear: OvernightCompact;
+  unknown_n: number;
+  note: string;
+}
+
+export interface ClosingTonightCheck {
+  key: string;
+  label: string;
+  status: "clear" | "red" | "unknown";
+  detail: string;
+}
+
+// The live 15:00 pre-trade card (app/closing/tonight.py).
+export interface ClosingTonight {
+  available: boolean;
+  reason?: string;
+  date?: string;
+  weekday?: string;
+  as_of?: string;
+  provisional?: boolean;
+  signal_time?: string;
+  values?: {
+    day_open: number;
+    p1400: number | null;
+    p1500: number;
+    gap_pts: number;
+    direction: string | null;
+    prev_close: number | null;
+    strike: number | null;
+    expiry: string | null;
+    dte: number | null;
+    next_trading_day: string | null;
+    carry_days: number | null;
+    vix_1500: number | null;
+    vix_prev_close: number | null;
+    vix_0915: number | null;
+    range_pos: number | null;
+  };
+  checks?: ClosingTonightCheck[];
+  red?: string[];
+  verdict?: "CLEAN" | "FLAGGED" | "INCOMPLETE";
+  note?: string;
+  first_eval?: { as_of: string; verdict: string; red: string[]; drifted?: boolean };
+}
+
+export interface ClosingAttribution {
+  reasons_1y: ClosingReasons;
+  reasons_3y: ClosingReasons;
+  buckets: { rows: ClosingBucketRow[]; split: string; note: string };
+  flags: {
+    registered_on: string;
+    definitions: { key: string; label: string; rule: string; status: string; evidence: string }[];
+    ladder_1y: OvernightLadderRung[];
+    ladder_3y: OvernightLadderRung[];
+    live: ClosingLiveScoreboard;
+    note: string;
+  };
+  note: string;
 }
 
 export interface ClosingTradesResponse {
@@ -1842,6 +1957,7 @@ export const api = {
   rndCandidates: () => getJSON<RndCandidates>("/rnd/candidates"),
 
   closingStatus: () => getJSON<ClosingStatus>("/closing/status"),
+  closingTonight: () => getJSON<ClosingTonight>("/closing/tonight"),
   closingResults: () => getJSON<ClosingResults>("/closing/results"),
   closingTrades: (limit = 400) =>
     getJSON<ClosingTradesResponse>(`/closing/trades?limit=${limit}`),

@@ -15,13 +15,19 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  ClosingAttribution,
+  ClosingBucketRow,
   ClosingComparisonRow,
   ClosingMonthRow,
   ClosingPctStats,
+  ClosingReasons,
   ClosingResults,
   ClosingSignalSearch,
+  ClosingTonight,
+  ClosingTonightCheck,
   ClosingTrade,
   ClosingWindow,
+  OvernightLadderRung,
   api,
 } from "@/lib/api";
 import { fmt, fmtInt, signed } from "@/lib/format";
@@ -325,6 +331,394 @@ function SignalSearch({ search }: { search: ClosingSignalSearch }) {
   );
 }
 
+// --- tonight at 15:00 --------------------------------------------------------
+
+function CheckChip({ c }: { c: ClosingTonightCheck }) {
+  const cls = c.status === "clear" ? "border-bull/40 bg-bull/10 text-bull"
+    : c.status === "red" ? "border-bear/40 bg-bear/10 text-bear"
+    : "border-edge/60 bg-panel2 text-muted";
+  const icon = c.status === "clear" ? "✓" : c.status === "red" ? "✕" : "?";
+  return (
+    <span title={c.detail} className={`rounded border px-2 py-0.5 text-[10px] ${cls}`}>
+      {icon} {c.label}
+    </span>
+  );
+}
+
+const VERDICT_BANNER: Record<string, { cls: string; text: string }> = {
+  CLEAN: {
+    cls: "border-bull/40 bg-bull/10 text-bull",
+    text: "CLEAN — all five checks clear. Historically ~5-6 such nights a month; the clean cell made money in both backtest windows (hypothesis — graded live).",
+  },
+  FLAGGED: {
+    cls: "border-bear/40 bg-bear/10 text-bear",
+    text: "FLAGGED — the checks say stand aside tonight.",
+  },
+  INCOMPLETE: {
+    cls: "border-edge/60 bg-panel2 text-muted",
+    text: "INCOMPLETE — some inputs are not readable yet; no verdict.",
+  },
+};
+
+/** The live pre-trade card: today's ledger-style values + the five registered
+ *  risk checks, readable at 15:00 before the 15:05 fill. */
+function TonightPanel() {
+  const [t, setT] = useState<ClosingTonight | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      setT(await api.closingTonight());
+      setErr(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setErr(msg.includes("401") ? "auth" : msg.startsWith("404") ? "restart" : msg);
+      setT(null);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const v = t?.values;
+  const banner = t?.verdict ? VERDICT_BANNER[t.verdict] : null;
+  return (
+    <section className="card px-4 py-3">
+      <div className="mb-2 flex flex-wrap items-center gap-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Tonight at 15:00 · live
+        </h2>
+        {t?.available && (
+          <span className="text-[11px] text-muted">
+            {t.weekday} {t.date} · read from {t.signal_time} · as of{" "}
+            {t.as_of?.slice(11, 19)} IST
+          </span>
+        )}
+        {t?.provisional && (
+          <span className="tag bg-accent/15 text-[10px] text-accent"
+                title="not final: before 15:00 the latest bar stands in for the print; between 15:00 and 15:05 the bar is still forming, so the VIX and range checks can still move. The read settles at 15:05 — the fill clock.">
+            PROVISIONAL
+          </span>
+        )}
+        <button onClick={() => void load()} disabled={busy}
+                className="ml-auto rounded bg-panel2 px-3 py-1 text-xs text-muted hover:text-white disabled:opacity-50">
+          {busy ? "Reading…" : "Refresh"}
+        </button>
+      </div>
+
+      {err === "auth" && (
+        <p className="text-[11px] text-muted">
+          Kite login required for the live read — authenticate on the dashboard, then Refresh.
+        </p>
+      )}
+      {err === "restart" && (
+        <p className="text-[11px] text-muted">
+          The backend hasn&apos;t loaded the /closing/tonight endpoint yet — it arrives with the
+          next backend restart (⟳ on the dashboard).
+        </p>
+      )}
+      {err && err !== "auth" && err !== "restart" && (
+        <p className="text-[11px] text-bear">{err}</p>
+      )}
+      {t && !t.available && <p className="text-[11px] text-muted">{t.reason}</p>}
+
+      {t?.available && v && (
+        <>
+          {banner && (
+            <p className={`mb-2 rounded border px-2 py-1.5 text-[11px] ${banner.cls}`}>
+              {banner.text}
+              {t.verdict === "FLAGGED" && t.checks && (
+                <span> Red: {t.checks.filter((c) => c.status === "red").map((c) => c.label).join(", ")}.</span>
+              )}
+            </p>
+          )}
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
+            <Stat label="15:00 print" value={fmt(v.p1500, 1) ?? "—"}
+                  sub={t.provisional ? "latest bar — provisional" : "signal read"} />
+            <Stat label="day open" value={fmt(v.day_open, 1) ?? "—"} sub="09:15" />
+            <Stat label="gap vs open" value={signed(v.gap_pts, 1)} cls={signCls(v.gap_pts)}
+                  sub={v.direction ? `→ buy ATM ${v.direction}` : "flat — no signal"} />
+            <Stat label="14:00" value={v.p1400 != null ? fmt(v.p1400, 1) ?? "—" : "—"}
+                  sub="last-hour reference" />
+            <Stat label="prev close" value={v.prev_close != null ? fmt(v.prev_close, 1) ?? "—" : "—"}
+                  sub="CAS-aware" />
+            <Stat label="strike" value={v.strike != null ? fmt(v.strike, 0) ?? "—" : "—"}
+                  sub={v.expiry ? `${v.expiry} · ${v.dte}d` : undefined} />
+            <Stat label="exit session" value={v.next_trading_day ?? "—"}
+                  sub={v.carry_days != null ? `carry ${v.carry_days}d` : undefined} />
+            <Stat label="India VIX" value={v.vix_1500 != null ? v.vix_1500.toFixed(2) : "—"}
+                  sub={v.vix_prev_close != null && v.vix_0915 != null
+                    ? `prev ${v.vix_prev_close.toFixed(2)} · 09:15 ${v.vix_0915.toFixed(2)}`
+                    : undefined} />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {(t.checks ?? []).map((c) => <CheckChip key={c.key} c={c} />)}
+            {v.range_pos != null && (
+              <span className="rounded border border-edge/60 bg-panel2 px-2 py-0.5 text-[10px] text-muted"
+                    title="position of the 15:00 print in today's range">
+                range {v.range_pos.toFixed(2)}
+              </span>
+            )}
+          </div>
+          {t.first_eval?.drifted && (
+            <p className="mt-2 rounded border border-bear/40 bg-bear/5 px-2 py-1 text-[10px] text-bear">
+              The first evaluation today ({t.first_eval.as_of.slice(11, 19)}) said{" "}
+              {t.first_eval.verdict} — the data has since drifted; the logged decision-time
+              record keeps the first read.
+            </p>
+          )}
+          <p className="mt-2 text-[10px] leading-relaxed text-muted">{t.note}</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+// --- loss attribution --------------------------------------------------------
+
+/** Ledger-row shorthand for the dominant loss component. */
+const REASON_SHORT: Record<string, { label: string; cls: string }> = {
+  wrong_direction: { label: "DIR", cls: "bg-bear/20 text-bear" },
+  theta_decay: { label: "θ", cls: "bg-accent/20 text-accent" },
+  vol_crush: { label: "VOL", cls: "bg-panel2 text-muted" },
+  costs: { label: "FEE", cls: "bg-panel2 text-muted" },
+};
+
+const VERDICT_CLS: Record<string, string> = {
+  "consistent-bad": "bg-bear/15 text-bear",
+  "consistent-positive": "bg-bull/15 text-bull",
+  "flips — noise": "bg-panel2 text-muted",
+  "too few trades": "text-muted/60",
+};
+
+/** Anatomy chips for one ledger row: dominant loss reason + calendar flags. */
+function WhyChips({ t }: { t: ClosingTrade }) {
+  const reason = t.loss_reason ? REASON_SHORT[t.loss_reason] : null;
+  const anatomy = t.direction_pct != null
+    ? `direction ${signed(t.direction_pct, 1)}pp · theta ${signed(t.theta_pct, 1)}pp · vol ${signed(t.vega_pct, 1)}pp · costs ${signed(t.costs_pct, 1)}pp`
+    : "attribution unavailable";
+  return (
+    <span className="inline-flex gap-0.5">
+      {reason && (
+        <span title={anatomy} className={`rounded px-1 text-[9px] font-mono ${reason.cls}`}>
+          {reason.label}
+        </span>
+      )}
+      {t.f_holiday_bridge === true && (
+        <span title={`holiday bridge: exit ${t.carry_days} calendar days out`}
+              className="rounded bg-panel2 px-1 text-[9px] font-mono text-muted">B</span>
+      )}
+      {t.f_month_end === true && (
+        <span title="month-end entry: last trading session of the month"
+              className="rounded bg-panel2 px-1 text-[9px] font-mono text-muted">M</span>
+      )}
+    </span>
+  );
+}
+
+function ReasonTable({ label, reasons }: { label: string; reasons: ClosingReasons }) {
+  if (!reasons?.rows?.length) return null;
+  return (
+    <div>
+      <p className="mb-1 text-[10px] uppercase tracking-wide text-muted">
+        {label} · {reasons.n_losers} losers of {reasons.n_trades} trades
+      </p>
+      <table className="w-full text-[11px]">
+        <thead className="text-[10px] uppercase text-muted">
+          <tr className="border-b border-edge/60">
+            <th className="py-1 text-left font-normal">dominant reason</th>
+            <th className="py-1 text-right font-normal">n</th>
+            <th className="py-1 text-right font-normal">of losers</th>
+            <th className="py-1 text-right font-normal">mean</th>
+            <th className="py-1 text-right font-normal">total</th>
+            <th className="py-1 text-right font-normal" title="losers where the index went the signal's way and decay/spread still ate the premium">
+              index right
+            </th>
+          </tr>
+        </thead>
+        <tbody className="font-mono">
+          {reasons.rows.map((row) => (
+            <tr key={row.reason} className="border-b border-edge/30">
+              <td className="py-1 text-left font-sans">{row.label}</td>
+              <td className="py-1 text-right text-muted">{row.n}</td>
+              <td className="py-1 text-right text-muted">{row.share_of_losers_pct}%</td>
+              <td className="py-1 text-right text-bear">{pct(row.mean_pct)}</td>
+              <td className="py-1 text-right text-bear">{rs(row.total_rs)}</td>
+              <td className="py-1 text-right text-muted">{row.index_right_way_n}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BucketTable({ rows, split }: { rows: ClosingBucketRow[]; split: string }) {
+  const cell = (c: ClosingBucketRow["in_sample"]) =>
+    c.mean_pct == null
+      ? <span className="text-muted/60">n={c.n}</span>
+      : <span className={signCls(c.mean_pct)}>{pct(c.mean_pct)} <span className="text-muted">n={c.n}</span></span>;
+  return (
+    <div>
+      <p className="mb-1 text-[10px] uppercase tracking-wide text-muted">
+        Calendar buckets · modelled · split at {split}
+      </p>
+      <table className="w-full text-[11px]">
+        <thead className="text-[10px] uppercase text-muted">
+          <tr className="border-b border-edge/60">
+            <th className="py-1 text-left font-normal">bucket</th>
+            <th className="py-1 text-right font-normal">n 3y</th>
+            <th className="py-1 text-right font-normal">2y in-sample</th>
+            <th className="py-1 text-right font-normal">1y holdout</th>
+            <th className="py-1 text-left font-normal pl-3">verdict</th>
+          </tr>
+        </thead>
+        <tbody className="font-mono">
+          {rows.map((b) => (
+            <tr key={b.tag} className={`border-b border-edge/30 ${b.registered ? "bg-accent/5" : ""}`}>
+              <td className="py-1 text-left font-sans">
+                {b.tag}
+                {b.registered && <span className="ml-1 text-accent" title="pre-registered flag — see below">⚑</span>}
+              </td>
+              <td className="py-1 text-right text-muted">
+                {b.n}{b.below_house_n && <span title="below the 30-per-window house sample" className="text-bear">*</span>}
+              </td>
+              <td className="py-1 text-right">{cell(b.in_sample)}</td>
+              <td className="py-1 text-right">{cell(b.holdout)}</td>
+              <td className="py-1 pl-3 text-left">
+                <span className={`rounded px-1 text-[9px] ${VERDICT_CLS[b.verdict] ?? "text-muted"}`}>
+                  {b.verdict}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ClosingLadderTable({ rungs, label }: { rungs: OvernightLadderRung[]; label: string }) {
+  return (
+    <div>
+      <p className="mb-1 text-[10px] uppercase tracking-wide text-muted">{label}</p>
+      <table className="w-full text-[11px]">
+        <thead className="text-[10px] uppercase text-muted">
+          <tr className="border-b border-edge/60">
+            <th className="py-1 text-left font-normal">rung</th>
+            <th className="py-1 text-right font-normal">n</th>
+            <th className="py-1 text-right font-normal">win</th>
+            <th className="py-1 text-right font-normal">mean %</th>
+            <th className="py-1 text-right font-normal">median %</th>
+            <th className="py-1 text-right font-normal">total</th>
+            <th className="py-1 text-right font-normal">max DD</th>
+            <th className="py-1 text-right font-normal" title="what this rung's added flag removed">removed</th>
+          </tr>
+        </thead>
+        <tbody className="font-mono">
+          {rungs.map((rg) => (
+            <tr key={rg.label} className="border-b border-edge/30">
+              <td className="py-1 text-left font-sans">{rg.label}</td>
+              <td className="py-1 text-right text-muted">{rg.kept.n}</td>
+              <td className="py-1 text-right">{rg.kept.win_pct != null ? `${rg.kept.win_pct}%` : "—"}</td>
+              <td className={`py-1 text-right ${signCls(rg.kept.mean_pct)}`}>{pct(rg.kept.mean_pct)}</td>
+              <td className={`py-1 text-right ${signCls(rg.kept.median_pct)}`}>{pct(rg.kept.median_pct)}</td>
+              <td className={`py-1 text-right ${signCls(rg.kept.total_rs)}`}>{rs(rg.kept.total_rs)}</td>
+              <td className="py-1 text-right text-bear">{rs(rg.kept.max_dd_rs)}</td>
+              <td className="py-1 text-right text-muted">
+                {rg.removed ? `${rg.removed.n} @ ${pct(rg.removed.mean_pct)}` : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Loss anatomy, the calendar-bucket diagnostic, and the two pre-registered
+ *  calendar flags with their live scoreboard. The panel's whole design rule:
+ *  the bucket table is a diagnostic that may flip next month; only the frozen
+ *  flags carry standing, and only via live nights. */
+function AttributionPanel({ a }: { a: ClosingAttribution }) {
+  const live = a.flags?.live;
+  return (
+    <section className="card grid gap-3 px-4 py-3">
+      <div className="flex flex-wrap items-baseline gap-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Why the losers lost · modelled
+        </h2>
+        <span className="text-[11px] text-muted">
+          every losing night decomposed: spot move → clock → VIX → costs
+        </span>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <ReasonTable label="Last year" reasons={a.reasons_1y} />
+        <ReasonTable label="Three years" reasons={a.reasons_3y} />
+      </div>
+      <p className="text-[10px] leading-relaxed text-muted">{a.reasons_1y?.note} {a.note}</p>
+
+      <BucketTable rows={a.buckets?.rows ?? []} split={a.buckets?.split ?? ""} />
+      <p className="text-[10px] leading-relaxed text-muted">{a.buckets?.note}</p>
+
+      <div className="flex flex-wrap items-baseline gap-3 border-t border-edge/60 pt-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Pre-registered calendar flags
+        </h3>
+        <span className="tag bg-panel2 text-[10px] text-muted">
+          registered {a.flags?.registered_on} · flags, not gates
+        </span>
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-2">
+        {(a.flags?.definitions ?? []).map((d) => (
+          <div key={d.key} className="rounded border border-edge/60 bg-panel2 px-3 py-2">
+            <p className="text-[11px]">
+              <span className="font-semibold">{d.label}</span>{" "}
+              <span className="tag bg-accent/15 text-[9px] text-accent">{d.status}</span>
+            </p>
+            <p className="mt-1 text-[11px]">{d.rule}</p>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted">{d.evidence}</p>
+          </div>
+        ))}
+      </div>
+
+      {a.flags?.ladder_1y && (
+        <ClosingLadderTable rungs={a.flags.ladder_1y} label="Flag ladder · last year · modelled" />
+      )}
+      {a.flags?.ladder_3y && (
+        <ClosingLadderTable rungs={a.flags.ladder_3y} label="Flag ladder · 3 years · modelled" />
+      )}
+
+      {live && (
+        <div className="rounded border border-accent/30 bg-accent/5 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-accent">
+            Live scoreboard — the test that counts
+          </p>
+          <div className="mt-1 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <Stat label="live nights" value={String(live.live_nights)}
+                  sub={`after ${live.registered_on}`} />
+            <Stat label="flagged nights" value={String(live.flagged_nights)}
+                  sub={`${live.verdict_due} more until a verdict (${live.min_sample} rule)`} />
+            <Stat label="flagged P&L" value={live.flagged.n ? pct(live.flagged.mean_pct) : "—"}
+                  cls={signCls(live.flagged.mean_pct)}
+                  sub={live.flagged.n ? `n=${live.flagged.n} · ${rs(live.flagged.total_rs)}` : "no nights yet"} />
+            <Stat label="clear P&L" value={live.clear.n ? pct(live.clear.mean_pct) : "—"}
+                  cls={signCls(live.clear.mean_pct)}
+                  sub={live.clear.n ? `n=${live.clear.n} · ${rs(live.clear.total_rs)}` : "no nights yet"} />
+          </div>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">{live.note}</p>
+        </div>
+      )}
+
+      <p className="text-[10px] leading-relaxed text-muted">{a.flags?.note}</p>
+    </section>
+  );
+}
+
 function errHint(err: string): string {
   if (err.includes("404")) {
     return "The backend hasn't loaded the /closing endpoints yet — they arrive with the next backend restart.";
@@ -414,6 +808,10 @@ export function ClosingLab() {
           </button>
         </div>
       </header>
+
+      {/* the live pre-trade card — rendered regardless of stored results so
+          it is usable at 15:00 even before the first Sync + Analyze */}
+      <TonightPanel />
 
       {error && (
         <div className="card border-bear/50 bg-bear/10 px-4 py-2 text-xs text-bear">{error}</div>
@@ -584,6 +982,10 @@ export function ClosingLab() {
                       note="Read alongside the trust boundary above: only the lowest bucket sits inside the range the pricing model was calibrated on." />
           </section>
 
+          {/* loss anatomy + registered calendar flags — guarded like the
+              calibration block: a stale results file predates it */}
+          {r.attribution && <AttributionPanel a={r.attribution} />}
+
           {/* robustness */}
           <section className="card px-4 py-3">
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
@@ -718,6 +1120,10 @@ export function ClosingLab() {
                       <th className="py-1 text-right font-normal">out</th>
                       <th className="py-1 text-right font-normal">net %</th>
                       <th className="py-1 text-right font-normal">net</th>
+                      <th className="py-1 text-center font-normal"
+                          title="dominant loss component (hover for the full anatomy) + calendar flags">
+                        why
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="font-mono">
@@ -747,6 +1153,7 @@ export function ClosingLab() {
                         <td className="py-1 text-right text-muted">{fmt(t.fill_out, 1)}</td>
                         <td className={`py-1 text-right ${signCls(t.net_pct)}`}>{pct(t.net_pct, 0)}</td>
                         <td className={`py-1 text-right ${signCls(t.net_rs)}`}>{rs(t.net_rs)}</td>
+                        <td className="py-1 text-center"><WhyChips t={t} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -756,6 +1163,10 @@ export function ClosingLab() {
                   Spot columns: today's 09:15 open, the 15:00 print, and the next
                   session's 09:50 print. `move` is signed from the 15:05 fill:
                   positive means the index went the way the signal pointed.
+                  `why` (losers only): DIR = wrong direction, θ = theta decay,
+                  VOL = vol crush, FEE = spread+charges — hover for the full
+                  anatomy. B = holiday-bridge carry, M = month-end entry (the
+                  pre-registered flags).
                 </p>
               </div>
             )}

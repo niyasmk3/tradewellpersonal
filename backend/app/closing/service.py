@@ -9,10 +9,11 @@ bar that belongs to nothing.
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
-from app.closing import signals, store, validate
+from app.closing import attribution, signals, store, tonight, validate
+from app.closing.calendar import IST
 from app.closing.data import sync
 from app.closing.pricing import build_model
 from app.closing.study import (
@@ -41,6 +42,15 @@ def run_sync(kite, years: int = 3) -> dict:
     if kite is None:
         raise ClosingError("Kite is not authenticated — log in first")
     return sync(kite, years=years)
+
+
+def run_tonight(kite) -> dict:
+    """The live 15:00 pre-trade card — today's values + the five registered
+    risk checks. Reads a light in-memory window from Kite; never writes the
+    synced stores."""
+    if kite is None:
+        raise ClosingError("Kite is not authenticated — log in first")
+    return tonight.run(kite)
 
 
 def _signal_comparison(spine, vix, model, lots: int, fit: dict, today) -> dict:
@@ -150,11 +160,20 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
     cfg = _config(lots, fit, mode)
     days = build_days(spine)
 
-    today = date.today()
+    # IST, never host-local: on a non-IST box a naive date.today() would shift
+    # every window boundary (and the attribution split) by a day (review catch).
+    today = datetime.now(IST).date()
     primary = run_study(spine, vix, model, cfg,
                         start=today - timedelta(days=365 * PRIMARY_YEARS))
     check = run_study(spine, vix, model, cfg,
                       start=today - timedelta(days=365 * CHECK_YEARS))
+    # Loss anatomy + the registered calendar flags. Decorates the primary
+    # ledger's rows in place (the /trades endpoint serves them) and needs the
+    # 3-year trades for its in-sample/holdout bucket split, so it runs before
+    # the 3-year ledger is dropped from the payload.
+    loss_attribution = attribution.build(
+        primary.get("trades") or [], check.get("trades") or [], days, model,
+        split=today - timedelta(days=365 * PRIMARY_YEARS))
     check.pop("trades", None)   # the 3-year leg is a robustness read, not a ledger
 
     # One validation pass per analyze; the debiased sensitivity below reuses
@@ -218,6 +237,7 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
         "calibration": fit,
         "validation": validation,
         "primary": primary,
+        "attribution": loss_attribution,
         "signal_search": signals.search(days, today=today),
         "signal_comparison": _signal_comparison(spine, vix, model, lots, fit, today),
         "robustness": {

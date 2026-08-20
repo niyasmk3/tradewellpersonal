@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.closing import store
-from app.closing.service import ClosingError, run_analysis, run_sync, status
+from app.closing.service import ClosingError, run_analysis, run_sync, run_tonight, status
 from app.config import get_settings
 from app.kite.client import kite_service
 
@@ -68,6 +68,22 @@ async def analyze(lots: Optional[int] = Query(default=None, ge=1, le=100)) -> di
         except Exception as exc:  # pragma: no cover - unexpected
             log.exception("Closing analysis failed")
             raise HTTPException(status_code=500, detail=f"Analysis error: {exc}")
+
+
+@router.get("/tonight")
+async def tonight() -> dict:
+    """Today's 15:00 pre-trade card: live values + the five registered risk
+    checks. Light Kite fetch, in-memory only — no store writes, so it skips
+    the sync/analyze single-flight lock."""
+    if not kite_service.is_authenticated:
+        raise HTTPException(status_code=401, detail="Kite login required")
+    try:
+        return await asyncio.to_thread(run_tonight, kite_service.kite)
+    except ClosingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:  # pragma: no cover - unexpected
+        log.exception("Tonight read failed")
+        raise HTTPException(status_code=500, detail=f"Tonight error: {exc}")
 
 
 @router.get("/results")

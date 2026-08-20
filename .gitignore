@@ -45,6 +45,7 @@ venv/
 # Closing Day Strategy module (app/closing): India VIX bar store + results
 .closing_vix.db
 .closing_results.json
+.closing_tonight.jsonl
 .overnight_results.json
 
 # Node / Next
