@@ -17,6 +17,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ClosingAttribution,
   ClosingBucketRow,
+  ClosingCardBackfill,
+  ClosingCardCell,
   ClosingComparisonRow,
   ClosingMonthRow,
   ClosingPctStats,
@@ -476,6 +478,141 @@ function TonightPanel() {
   );
 }
 
+// --- the card, backfilled ----------------------------------------------------
+
+const CARD_CHIP: Record<string, string> = {
+  CLEAN: "bg-bull/15 text-bull",
+  FLAGGED: "bg-bear/15 text-bear",
+  INCOMPLETE: "bg-panel2 text-muted",
+};
+
+/** Ledger chip: what the live card would have said at that night's 15:00. */
+function CardChip({ t }: { t: ClosingTrade }) {
+  if (!t.card_verdict) return null;
+  const short = t.card_verdict === "CLEAN" ? "CLEAN"
+    : t.card_verdict === "FLAGGED" ? `FLAG${t.card_red?.length ? "·" + t.card_red.length : ""}`
+    : "INC";
+  const title = t.card_verdict === "FLAGGED"
+    ? `red: ${(t.card_red ?? []).join(", ")}`
+    : t.card_verdict === "INCOMPLETE"
+      ? "some check inputs unavailable for this night"
+      : "all five checks clear at 15:00";
+  return (
+    <span title={title}
+          className={`rounded px-1 text-[9px] font-mono ${CARD_CHIP[t.card_verdict] ?? "text-muted"}`}>
+      {short}
+    </span>
+  );
+}
+
+/** The live card's five checks stamped onto every historical night, compared
+ *  with the P&L that actually followed. */
+function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
+  const WINDOWS: [string, string][] = [
+    ["in_sample_2y", "2y in-sample"],
+    ["holdout_1y", "1y holdout"],
+    ["pooled_3y", "pooled 3y"],
+  ];
+  const cell = (c?: ClosingCardCell) =>
+    !c || !c.n
+      ? <span className="text-muted/60">—</span>
+      : <>
+          <span className="text-muted">{c.n} · </span>
+          {c.win_pct != null && <span>{c.win_pct.toFixed(0)}% · </span>}
+          <span className={signCls(c.mean_pct)}>{pct(c.mean_pct)}</span>
+          <span className={`ml-1 ${signCls(c.total_rs)}`}>{rs(c.total_rs)}</span>
+        </>;
+  const live = cb.live?.rows ?? [];
+  return (
+    <section className="card px-4 py-3">
+      <div className="mb-2 flex flex-wrap items-baseline gap-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          The card, backfilled · modelled
+        </h2>
+        <span className="text-[11px] text-muted">
+          what the 15:00 card would have said on every ledger night, vs what the night paid
+        </span>
+      </div>
+      <table className="w-full text-[11px]">
+        <thead className="text-[10px] uppercase text-muted">
+          <tr className="border-b border-edge/60">
+            <th className="py-1 text-left font-normal">verdict</th>
+            {WINDOWS.map(([k, label]) => (
+              <th key={k} className="py-1 text-right font-normal"
+                  title="n · option win% · mean/trade · total (1 lot)">{label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="font-mono">
+          {(["CLEAN", "FLAGGED", "INCOMPLETE"] as const).map((v) => (
+            <tr key={v} className={`border-b border-edge/30 ${v === "CLEAN" ? "bg-bull/5" : ""}`}>
+              <td className="py-1 text-left">
+                <span className={`rounded px-1 text-[9px] ${CARD_CHIP[v]}`}>{v}</span>
+              </td>
+              {WINDOWS.map(([k]) => (
+                <td key={k} className="py-1 text-right">{cell(cb.windows?.[k]?.[v])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-1 text-[10px] leading-relaxed text-muted">{cb.note}</p>
+
+      {live.length > 0 && (
+        <div className="mt-2 rounded border border-accent/30 bg-accent/5 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-accent">
+            Live cards — the composite&apos;s only proof budget
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <thead className="text-[10px] uppercase text-muted">
+              <tr className="border-b border-edge/60">
+                <th className="py-1 text-left font-normal">date</th>
+                <th className="py-1 text-left font-normal">card said</th>
+                <th className="py-1 text-right font-normal">index move</th>
+                <th className="py-1 text-right font-normal">option net</th>
+                <th className="py-1 text-left font-normal pl-3">recheck</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {live.map((row) => (
+                <tr key={row.date} className="border-b border-edge/30">
+                  <td className="py-1 text-left">{row.date}</td>
+                  <td className="py-1 text-left">
+                    <span className={`rounded px-1 text-[9px] ${CARD_CHIP[row.verdict] ?? "text-muted"}`}
+                          title={row.red?.length ? `red: ${row.red.join(", ")}` : undefined}>
+                      {row.verdict}
+                    </span>
+                  </td>
+                  <td className={`py-1 text-right ${signCls(row.signed_move_pts)}`}>
+                    {row.signed_move_pts != null ? signed(row.signed_move_pts, 1)
+                      : row.status === "no_trade" ? <span className="text-muted">no trade</span>
+                      : "pending"}
+                  </td>
+                  <td className={`py-1 text-right ${signCls(row.net_pct)}`}>
+                    {row.net_pct != null ? pct(row.net_pct)
+                      : row.status === "no_trade" ? <span className="text-muted">—</span>
+                      : "pending"}
+                  </td>
+                  <td className="py-1 pl-3 text-left text-[10px]">
+                    {row.backfill_verdict == null ? <span className="text-muted">—</span>
+                      : row.backfill_verdict === row.verdict
+                        ? <span className="text-bull">matches</span>
+                        : <span className="text-bear"
+                                title="live and backfilled verdicts disagree — either the live read moved between 15:05 and the sync, or the synced store has a gap for this night; investigate before trusting either side">
+                            ≠ backfill ({row.backfill_verdict})
+                          </span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">{cb.live?.note}</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 // --- loss attribution --------------------------------------------------------
 
 /** Ledger-row shorthand for the dominant loss component. */
@@ -812,6 +949,7 @@ export function ClosingLab() {
       {/* the live pre-trade card — rendered regardless of stored results so
           it is usable at 15:00 even before the first Sync + Analyze */}
       <TonightPanel />
+      {r?.card_backfill && <CardBackfillPanel cb={r.card_backfill} />}
 
       {error && (
         <div className="card border-bear/50 bg-bear/10 px-4 py-2 text-xs text-bear">{error}</div>
@@ -1124,6 +1262,10 @@ export function ClosingLab() {
                           title="dominant loss component (hover for the full anatomy) + calendar flags">
                         why
                       </th>
+                      <th className="py-1 text-center font-normal"
+                          title="what the live 15:00 card would have said that night — compare with net">
+                        card
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="font-mono">
@@ -1154,6 +1296,7 @@ export function ClosingLab() {
                         <td className={`py-1 text-right ${signCls(t.net_pct)}`}>{pct(t.net_pct, 0)}</td>
                         <td className={`py-1 text-right ${signCls(t.net_rs)}`}>{rs(t.net_rs)}</td>
                         <td className="py-1 text-center"><WhyChips t={t} /></td>
+                        <td className="py-1 text-center"><CardChip t={t} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -1166,7 +1309,10 @@ export function ClosingLab() {
                   `why` (losers only): DIR = wrong direction, θ = theta decay,
                   VOL = vol crush, FEE = spread+charges — hover for the full
                   anatomy. B = holiday-bridge carry, M = month-end entry (the
-                  pre-registered flags).
+                  pre-registered flags). `card` = what the live 15:00 card
+                  would have said that night (FLAG·n counts its red checks) —
+                  read it against `net` to see what standing aside would have
+                  done.
                 </p>
               </div>
             )}

@@ -14,6 +14,9 @@ from typing import Optional
 
 from app.closing import attribution, signals, store, tonight, validate
 from app.closing.calendar import IST
+# Safe import direction: overnight.filters depends only on closing.calendar
+# (tonight.py already rides this edge for MID_LO/MID_HI).
+from app.overnight import filters as overnight_filters
 from app.closing.data import sync
 from app.closing.pricing import build_model
 from app.closing.study import (
@@ -174,6 +177,46 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
     loss_attribution = attribution.build(
         primary.get("trades") or [], check.get("trades") or [], days, model,
         split=today - timedelta(days=365 * PRIMARY_YEARS))
+    # The live card, backfilled: stamp the overnight flags (vol expansion,
+    # mid-range) plus this module's calendar flags into a per-night verdict,
+    # so every ledger row shows what the 15:00 card would have said, and the
+    # summary compares CLEAN vs FLAGGED against the P&L that followed. Runs
+    # after attribution.build (which stamps the calendar flags it reads).
+    for tt in (primary.get("trades") or [], check.get("trades") or []):
+        overnight_filters.annotate(tt, spine, vix)
+        attribution.stamp_card(tt)
+    # Join against the 3-YEAR ledger, not the 1-year one: the decision log is
+    # append-only and forever, and a card older than the primary window would
+    # silently lose its grade right as the sample count approached the house
+    # bar (review catch).
+    by_date = {t["date"]: t for t in check.get("trades") or []}
+    latest_entry = max(by_date) if by_date else None
+    live_cards = []
+    for row in tonight.logged_cards():
+        graded = by_date.get(row["date"])
+        live_cards.append({
+            "date": row["date"], "verdict": row["verdict"], "red": row["red"],
+            "as_of": row.get("as_of"),
+            "status": attribution.live_card_status(row["date"], graded is not None,
+                                                   latest_entry),
+            "net_pct": graded["net_pct"] if graded else None,
+            "signed_move_pts": graded["signed_move_pts"] if graded else None,
+            "backfill_verdict": graded["card_verdict"] if graded else None,
+        })
+    card_backfill = attribution.card_summary(check.get("trades") or [],
+                                             split=today - timedelta(days=365 * PRIMARY_YEARS))
+    card_backfill["live"] = {
+        "rows": live_cards,
+        "note": ("Decision-time cards from .closing_tonight.jsonl joined "
+                 "against the ledger once each night grades. This is the "
+                 "composite's only proof budget; the house 30-sample rule "
+                 "applies before any verdict. backfill_verdict is the same "
+                 "night recomputed from synced bars — a mismatch is a "
+                 "data-integrity signal to investigate: either the live read "
+                 "moved between 15:05 and the sync, or the synced store has "
+                 "a gap (spine session / VIX hole) that skewed the backfill. "
+                 "no-trade rows are nights the study itself skipped."),
+    }
     check.pop("trades", None)   # the 3-year leg is a robustness read, not a ledger
 
     # One validation pass per analyze; the debiased sensitivity below reuses
@@ -238,6 +281,7 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
         "validation": validation,
         "primary": primary,
         "attribution": loss_attribution,
+        "card_backfill": card_backfill,
         "signal_search": signals.search(days, today=today),
         "signal_comparison": _signal_comparison(spine, vix, model, lots, fit, today),
         "robustness": {

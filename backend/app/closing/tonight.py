@@ -327,6 +327,27 @@ def _first_logged(today: date) -> Optional[dict]:
     return None
 
 
+def logged_cards() -> list:
+    """Every date's standing decision-time record (first row per date wins),
+    oldest first — the raw material for grading the composite card on nights
+    it had never seen."""
+    if not LOG_PATH.exists():
+        return []
+    rows: dict = {}
+    try:
+        with LOG_PATH.open() as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("date") and row["date"] not in rows:
+                    rows[row["date"]] = row
+    except OSError:
+        return []
+    return [rows[d] for d in sorted(rows)]
+
+
 def log_first_eval(result: dict) -> Optional[dict]:
     """Append the FIRST full evaluation of the date; return the standing
     decision-time record (existing one wins — it is what the user saw)."""

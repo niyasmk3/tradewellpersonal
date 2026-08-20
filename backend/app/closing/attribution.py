@@ -250,6 +250,103 @@ def bucket_table(trades: list, split: date) -> dict:
     }
 
 
+# --- the tonight card, backfilled -------------------------------------------
+
+# Same five checks the live card reads, in the same order. The keys are
+# deliberately duplicated from tonight.CHECK_LABELS rather than imported —
+# a test pins the two sets equal, so drift breaks loudly instead of
+# creating an import edge for a constant.
+CARD_CHECKS = ("lasthr", "volexp", "midrange", "bridge", "monthend")
+
+
+def stamp_card(trades: list) -> None:
+    """Backfill the live card's verdict onto historical trades.
+
+    Uses only entry-time fields already stamped on each trade (the overnight
+    flags for volexp/midrange, this module's calendar flags, and the tape
+    prints for the last-hour check), so every verdict is knowable at 15:00
+    of its own night. Semantics mirror tonight.evaluate exactly: any red ->
+    FLAGGED, all five strictly clear -> CLEAN, else INCOMPLETE — unknowns
+    never pass."""
+    for t in trades:
+        checks = {}
+        p1500, dopen, p1400 = t.get("signal_price"), t.get("day_open"), t.get("p1400")
+        if dopen is None or p1400 is None:
+            checks["lasthr"] = None
+        else:
+            body, lh = p1500 - dopen, p1500 - p1400
+            checks["lasthr"] = False if (body == 0 or lh == 0) else (body > 0) == (lh > 0)
+        checks["volexp"] = t.get("f_vol_expand")
+        checks["midrange"] = t.get("f_midrange")
+        fb, fm = t.get("f_holiday_bridge"), t.get("f_month_end")
+        checks["bridge"] = (not fb) if fb is not None else None
+        checks["monthend"] = (not fm) if fm is not None else None
+        red = [k for k in CARD_CHECKS if checks[k] is False]
+        t["card_red"] = red
+        if red:
+            t["card_verdict"] = "FLAGGED"
+        elif all(checks[k] is True for k in CARD_CHECKS):
+            t["card_verdict"] = "CLEAN"
+        else:
+            t["card_verdict"] = "INCOMPLETE"
+
+
+def card_summary(trades: list, split: date) -> dict:
+    """CLEAN vs FLAGGED vs INCOMPLETE, per window — the card against what the
+    ledger actually paid. The honest read is the pair of sub-windows, not the
+    pooled column: the five checks were assembled AFTER seeing this data, so
+    the backfill shows the shape of the hypothesis, never its proof."""
+    def block(tt):
+        if not tt:
+            return {"n": 0}
+        c = _compact(tt)
+        c["idx_continued_pct"] = round(
+            sum(1 for t in tt if t["signed_move_pts"] > 0) / len(tt) * 100, 1)
+        return c
+
+    windows = {}
+    for key, sub in (
+            ("in_sample_2y", [t for t in trades if date.fromisoformat(t["date"]) < split]),
+            ("holdout_1y", [t for t in trades if date.fromisoformat(t["date"]) >= split]),
+            ("pooled_3y", trades)):
+        windows[key] = {v: block([t for t in sub if t.get("card_verdict") == v])
+                        for v in ("CLEAN", "FLAGGED", "INCOMPLETE")}
+    return {
+        "windows": windows,
+        "split": split.isoformat(),
+        # No empirical claims in this prose: the windows roll daily, and a
+        # baked-in "CLEAN made money" sentence would eventually sit under a
+        # table showing the opposite sign (review catch). The table speaks;
+        # the note carries only what stays true by construction.
+        "note": (
+            "The live card's five checks stamped onto every historical night "
+            "from that night's own 15:00 data. The composite was assembled "
+            "AFTER seeing these windows, so this table is the hypothesis's "
+            "shape, never its proof — the proof budget belongs to the live "
+            "cards. A FLAGGED night is a coin you paid full theta for, not a "
+            "guaranteed loser: some flagged nights win big. Backfill caveat: "
+            "bridge/month-end carry comes from the synced spine's own "
+            "sessions and the volexp prev-close from the VIX store, so a "
+            "data gap can make a backfilled verdict differ from what the "
+            "live card honestly said that night."),
+    }
+
+
+def live_card_status(card_date: str, graded: bool,
+                     latest_entry: Optional[str]) -> str:
+    """Classify a logged live card against the ledger: GRADED when its night
+    has a trade; NO_TRADE when the ledger has moved past that date without
+    one (the study skipped it — flat body, unresolvable expiry); PENDING only
+    while the night's exit genuinely hasn't printed yet. Without this split,
+    skipped nights would read 'pending' forever and quietly overstate how
+    many proof-budget samples are still coming (review catch)."""
+    if graded:
+        return "graded"
+    if latest_entry is not None and card_date <= latest_entry:
+        return "no_trade"
+    return "pending"
+
+
 # --- ladder + live scoreboard -----------------------------------------------
 
 def _compact(trades: list) -> dict:

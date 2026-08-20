@@ -145,6 +145,56 @@ def test_live_scoreboard_counts_only_nights_after_registration():
     assert live["verdict_due"] == attribution.MIN_LIVE_SAMPLE - 2
 
 
+def test_card_checks_match_the_live_card():
+    """The backfilled card and the live card must read the SAME five checks.
+    The key sets are duplicated on purpose (no import edge for a constant),
+    so this pin is what makes drift loud."""
+    from app.closing import tonight
+    assert set(attribution.CARD_CHECKS) == set(tonight.CHECK_LABELS)
+
+
+def test_stamp_card_semantics():
+    base = dict(signal_price=24400.0, day_open=24300.0, p1400=24380.0,
+                f_vol_expand=True, f_midrange=True,
+                f_holiday_bridge=False, f_month_end=False)
+    clean = _trade("2026-08-27", "2026-08-28", **base)
+    flagged = _trade("2026-08-28", "2026-08-31", **{**base, "f_vol_expand": False})
+    unknown = _trade("2026-08-31", "2026-09-01", **{**base, "p1400": None})
+    flat = _trade("2026-09-01", "2026-09-02", **{**base, "day_open": 24400.0})
+    attribution.stamp_card([clean, flagged, unknown, flat])
+    assert clean["card_verdict"] == "CLEAN" and clean["card_red"] == []
+    assert flagged["card_verdict"] == "FLAGGED" and flagged["card_red"] == ["volexp"]
+    # An unknown leg can never pass: not flagged, but never CLEAN either.
+    assert unknown["card_verdict"] == "INCOMPLETE"
+    # A dead-flat body is a stand-aside, same as the live card.
+    assert flat["card_verdict"] == "FLAGGED" and "lasthr" in flat["card_red"]
+
+
+def test_card_summary_splits_windows():
+    trades = []
+    for d, verdict, pnl in [("2026-01-05", "CLEAN", 10.0),
+                            ("2026-08-25", "FLAGGED", -5.0)]:
+        t = _trade(d, d)
+        t.update(card_verdict=verdict, net_pct=pnl, net_rs=pnl * 100,
+                 signed_move_pts=1.0)
+        trades.append(t)
+    s = attribution.card_summary(trades, split=date(2026, 8, 19))
+    assert s["windows"]["in_sample_2y"]["CLEAN"]["n"] == 1
+    assert s["windows"]["in_sample_2y"]["FLAGGED"]["n"] == 0
+    assert s["windows"]["holdout_1y"]["FLAGGED"]["n"] == 1
+    assert s["windows"]["pooled_3y"]["CLEAN"]["n"] == 1
+
+
+def test_live_card_status_three_way():
+    """A logged card is PENDING only while its night can still grade; once
+    the ledger has moved past its date without a trade, it is NO_TRADE —
+    never an eternal 'pending' inflating the proof budget."""
+    assert attribution.live_card_status("2026-08-20", True, "2026-08-21") == "graded"
+    assert attribution.live_card_status("2026-08-20", False, "2026-08-21") == "no_trade"
+    assert attribution.live_card_status("2026-08-22", False, "2026-08-21") == "pending"
+    assert attribution.live_card_status("2026-08-22", False, None) == "pending"
+
+
 def test_bucket_verdicts():
     assert attribution._verdict(-1.0, -2.0) == "consistent-bad"
     assert attribution._verdict(-1.0, 2.0) == "flips — noise"

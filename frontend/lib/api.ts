@@ -1483,6 +1483,7 @@ export interface ClosingResults {
   signal_comparison: ClosingSignalComparison;
   primary: ClosingWindow;
   attribution?: ClosingAttribution;
+  card_backfill?: ClosingCardBackfill;
   robustness: {
     three_year: ClosingWindow;
     debiased: {
@@ -1601,6 +1602,8 @@ export interface ClosingTrade {
   f_month_end?: boolean | null;
   f_calendar_clear?: boolean | null;
   tags?: string[];
+  card_verdict?: string;
+  card_red?: string[];
 }
 
 // --- loss attribution (app/closing/attribution.py) --------------------------
@@ -1689,6 +1692,38 @@ export interface ClosingTonight {
   verdict?: "CLEAN" | "FLAGGED" | "INCOMPLETE";
   note?: string;
   first_eval?: { as_of: string; verdict: string; red: string[]; drifted?: boolean };
+}
+
+export interface ClosingCardCell {
+  n: number;
+  win_pct?: number;
+  mean_pct?: number;
+  median_pct?: number;
+  total_rs?: number;
+  max_dd_rs?: number;
+  idx_continued_pct?: number;
+}
+
+// The live card's five checks stamped onto every historical night, plus the
+// decision-time log joined against graded nights (app/closing/attribution.py
+// stamp_card/card_summary + service).
+export interface ClosingCardBackfill {
+  windows: Record<string, Record<string, ClosingCardCell>>;
+  split: string;
+  note: string;
+  live: {
+    rows: {
+      date: string;
+      verdict: string;
+      red: string[];
+      as_of?: string;
+      status: "graded" | "pending" | "no_trade";
+      net_pct: number | null;
+      signed_move_pts: number | null;
+      backfill_verdict: string | null;
+    }[];
+    note: string;
+  };
 }
 
 export interface ClosingAttribution {
