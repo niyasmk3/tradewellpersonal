@@ -54,9 +54,25 @@ def main() -> int:
     # symmetric fast exits (bank +5% / cut −5%).
     paper_p = ROOT.parent / "backend" / ".paper_trades.json"
     try:
+        excluded = {e.get("id") for e in json.loads(
+            (DATA / "journal_overrides.json").read_text()).get("exclude", [])}
+    except Exception:
+        excluded = set()
+
+    def off_session(t: dict) -> bool:
+        # Paper monitor runs off-session on frozen quotes (09:00 pre-open
+        # 'invalidations' on 17/21-Aug) — those exits are fiction, drop them.
+        ts = t.get("exited_at")
+        if not isinstance(ts, (int, float)):
+            return False
+        dt = datetime.fromtimestamp(ts, IST)
+        return dt.weekday() >= 5 or not (555 <= dt.hour * 60 + dt.minute <= 945)
+
+    try:
         fills = [t for t in json.loads(paper_p.read_text())
                  if t.get("exited_at")
-                 and not str(t.get("notes") or "").startswith("hollow")]
+                 and not str(t.get("notes") or "").startswith("hollow")
+                 and t.get("id") not in excluded and not off_session(t)]
     except Exception:
         fills = []
     if fills:

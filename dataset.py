@@ -97,6 +97,19 @@ def _load_excluded() -> set[str]:
 _EXCLUDED_IDS = _load_excluded()
 
 
+def _off_session_exit(t: dict) -> bool:
+    """True when the exit stamp falls outside Mon-Fri 09:15-15:45 IST. The
+    paper monitor keeps running off-session on frozen quotes — two positional
+    'invalidations' fired at 09:00 pre-open (17-Aug, 21-Aug) priced on stale
+    premiums. Those exits are fiction; labels must never learn from them."""
+    ts = t.get("exited_at")
+    if not isinstance(ts, (int, float)):
+        return False
+    dt = datetime.fromtimestamp(ts, IST)
+    m = dt.hour * 60 + dt.minute
+    return dt.weekday() >= 5 or not (9 * 60 + 15 <= m <= 15 * 60 + 45)
+
+
 def outcome_by_signal(trades: list[dict]) -> dict[str, dict]:
     """signal_id → closed trade row (first terminal match wins)."""
     out: dict[str, dict] = {}
@@ -107,6 +120,8 @@ def outcome_by_signal(trades: list[dict]) -> dict[str, dict]:
         # Human-ruled-out rows never become training labels — see
         # data/journal_overrides.json.
         if t.get("id") in _EXCLUDED_IDS:
+            continue
+        if _off_session_exit(t):
             continue
         status = str(t.get("status", "")).lower()
         closed = (

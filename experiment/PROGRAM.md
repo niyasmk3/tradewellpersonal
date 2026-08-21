@@ -126,6 +126,23 @@ week — confounded experiments teach nothing, twice.
       day-type: model it as birth-time context (interaction with hour_ist),
       and never extrapolate a morning label across the afternoon.
 
+## Promotion-to-LIVE bar (added 21-Aug after an external Codex review)
+
+The harness KEEP rule promotes ideas between RESEARCH branches only. For any
+policy to influence real money, the bar is far higher and is written down
+here before anyone is tempted to lower it in the moment:
+
+- 100+ independent forward fills under the candidate policy;
+- positive net expectancy after ALL charges;
+- clustered-by-day 95% confidence interval above zero;
+- profit factor > 1.2;
+- no single day contributing more than 25% of total profit;
+- positive in 2+ distinct regimes / rolling windows;
+- the permanent results.tsv trail of every variant ever tried.
+
+Nothing in this repo promotes automatically. A 30-sample verdict is an early
+KILL checkpoint, never proof of profitability.
+
 ## Why these rules exist (read once, believe forever)
 
 100 keep/discard iterations against a few hundred noisy samples is a

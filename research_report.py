@@ -129,8 +129,25 @@ def build() -> str:
 
     real = [t for t in paper if not is_shadow(t)]
     shadow = [t for t in paper if is_shadow(t)]
+
+    # Data-quality quarantine (21-Aug, external review confirmed): overridden
+    # rows plus any exit stamped outside Mon-Fri 09:15-15:45 IST — the paper
+    # monitor can 'exit' pre-open on frozen quotes; those P&Ls are fiction.
+    quarantined_ids = {e.get("id") for e in
+                       load_json(DATA / "journal_overrides.json", {}).get("exclude", [])}
+
+    def off_session(t: dict) -> bool:
+        ts = t.get("exited_at")
+        if not isinstance(ts, (int, float)):
+            return False
+        dt = datetime.fromtimestamp(ts, IST)
+        return dt.weekday() >= 5 or not (555 <= dt.hour * 60 + dt.minute <= 945)
+
+    n_quarantined = sum(1 for t in real if t.get("exited_at")
+                        and (t.get("id") in quarantined_ids or off_session(t)))
     closed = [t for t in real if t.get("exited_at")
-              and isinstance(t.get("realized_pnl"), (int, float))]
+              and isinstance(t.get("realized_pnl"), (int, float))
+              and t.get("id") not in quarantined_ids and not off_session(t)]
     wins = [t for t in closed if t["realized_pnl"] > 0]
     gross = sum(t["realized_pnl"] for t in closed)
     sh_closed = [t for t in shadow if t.get("exited_at")
@@ -159,6 +176,12 @@ def build() -> str:
             f'moves +5% our way has never won a rupee here — raising this '
             f'percentage is what "better signals" means; exits only decide '
             f'how much of the touched pile we keep.</p>')
+    if n_quarantined:
+        touch_html += (
+            f'<p class="note">Data-quality quarantine: {n_quarantined} fill(s) '
+            f'excluded from every number on this page — off-session exits '
+            f'priced on frozen quotes and human-ruled-out rows '
+            f'(recorder/data/journal_overrides.json has each reason).</p>')
     score_rows = []
     if closed:
         score_rows.append(["REAL book", str(len(closed)),
