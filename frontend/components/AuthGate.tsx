@@ -1,13 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, AuthStatus } from "@/lib/api";
+import { api, AuthStatus, SignalHistoryRow } from "@/lib/api";
+import { SignalHistoryPanel } from "./SignalHistoryPanel";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Signal history is LOCAL data (card store + archive) — no Kite session
+  // involved — so the login gate must not hide it. A card that expired while
+  // you were logged out is exactly the record you came back to check
+  // (the 22-Jul lesson: the best card ever left no trace).
+  const [hist, setHist] = useState<{ rows: SignalHistoryRow[]; count: number } | null>(null);
+  const [histErr, setHistErr] = useState<string | null>(null);
 
   const refresh = async () => {
     try {
@@ -22,6 +29,22 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     const id = setInterval(refresh, 5000);
     return () => clearInterval(id);
   }, []);
+
+  const authed = status?.authenticated === true;
+  useEffect(() => {
+    if (authed) return; // the dashboard's own panel takes over after login
+    let stop = false;
+    const load = () =>
+      api
+        // 30 days, not the dashboard's 7: this view exists for "what did I
+        // miss while logged out", and a quiet week would render it empty.
+        .signalHistory("NIFTY", 30)
+        .then((d) => { if (!stop) { setHist(d); setHistErr(null); } })
+        .catch((e) => { if (!stop) setHistErr(e instanceof Error ? e.message : String(e)); });
+    load();
+    const id = setInterval(load, 60000);
+    return () => { stop = true; clearInterval(id); };
+  }, [authed]);
 
   // Daily-login ergonomics: pasting the whole redirect URL is the common
   // mistake — pull the request_token out of it automatically.
@@ -48,7 +71,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (status?.authenticated) return <>{children}</>;
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-6">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6">
       <div className="card w-full max-w-lg p-6">
         <div className="mb-1 flex items-center gap-2">
           <h1 className="text-lg font-semibold">Tradewell</h1>
@@ -115,6 +138,22 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           <div className="mt-4 text-xs text-muted">{status.message}</div>
         )}
       </div>
+
+      {/* Local data the gate has no business hiding. Live signals, the chain
+          and the tape still need the login above. */}
+      {status && (
+        <div className="card w-full max-w-3xl p-4">
+          <div className="mb-2 flex items-baseline gap-2">
+            <h2 className="text-sm font-semibold">Signal history · NIFTY</h2>
+            <span className="tag bg-panel2 text-[10px] text-muted">
+              available without login — local records
+            </span>
+          </div>
+          <div className="max-h-[24rem] overflow-auto">
+            <SignalHistoryPanel data={hist} error={histErr} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
