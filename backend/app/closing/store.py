@@ -87,7 +87,12 @@ def get_meta(key: str) -> Optional[str]:
 
 def save_results(results: dict) -> None:
     results["generated_at"] = datetime.now(timezone.utc).isoformat()
-    RESULTS_PATH.write_text(json.dumps(results, indent=1, default=str))
+    # tmp + rename: the morning auto-grade rewrites this file inside the live
+    # server while the tabs' polls read it — a bare write_text would let a
+    # GET land on a truncated file and 404 an evidence ledger (review catch).
+    tmp = RESULTS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(results, indent=1, default=str))
+    tmp.replace(RESULTS_PATH)
 
 
 def load_results() -> Optional[dict]:

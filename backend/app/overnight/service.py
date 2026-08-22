@@ -176,7 +176,11 @@ def run_analysis(lots: int = 1) -> dict:
         },
     }
     results["generated_at"] = datetime.now(timezone.utc).isoformat()
-    RESULTS_PATH.write_text(json.dumps(results, indent=1, default=str))
+    # tmp + rename, same as closing store.save_results: the morning auto-grade
+    # rewrites this while the tab's poll reads it (review catch).
+    tmp = RESULTS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(results, indent=1, default=str))
+    tmp.replace(RESULTS_PATH)
     log.info("Overnight analysis saved: %s traded / %s skipped nights (1y)",
              primary["traded"].get("n"), primary["skipped"].get("n"))
     return results

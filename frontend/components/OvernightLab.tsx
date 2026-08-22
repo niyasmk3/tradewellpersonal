@@ -378,6 +378,20 @@ export function OvernightLab() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
+  // The morning auto-grade regenerates results server-side; the status poll
+  // notices the new generated_at and reloads (same rules as ClosingLab:
+  // strictly-newer compare, and a failed initial load still recovers).
+  const generatedAt = status.data?.results_generated_at;
+  const shownGeneratedAt = r?.generated_at;
+  useEffect(() => {
+    if (!loaded || !generatedAt) return;
+    if (!shownGeneratedAt || generatedAt > shownGeneratedAt) {
+      setTradedRows([]);
+      setSkippedRows([]);
+      void load();
+    }
+  }, [generatedAt, shownGeneratedAt, loaded, load]);
+
   useEffect(() => {
     if (ledger === "traded" && !tradedRows.length) {
       void api.overnightTrades("traded").then((t) => setTradedRows(t.rows)).catch(() => undefined);

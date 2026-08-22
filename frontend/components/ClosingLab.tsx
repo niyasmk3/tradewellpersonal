@@ -886,6 +886,23 @@ export function ClosingLab() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
+  // The morning auto-grade regenerates results server-side (~10:00 IST, once
+  // the 09:50 exit print settles). The 20s status poll notices the new
+  // generated_at and reloads, so yesterday's night appears in the ledger
+  // without a manual refresh. Strictly-NEWER compare (ISO strings order
+  // lexicographically): a stale status poll right after a manual Analyze
+  // must not trigger a spurious refetch, and a failed initial load (r null)
+  // must still recover when the server has results (both review catches).
+  const generatedAt = status.data?.results_generated_at;
+  const shownGeneratedAt = r?.generated_at;
+  useEffect(() => {
+    if (!loaded || !generatedAt) return;
+    if (!shownGeneratedAt || generatedAt > shownGeneratedAt) {
+      setTrades([]);
+      void load();
+    }
+  }, [generatedAt, shownGeneratedAt, loaded, load]);
+
   useEffect(() => {
     if (!showTrades || trades.length) return;
     void api.closingTrades(400).then((t) => setTrades(t.rows)).catch(() => undefined);

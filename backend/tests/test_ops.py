@@ -13,8 +13,8 @@ from datetime import datetime
 from pathlib import Path
 
 from app.ops import (
-    IST, backup_paths, load_state, make_backup, run_daily_ops_once, save_state,
-    verdict_events,
+    IST, backup_paths, has_exit_print, load_state, make_backup,
+    run_daily_ops_once, save_state, should_grade_closing, verdict_events,
 )
 
 
@@ -136,6 +136,52 @@ def test_daily_pass_backs_up_once():
         else:
             services_mod.feed.paper_store = orig_store
     print("  DAILY  -> one backup per IST day, second pass is a no-op")
+
+
+def test_closing_grade_gate():
+    """The morning grade fires only on an authenticated trading day, after
+    the 09:50 exit print has settled, and at most once per date — an
+    unauthenticated morning retries rather than skipping the day."""
+    at_10 = datetime(2026, 8, 21, 10, 0, tzinfo=IST)
+    fresh = {"closing_grade_date": None}
+    assert should_grade_closing(at_10, fresh, True, True)
+    # too early: the exit bar has not settled
+    assert not should_grade_closing(datetime(2026, 8, 21, 9, 40, tzinfo=IST),
+                                    fresh, True, True)
+    # holiday / weekend, logged-out, or disabled: never
+    assert not should_grade_closing(at_10, fresh, True, False)
+    assert not should_grade_closing(at_10, fresh, False, True)
+    assert not should_grade_closing(at_10, fresh, True, True, enabled=False)
+    # both tabs graded today: a later pass is a no-op; a NEW day re-arms
+    both = {"closing_grade_date": "2026-08-21", "overnight_grade_date": "2026-08-21"}
+    assert not should_grade_closing(at_10, both, True, True)
+    assert should_grade_closing(at_10, {"closing_grade_date": "2026-08-20",
+                                        "overnight_grade_date": "2026-08-20"},
+                                True, True)
+    # a transient overnight failure must not cost overnight its retries:
+    # closing stamped, overnight not -> the pass still fires
+    assert should_grade_closing(at_10, {"closing_grade_date": "2026-08-21"},
+                                True, True)
+    print("  GRADE  -> trading-day + settled-exit + auth + per-tab once-per-date gate")
+
+
+def test_exit_print_detection():
+    """The day is stamped done only when the 09:50 print is provably in the
+    store — a partial morning sync must retry, not write off the day."""
+    from datetime import date
+
+    def ts(h, m):
+        return int(datetime(2026, 8, 21, h, m, tzinfo=IST).timestamp())
+
+    d = date(2026, 8, 21)
+    assert has_exit_print([ts(9, 15), ts(9, 50)], d)
+    assert has_exit_print([ts(10, 5)], d)
+    assert not has_exit_print([ts(9, 15), ts(9, 45)], d)          # sync lagged
+    assert not has_exit_print([], d)
+    # yesterday's bars prove nothing about today
+    y = int(datetime(2026, 8, 20, 9, 50, tzinfo=IST).timestamp())
+    assert not has_exit_print([y], d)
+    print("  PRINT  -> 09:50 bar for the right date, or the pass retries")
 
 
 if __name__ == "__main__":
