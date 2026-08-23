@@ -12,7 +12,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from app.closing import attribution, cpr, oiwall, shadow_exit, signals, store, tiers, tonight, validate
+from app.closing import attribution, cpr, events, oiwall, shadow_exit, signals, store, tiers, tonight, validate
 from app.closing.calendar import IST
 # Safe import direction: overnight.filters depends only on closing.calendar
 # (tonight.py already rides this edge for MID_LO/MID_HI).
@@ -190,6 +190,7 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
         cpr.annotate(tt, days)          # shadow — stamped, never scored
         oiwall.annotate(tt, days)       # shadow — stamped, never scored
         tiers.annotate(tt)              # Gold/Silver/Bronze over the two shadows
+        events.annotate(tt)             # shadow — US event in the hold window
         # 10:45 shadow exit — same trades re-priced at the later print;
         # the 09:50 ledger stays the ledger of record.
         shadow_exit.annotate(tt, days, vix_lookup, model, cfg)
@@ -212,6 +213,7 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
             "backfill_verdict": graded["card_verdict"] if graded else None,
             "cpr_narrow": (row.get("values") or {}).get("cpr_narrow"),
             "oi_state": (row.get("values") or {}).get("oi_state"),
+            "events": (row.get("values") or {}).get("events"),
             "tier": tiers.tier(row.get("verdict"), (row.get("values") or {}).get("oi_state"),
                                (row.get("values") or {}).get("cpr_narrow")),
             "x1045_net_pct": graded.get("x1045_net_pct") if graded else None,
@@ -223,6 +225,8 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
     card_backfill["oi_shadow"] = oiwall.summary(
         check.get("trades") or [], split=today - timedelta(days=365 * PRIMARY_YEARS))
     card_backfill["tiers"] = tiers.summary(
+        check.get("trades") or [], split=today - timedelta(days=365 * PRIMARY_YEARS))
+    card_backfill["event_shadow"] = events.summary(
         check.get("trades") or [], split=today - timedelta(days=365 * PRIMARY_YEARS))
     card_backfill["shadow_exit"] = shadow_exit.summary(
         check.get("trades") or [], split=today - timedelta(days=365 * PRIMARY_YEARS))

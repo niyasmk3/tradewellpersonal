@@ -47,7 +47,7 @@ from typing import Optional
 
 import pandas as pd
 
-from app.closing import cpr, oiwall, tiers
+from app.closing import cpr, events, oiwall, tiers
 from app.closing.calendar import IST, ExpiryCalendar
 from app.closing.data import VIX_TOKEN, _in_session
 from app.closing.pricing import atm_strike, dte_days
@@ -288,6 +288,7 @@ def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
     # priced at its own 15:05 decision clock, not at the moment of the read —
     # the DTE the user sees is the one the fill would have carried.
     stale = today < now.astimezone(IST).date()
+    ev_tonight = events.tonight(today)
     now_ts = settle_at.timestamp() if stale else now.timestamp()
     return {
         "available": True,
@@ -323,6 +324,10 @@ def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
             "oi_ahead_pts": ow["ahead_pts"] if ow else None,
             "oi_pcr": ow["pcr"] if ow else None,
             "oi_state": ow["state"] if ow else None,
+            # Shadow flag (closing/events.py, registered 23-Aug): scheduled US
+            # releases landing in tonight's hold window. Informational only.
+            "events": ev_tonight,
+            "event_tonight": (bool(ev_tonight)) if ev_tonight is not None else None,
         },
         "checks": checks,
         "red": red,

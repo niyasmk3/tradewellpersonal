@@ -497,6 +497,18 @@ function TonightPanel() {
                 OI wall {v.oi_ahead_pts > 0 ? `+${v.oi_ahead_pts.toFixed(0)}` : v.oi_ahead_pts.toFixed(0)} · {v.oi_state.toLowerCase()} · shadow
               </span>
             )}
+            {v.events && v.events.length > 0 && (
+              <span className="rounded border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] text-accent"
+                    title="shadow flag (registered 23-Aug, never a gate): a scheduled US release lands between the 15:05 fill and the 09:50 exit — FOMC 23:30/00:30 IST, CPI/NFP 18:00/19:00 IST. In the backtest these nights moved further (152 vs 85 pts in-sample, 191 vs 125 holdout) but did NOT win more often: a payout-shape flag, not a filter.">
+                {v.events.join(" + ")} tonight · shadow
+              </span>
+            )}
+            {v.events && v.events.length === 0 && (
+              <span className="rounded border border-edge/60 bg-panel2 px-2 py-0.5 text-[10px] text-muted"
+                    title="no scheduled US release (FOMC / CPI / NFP) in tonight's hold window">
+                no US event · shadow
+              </span>
+            )}
           </div>
           {t.first_eval?.drifted && (
             <p className="mt-2 rounded border border-bear/40 bg-bear/5 px-2 py-1 text-[10px] text-bear">
@@ -640,6 +652,50 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
         </div>
       )}
 
+      {cb.event_shadow && (
+        <div className="mt-2 rounded border border-edge/60 bg-panel2/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted">
+            Shadow · US event in the hold window
+            <span className="ml-2 normal-case tracking-normal text-muted/70">
+              registered {cb.event_shadow.registered_on} · {cb.event_shadow.kinds.join(" / ")} dated the entry day · never a gate
+              {cb.event_shadow.coverage && ` · ${cb.event_shadow.coverage.stamped}/${cb.event_shadow.coverage.ledger} nights covered`}
+            </span>
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <thead className="text-[10px] uppercase text-muted">
+              <tr className="border-b border-edge/60">
+                <th className="py-1 text-left font-normal"></th>
+                {WINDOWS.map(([k, label]) => (
+                  <th key={k} className="py-1 text-right font-normal"
+                      title="n · option win% · mean/trade · total (1 lot) · mean |index move| by 09:50">{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {([
+                ["clean_event", "CLEAN · event tonight"],
+                ["clean_no_event", "CLEAN · no event"],
+                ["flagged_event", "FLAGGED · event (control)"],
+              ] as const).map(([k, label]) => (
+                <tr key={k} className="border-b border-edge/30">
+                  <td className="py-1 text-left font-sans text-muted">{label}</td>
+                  {WINDOWS.map(([w]) => {
+                    const c = cb.event_shadow?.windows?.[w]?.[k];
+                    return (
+                      <td key={w} className="py-1 text-right">
+                        {cell(c)}
+                        {c?.abs_move_mean != null && <span className="ml-1 text-muted">· {c.abs_move_mean.toFixed(0)}pt</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">{cb.event_shadow.note}</p>
+        </div>
+      )}
+
       {cb.cpr_shadow && (
         <div className="mt-2 rounded border border-edge/60 bg-panel2/40 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wide text-muted">
@@ -773,6 +829,12 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
                       <span className={`ml-1 rounded px-1 font-mono text-[9px] ${row.oi_state === "CAPPED" ? "bg-bear/15 text-bear" : row.oi_state === "ROAD" ? "bg-accent/15 text-accent" : "bg-panel2 text-muted"}`}
                             title="shadow: previous session's OI wall relative to the 15:00 print at decision time">
                         {row.oi_state.toLowerCase()}
+                      </span>
+                    )}
+                    {row.events && row.events.length > 0 && (
+                      <span className="ml-1 rounded bg-accent/15 px-1 font-mono text-[9px] text-accent"
+                            title="shadow: a scheduled US release landed in this night's hold window">
+                        {row.events.join("+")}
                       </span>
                     )}
                   </td>

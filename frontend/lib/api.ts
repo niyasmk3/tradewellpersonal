@@ -1707,6 +1707,10 @@ export interface ClosingTonight {
     oi_ahead_pts?: number | null;
     oi_pcr?: number | null;
     oi_state?: "ROAD" | "CAPPED" | "BEHIND" | null;
+    // Shadow flag (app/closing/events.py, registered 23-Aug): scheduled US
+    // releases landing in tonight's hold window. null = calendar doesn't cover the year.
+    events?: string[] | null;
+    event_tonight?: boolean | null;
   };
   checks?: ClosingTonightCheck[];
   red?: string[];
@@ -1746,7 +1750,19 @@ export interface ClosingCardBackfill {
       tier?: string | null;
       x1045_net_pct?: number | null;
       oi_state?: "ROAD" | "CAPPED" | "BEHIND" | null;
+      events?: string[] | null;
     }[];
+    note: string;
+  };
+  // The US-event shadow flag against the ledger (app/closing/events.py summary).
+  event_shadow?: {
+    registered_on: string;
+    definition: string;
+    kinds: string[];
+    windows: Record<string, Record<"clean_event" | "clean_no_event" | "flagged_event",
+      ClosingCardCell & { abs_move_mean?: number }>>;
+    by_kind_clean_3y: Record<string, ClosingCardCell>;
+    coverage: { stamped: number; ledger: number };
     note: string;
   };
   // The CPR shadow signal against the ledger (app/closing/cpr.py summary).
