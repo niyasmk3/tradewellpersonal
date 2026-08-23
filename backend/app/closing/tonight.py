@@ -31,7 +31,10 @@ until the bar settles — so those minutes stay PROVISIONAL and are never
 logged (review catch: a 15:01 read could have frozen a CLEAN that the settled
 bar scores FLAGGED). From 15:05 the read is deterministic, and 15:05 is also
 the study's fill clock, so the loggable card is exactly the one the backtest
-grades.
+grades. The row lands by itself: snapshot.capture_loop calls capture() from
+15:05 (and again on its later ticks if Kite was not logged in at the time —
+the settled read is the same card whenever it is taken), so a night is only
+missed when the backend itself was down.
 """
 from __future__ import annotations
 
@@ -44,6 +47,7 @@ from typing import Optional
 
 import pandas as pd
 
+from app.closing import cpr, oiwall, tiers
 from app.closing.calendar import IST, ExpiryCalendar
 from app.closing.data import VIX_TOKEN, _in_session
 from app.closing.pricing import atm_strike, dte_days
@@ -102,10 +106,13 @@ def _check(key: str, status: str, detail: str) -> dict:
 
 
 def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
-             next_day: Optional[date], expiry: Optional[date]) -> dict:
+             next_day: Optional[date], expiry: Optional[date],
+             oi_chains: Optional[dict] = None) -> dict:
     """The pure read: today's bars -> values + five checks + verdict.
 
-    `days` is study.build_days output; `vix_days` maps date -> {(h,m): close}.
+    `days` is study.build_days output; `vix_days` maps date -> {(h,m): close};
+    `oi_chains` (optional) is the previous session's close OI per expiry for
+    the OI-wall shadow — informational only, never a check.
     Before the 15:00 bar exists the read is PROVISIONAL: the latest close
     stands in for the 15:00 print and the card says so. Unknown inputs count
     as unknown, never as clear — a verdict of CLEAN requires all five checks
@@ -126,7 +133,8 @@ def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
     # its open (the print) is final, its close/high/low are not. A read is
     # full only once the bar has settled; before that everything stays
     # provisional and unloggable, matching the study's own 15:05 fill clock.
-    settled = now.astimezone(IST).time() >= SETTLE_HM
+    settle_at = datetime.combine(today, SETTLE_HM, tzinfo=IST)
+    settled = now >= settle_at
     provisional = sig is None or not settled
     if sig is None:
         last_hm = max(day.bars)
@@ -142,9 +150,21 @@ def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
     day_open = open_bar[0]
     body = p1500 - day_open
     direction = "CE" if body > 0 else "PE" if body < 0 else None
+    # Shadow signal (closing/oiwall.py, registered 22-Aug): the previous
+    # session's close OI walls on the held expiry. Same contract as CPR — a
+    # chip and a logged value, never a check.
+    ow = None
+    if oi_chains:
+        exp_key = oiwall.pick_expiry(oi_chains, expiry, today)
+        if exp_key:
+            ow = oiwall.walls(oi_chains[exp_key], p1500, direction)
 
     prev_sessions = [d for d in days if d < today]
     prev_close = close_ref(days[max(prev_sessions)]) if prev_sessions else None
+    # Shadow signal (closing/cpr.py, registered 22-Aug): the previous
+    # session's CPR. Informational chip only — it is not one of the five
+    # checks and never touches the verdict.
+    cp = cpr.from_session(days[max(prev_sessions)]) if prev_sessions else None
 
     checks = []
 
@@ -264,9 +284,14 @@ def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
     else:
         verdict = "INCOMPLETE"
 
-    now_ts = now.timestamp()
+    # A card for a PAST session (weekend / holiday / pre-open fallback) is
+    # priced at its own 15:05 decision clock, not at the moment of the read —
+    # the DTE the user sees is the one the fill would have carried.
+    stale = today < now.astimezone(IST).date()
+    now_ts = settle_at.timestamp() if stale else now.timestamp()
     return {
         "available": True,
+        "stale": stale,
         "date": today.isoformat(),
         "weekday": today.strftime("%A"),
         "as_of": now.astimezone(IST).isoformat(timespec="seconds"),
@@ -288,10 +313,26 @@ def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
             "vix_prev_close": round(v_prev_close, 2) if v_prev_close is not None else None,
             "vix_0915": round(v0915, 2) if v0915 is not None else None,
             "range_pos": round(pos, 3) if pos is not None else None,
+            "cpr_bc": cp["bc"] if cp else None,
+            "cpr_tc": cp["tc"] if cp else None,
+            "cpr_width_pts": cp["width_pts"] if cp else None,
+            "cpr_width_pct": cp["width_pct"] if cp else None,
+            "cpr_narrow": cp["narrow"] if cp else None,
+            "oi_ce_wall": ow["ce_wall"] if ow else None,
+            "oi_pe_wall": ow["pe_wall"] if ow else None,
+            "oi_ahead_pts": ow["ahead_pts"] if ow else None,
+            "oi_pcr": ow["pcr"] if ow else None,
+            "oi_state": ow["state"] if ow else None,
         },
         "checks": checks,
         "red": red,
         "verdict": verdict,
+        # Clean Gold / Silver / Bronze (closing/tiers.py): the verdict graded
+        # by the OI-wall and CPR shadows. A label over the chips, never a
+        # check; None when an input is unknown or the card is not CLEAN.
+        "tier": tiers.tier(verdict, ow["state"] if ow else None, cp["narrow"] if cp else None),
+        "tier_note": tiers.NOTES.get(
+            tiers.tier(verdict, ow["state"] if ow else None, cp["narrow"] if cp else None)),
         "note": (
             "Five pre-registered checks read live — no new rules. The clean cell "
             "made money in both backtest windows, but the composite was assembled "
@@ -370,6 +411,30 @@ def log_first_eval(result: dict) -> Optional[dict]:
 
 # --- live orchestration ------------------------------------------------------
 
+def capture(kite, now: Optional[datetime] = None) -> dict:
+    """Loop entry point (snapshot.capture_loop): land today's decision-time
+    card once the 15:00 bar has settled. Idempotent and cheap once logged —
+    the Kite fetch only happens while today has no standing row."""
+    now = now or datetime.now(IST)
+    today = now.astimezone(IST).date()
+    if not mcal.is_trading_day(today):
+        return {"logged": False, "reason": "not a trading day"}
+    if now.astimezone(IST).time() < SETTLE_HM:
+        return {"logged": False, "reason": "before the 15:05 settle clock"}
+    existing = _first_logged(today)
+    if existing:
+        return {"logged": False, "reason": "already logged", "row": existing}
+    if kite is None:
+        return {"logged": False, "reason": "kite not authenticated"}
+    result = run(kite)
+    first = result.get("first_eval")
+    if result.get("available") and not result.get("stale") and first:
+        log.info("15:05 card logged for %s: %s %s", today, first["verdict"], first["red"])
+        return {"logged": True, "row": first}
+    return {"logged": False,
+            "reason": result.get("reason") or result.get("stale_reason") or "provisional"}
+
+
 def _session_frame(candles: list) -> pd.DataFrame:
     rows = []
     for c in candles:
@@ -380,20 +445,41 @@ def _session_frame(candles: list) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close"])
 
 
+def card_date_for(today: date, days: dict, now: datetime) -> tuple:
+    """Which session the card reads: today if its tape exists, else the most
+    recent session in the window (a Saturday shows Friday's card; a Monday
+    at 08:00 shows Friday's until the first bar prints). Returns
+    (date, stale_reason) — stale_reason is None for today's own card."""
+    if today in days and days[today].bars:
+        return today, None
+    past = [d for d in days if d < today]
+    if not past:
+        return None, None
+    if not mcal.is_trading_day(today):
+        why = f"No session today — {mcal.market_closed_reason(now)}."
+    else:
+        why = "Today's session has no bars yet."
+    return max(past), why + " Showing the last session's card."
+
+
 def run(kite) -> dict:
-    """Fetch today's tape (a light ~10-day window, in memory only — never
-    touches the synced stores) and evaluate."""
+    """Fetch the tape (a light ~10-day window, in memory only — never touches
+    the synced stores) and evaluate today's card — or, when today has no
+    session yet, the last session's settled card."""
     now = datetime.now(IST)
     today = now.date()
-    if not mcal.is_trading_day(today):
-        return {"available": False,
-                "reason": f"No session today — {mcal.market_closed_reason(now)}."}
 
     start = now - timedelta(days=_FETCH_DAYS)
     nifty = _session_frame(kite.historical_data(NIFTY_TOKEN, start, now, "5minute"))
     if nifty.empty:
         return {"available": False, "reason": "Kite returned no index bars for the window."}
     days = build_days(nifty)
+    card_day, stale_reason = card_date_for(today, days, now)
+    if card_day is None:
+        return {"available": False,
+                "reason": "No index bars for today, and no earlier session in the "
+                          f"{_FETCH_DAYS}-day window to fall back to."}
+    today = card_day
 
     vix_days: dict = {}
     for c in kite.historical_data(VIX_TOKEN, start, now, "5minute"):
@@ -418,8 +504,21 @@ def run(kite) -> dict:
                          cfg.expiry_weekday_before, cfg.expiry_weekday_after)
     expiry = cal.holdable_expiry(today)
 
-    result = evaluate(days, vix_days, today, now, next_day, expiry)
-    first = log_first_eval(result)
+    # OI-wall shadow: the previous session's bhavcopy (cached after the first
+    # fetch of the day). Unknown on any failure — the card never waits on it.
+    prev_sessions = [d for d in days if d < today]
+    oi_chains = oiwall.prev_close_chains(max(prev_sessions)) if prev_sessions else None
+
+    result = evaluate(days, vix_days, today, now, next_day, expiry, oi_chains)
+    if stale_reason:
+        # The decision-time log records what the panel said AT 15:05 — a
+        # weekend re-read of Friday is the same deterministic card, but it
+        # is not what anyone saw at decision time, so it reports the logged
+        # row (and any drift from it) without ever writing one.
+        result["stale_reason"] = stale_reason
+        first = _first_logged(today) if result.get("available") else None
+    else:
+        first = log_first_eval(result)
     if first and result.get("available") and not result.get("provisional"):
         result["first_eval"] = {"as_of": first["as_of"], "verdict": first["verdict"],
                                 "red": first["red"]}

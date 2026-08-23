@@ -12,6 +12,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 
 from app.closing import store
 from app.closing.service import ClosingError, run_analysis, run_sync, run_tonight, status
@@ -86,6 +87,30 @@ async def tonight() -> dict:
         raise HTTPException(status_code=500, detail=f"Tonight error: {exc}")
 
 
+@router.get("/snapshots")
+async def get_snapshots(limit: int = Query(default=30, ge=1, le=400)) -> dict:
+    """The 15:00 research log (GIFT prints + chain skew), newest first.
+    Pre-registered 2026-08-22; rows accumulate toward the ~150-200 night
+    verdict horizon. Pure file read — no locks, no Kite."""
+    from app.closing import snapshot
+
+    rows = snapshot.snapshots(limit)
+    return {"rows": rows, "count": len(rows),
+            "registered_on": snapshot.REGISTERED_ON}
+
+
+@router.post("/snapshot")
+async def take_snapshot() -> dict:
+    """Manual capture of today's row (idempotent — the first full row per
+    date stands). The backend loop normally does this at 15:05; this exists
+    for catch-up when the server was down over the window. GIFT logs without
+    Kite; the chain block needs the login."""
+    from app.closing import snapshot
+
+    kite = kite_service.kite if kite_service.is_authenticated else None
+    return await asyncio.to_thread(snapshot.run_snapshot, kite)
+
+
 @router.get("/results")
 async def results() -> dict:
     data = store.load_results()
@@ -93,6 +118,41 @@ async def results() -> dict:
         raise HTTPException(status_code=404,
                             detail="No results yet — POST /closing/analyze")
     return data
+
+
+# Leading columns in reading order; every other field the ledger row carries
+# follows alphabetically, so nothing stamped on a row is lost in the export.
+_LEDGER_LEAD = [
+    "date", "exit_date", "direction", "card_verdict", "tier", "card_red",
+    "day_open", "p1400", "signal_price", "gap_pts", "entry_spot", "exit_spot",
+    "signed_move_pts", "strike", "expiry", "dte_entry", "vix_in", "vix_out",
+    "mid_in", "mid_out", "fill_in", "fill_out", "qty", "gross_rs", "charges_rs",
+    "net_rs", "net_pct", "loss_reason", "cpr_width_pct", "f_cpr_narrow",
+    "x1045_exit_spot", "x1045_fill_out", "x1045_net_rs", "x1045_net_pct",
+    "x1045_delta_rs",
+]
+
+
+@router.get("/trades.xlsx")
+async def trades_xlsx() -> Response:
+    """The primary window's full ledger as a real .xlsx (stdlib writer, no
+    openpyxl). Oldest night first, header row frozen."""
+    from app.closing import xlsx
+
+    data = store.load_results()
+    if data is None:
+        raise HTTPException(status_code=404,
+                            detail="No results yet — POST /closing/analyze")
+    rows = (data.get("primary") or {}).get("trades") or []
+    seen = {k for r in rows for k in r}
+    columns = [c for c in _LEDGER_LEAD if c in seen] + sorted(seen - set(_LEDGER_LEAD))
+    stamp = (data.get("primary") or {}).get("to") or "ledger"
+    body = xlsx.workbook(rows, columns, sheet="Closing ledger")
+    return Response(
+        content=body,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="closing_ledger_{stamp}.xlsx"'},
+    )
 
 
 @router.get("/trades")

@@ -79,6 +79,15 @@ async def lifespan(app: FastAPI):
     from app.ops import ops_loop
 
     ops = asyncio.create_task(ops_loop())
+    # The 15:00 research logger (closing/snapshot.py): GIFT prints from the
+    # public NSE IX API in the 14:00/15:00 windows, plus the chain-skew row
+    # from 15:05, and the decision-time card (closing/tonight.py) on the same
+    # clock. App-lifetime like the watchdog — the whole point is that it
+    # captures whether or not any tab is open; the GIFT half doesn't even
+    # need a Kite login.
+    from app.closing.snapshot import capture_loop as closing_snapshot_loop
+
+    closing_snapshot = asyncio.create_task(closing_snapshot_loop())
 
     # If a valid access token was supplied via .env, start the feed immediately.
     if kite_service.is_authenticated:
@@ -95,6 +104,7 @@ async def lifespan(app: FastAPI):
     supervisor.cancel()
     watchdog.cancel()
     ops.cancel()
+    closing_snapshot.cancel()
     await feed.stop()
 
 

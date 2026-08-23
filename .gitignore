@@ -46,6 +46,9 @@ venv/
 .closing_vix.db
 .closing_results.json
 .closing_tonight.jsonl
+.closing_snapshot.jsonl
+.closing_snapshot_stamps.json
+.closing_exit_quotes.jsonl
 .overnight_results.json
 # Reconstructed Tickertape MMI daily series (2012->present; Wayback + a public
 # 2012-2024 dataset, cross-validated). Regenerable but expensive (~1h of
@@ -72,3 +75,6 @@ backend/.paper_trades.json
 backend/.risk_limits.json
 logs/
 backend/.events.json
+
+# OI wall shadow signal (app/closing/oiwall.py): cached previous-session bhavcopies
+.oiwall_cache/

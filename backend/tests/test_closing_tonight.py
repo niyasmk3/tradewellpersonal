@@ -207,3 +207,121 @@ def test_provisional_never_logs(tmp_path, monkeypatch):
                          datetime(2026, 8, 20, 14, 30, tzinfo=IST), NEXT, EXPIRY)
     assert tonight.log_first_eval(r) is None
     assert not (tmp_path / "tonight.jsonl").exists()
+
+
+# --- last-session fallback (weekend / holiday / pre-open) --------------------
+
+SATURDAY = datetime(2026, 8, 22, 10, 0, tzinfo=IST)   # the weekend after TODAY
+
+
+def test_past_session_reads_settled_and_stale():
+    """A Saturday read of Thursday's tape is the settled card — never
+    provisional even though the clock says 10:00 — and prices DTE from that
+    session's own 15:05 fill clock, not from the moment of the read."""
+    r = tonight.evaluate(_tape(), _vix(), TODAY, SATURDAY, NEXT, EXPIRY)
+    assert r["available"] and r["stale"] is True
+    assert r["provisional"] is False
+    assert r["signal_time"] == "the 15:00 print"
+    assert r["verdict"] == "CLEAN"
+    live = tonight.evaluate(_tape(), _vix(), TODAY, NOW, NEXT, EXPIRY)
+    assert live["stale"] is False
+    assert abs(r["values"]["dte"] - live["values"]["dte"]) < 0.01
+
+
+def test_card_date_falls_back_to_last_session():
+    tape = _tape()
+    # Today with bars -> today, no reason.
+    assert tonight.card_date_for(TODAY, tape, NOW) == (TODAY, None)
+    # Saturday -> the last session, with the weekend named.
+    d, why = tonight.card_date_for(SATURDAY.date(), tape, SATURDAY)
+    assert d == TODAY and "weekend" in why and "last session" in why
+    # A trading day whose tape has not printed yet -> last session too.
+    monday_0800 = datetime(2026, 8, 24, 8, 0, tzinfo=IST)
+    d, why = tonight.card_date_for(monday_0800.date(), tape, monday_0800)
+    assert d == TODAY and "no bars yet" in why
+    # Nothing earlier in the window -> no card at all.
+    assert tonight.card_date_for(SATURDAY.date(), {}, SATURDAY) == (None, None)
+
+
+class _FakeKite:
+    """Serves the fixture tape as Kite candles for both tokens."""
+    def historical_data(self, token, start, end, interval):
+        from app.closing.data import VIX_TOKEN
+        out = []
+        if token == VIX_TOKEN:
+            for d, bars in _vix().items():
+                for (h, m), v in bars.items():
+                    out.append({"date": datetime(d.year, d.month, d.day, h, m, tzinfo=IST),
+                                "open": v, "high": v, "low": v, "close": v})
+            return out
+        for d, day in _tape().items():
+            for (h, m), (o, hi, lo, c, _ts) in day.bars.items():
+                out.append({"date": datetime(d.year, d.month, d.day, h, m, tzinfo=IST),
+                            "open": o, "high": hi, "low": lo, "close": c})
+        return out
+
+
+def _freeze(monkeypatch, at: datetime):
+    class _DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return at if tz is None else at.astimezone(tz)
+    monkeypatch.setattr(tonight, "datetime", _DT)
+
+
+def test_run_on_a_weekend_shows_last_session_and_never_logs(tmp_path, monkeypatch):
+    monkeypatch.setattr(tonight, "LOG_PATH", tmp_path / "tonight.jsonl")
+    _freeze(monkeypatch, SATURDAY)
+    r = tonight.run(_FakeKite())
+    assert r["available"] and r["date"] == TODAY.isoformat()
+    assert r["stale"] is True and "weekend" in r["stale_reason"]
+    assert r["provisional"] is False
+    assert r["values"]["next_trading_day"] == NEXT.isoformat()
+    assert "first_eval" not in r
+    assert not (tmp_path / "tonight.jsonl").exists()     # a stale read is not a decision
+
+
+def test_run_on_a_weekend_reports_the_logged_decision(tmp_path, monkeypatch):
+    monkeypatch.setattr(tonight, "LOG_PATH", tmp_path / "tonight.jsonl")
+    _freeze(monkeypatch, NOW)                             # Thursday 15:06 — the real read
+    live = tonight.run(_FakeKite())
+    assert live["stale"] is False and live["first_eval"]["verdict"] == "CLEAN"
+    _freeze(monkeypatch, SATURDAY)
+    r = tonight.run(_FakeKite())
+    assert r["stale"] is True
+    assert r["first_eval"]["verdict"] == "CLEAN" and "drifted" not in r["first_eval"]
+    assert len((tmp_path / "tonight.jsonl").read_text().splitlines()) == 1
+
+
+# --- loop capture (snapshot.capture_loop -> tonight.capture) -----------------
+
+class _CountingKite(_FakeKite):
+    calls = 0
+
+    def historical_data(self, *a, **kw):
+        _CountingKite.calls += 1
+        return super().historical_data(*a, **kw)
+
+
+def test_capture_gates(tmp_path, monkeypatch):
+    monkeypatch.setattr(tonight, "LOG_PATH", tmp_path / "tonight.jsonl")
+    assert tonight.capture(_FakeKite(), SATURDAY)["reason"] == "not a trading day"
+    before = datetime(2026, 8, 20, 15, 4, tzinfo=IST)
+    assert "settle" in tonight.capture(_FakeKite(), before)["reason"]
+    assert tonight.capture(None, NOW)["reason"] == "kite not authenticated"
+    assert not (tmp_path / "tonight.jsonl").exists()
+
+
+def test_capture_logs_once_then_costs_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(tonight, "LOG_PATH", tmp_path / "tonight.jsonl")
+    _freeze(monkeypatch, NOW)
+    _CountingKite.calls = 0
+    r = tonight.capture(_CountingKite(), NOW)
+    assert r["logged"] is True and r["row"]["verdict"] == "CLEAN"
+    assert _CountingKite.calls == 2                      # one NIFTY + one VIX fetch
+    # A late-day retry (the loop's 30-min tick) finds the row and never touches Kite.
+    later = datetime(2026, 8, 20, 17, 30, tzinfo=IST)
+    r2 = tonight.capture(_CountingKite(), later)
+    assert r2["reason"] == "already logged" and r2["row"]["verdict"] == "CLEAN"
+    assert _CountingKite.calls == 2
+    assert len((tmp_path / "tonight.jsonl").read_text().splitlines()) == 1

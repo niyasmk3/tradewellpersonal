@@ -31,6 +31,7 @@ import {
   ClosingWindow,
   OvernightLadderRung,
   api,
+  API_BASE,
 } from "@/lib/api";
 import { fmt, fmtInt, signed } from "@/lib/format";
 import { usePolling } from "@/lib/usePolling";
@@ -390,12 +391,18 @@ function TonightPanel() {
     <section className="card px-4 py-3">
       <div className="mb-2 flex flex-wrap items-center gap-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Tonight at 15:00 · live
+          {t?.stale ? "Last session at 15:00" : "Tonight at 15:00 · live"}
         </h2>
         {t?.available && (
           <span className="text-[11px] text-muted">
             {t.weekday} {t.date} · read from {t.signal_time} · as of{" "}
             {t.as_of?.slice(11, 19)} IST
+          </span>
+        )}
+        {t?.stale && (
+          <span className="tag bg-panel2 text-[10px] text-muted"
+                title={t.stale_reason ?? "No session today — showing the last session's settled card."}>
+            LAST SESSION
           </span>
         )}
         {t?.provisional && (
@@ -425,11 +432,23 @@ function TonightPanel() {
         <p className="text-[11px] text-bear">{err}</p>
       )}
       {t && !t.available && <p className="text-[11px] text-muted">{t.reason}</p>}
+      {t?.stale && t.stale_reason && (
+        <p className="mb-2 text-[11px] text-muted">
+          {t.stale_reason} This is the settled {t.date} card, as it read at 15:05 — not a live
+          night.
+        </p>
+      )}
 
       {t?.available && v && (
         <>
           {banner && (
             <p className={`mb-2 rounded border px-2 py-1.5 text-[11px] ${banner.cls}`}>
+              {t.tier && TIER_STYLE[t.tier] && (
+                <span className={`mr-2 rounded border px-1.5 py-0.5 font-mono text-[10px] ${TIER_STYLE[t.tier].cls}`}
+                      title={t.tier_note ?? TIER_STYLE[t.tier].title}>
+                  {TIER_STYLE[t.tier].label}
+                </span>
+              )}
               {banner.text}
               {t.verdict === "FLAGGED" && t.checks && (
                 <span> Red: {t.checks.filter((c) => c.status === "red").map((c) => c.label).join(", ")}.</span>
@@ -459,14 +478,29 @@ function TonightPanel() {
             {(t.checks ?? []).map((c) => <CheckChip key={c.key} c={c} />)}
             {v.range_pos != null && (
               <span className="rounded border border-edge/60 bg-panel2 px-2 py-0.5 text-[10px] text-muted"
-                    title="position of the 15:00 print in today's range">
+                    title="position of the 15:00 print in today's range (0 = at the low, 1 = at the high); the mid-range check flags 0.35–0.65">
                 range {v.range_pos.toFixed(2)}
+              </span>
+            )}
+            {v.cpr_width_pts != null && (
+              <span className={`rounded border px-2 py-0.5 text-[10px] ${v.cpr_narrow ? "border-accent/40 bg-accent/10 text-accent" : "border-edge/60 bg-panel2 text-muted"}`}
+                    title={`shadow signal (registered 22-Aug, never a gate): the previous session's Central Pivot Range ${v.cpr_bc}–${v.cpr_tc}, width ${v.cpr_width_pct?.toFixed(3)}% of price. Narrow = ≤0.083%. Inside CLEAN, narrow-CPR nights led both backtest windows; graded by live nights.`}>
+                CPR {v.cpr_width_pts.toFixed(0)}pt · {v.cpr_narrow ? "narrow" : "not narrow"} · shadow
+              </span>
+            )}
+            {v.oi_state && v.oi_ahead_pts != null && (
+              <span className={`rounded border px-2 py-0.5 text-[10px] ${
+                  v.oi_state === "CAPPED" ? "border-bear/40 bg-bear/10 text-bear"
+                  : v.oi_state === "ROAD" ? "border-accent/40 bg-accent/10 text-accent"
+                  : "border-edge/60 bg-panel2 text-muted"}`}
+                    title={`shadow signal (registered 22-Aug, never a gate): previous session's close OI on the held expiry — call wall ${v.oi_ce_wall}, put wall ${v.oi_pe_wall}, PCR ${v.oi_pcr}. Wall ${v.oi_ahead_pts > 0 ? v.oi_ahead_pts + " pts ahead" : Math.abs(v.oi_ahead_pts) + " pts behind"} in the trade's direction. ROAD > 150 ahead; CAPPED within 150 — the cell that won 32–45% in both backtest windows.`}>
+                OI wall {v.oi_ahead_pts > 0 ? `+${v.oi_ahead_pts.toFixed(0)}` : v.oi_ahead_pts.toFixed(0)} · {v.oi_state.toLowerCase()} · shadow
               </span>
             )}
           </div>
           {t.first_eval?.drifted && (
             <p className="mt-2 rounded border border-bear/40 bg-bear/5 px-2 py-1 text-[10px] text-bear">
-              The first evaluation today ({t.first_eval.as_of.slice(11, 19)}) said{" "}
+              The first evaluation {t.stale ? `on ${t.date}` : "today"} ({t.first_eval.as_of.slice(11, 19)}) said{" "}
               {t.first_eval.verdict} — the data has since drifted; the logged decision-time
               record keeps the first read.
             </p>
@@ -486,17 +520,30 @@ const CARD_CHIP: Record<string, string> = {
   INCOMPLETE: "bg-panel2 text-muted",
 };
 
+// Clean Gold / Silver / Bronze (app/closing/tiers.py): a label over the OI-wall
+// and CPR shadows. Gold/Silver are tradeable clean cards with different
+// expectations; Bronze is the clean cell with FLAGGED-level odds.
+const TIER_STYLE: Record<string, { cls: string; label: string; short: string; title: string }> = {
+  GOLD: { cls: "border-amber-400/60 bg-amber-400/15 text-amber-300", label: "Clean Gold", short: "G",
+          title: "Clean Gold: five checks clear, OI wall not capped, narrow CPR — 3y 61% win (57% / 71%), n=44. Shadow tier." },
+  SILVER: { cls: "border-slate-300/50 bg-slate-300/10 text-slate-200", label: "Clean Silver", short: "S",
+            title: "Clean Silver: five checks clear, OI wall not capped, wide CPR — 3y 51% win (48% / 56%), n=88." },
+  BRONZE: { cls: "border-orange-700/60 bg-orange-700/15 text-orange-300", label: "Clean Bronze", short: "B",
+            title: "Clean Bronze: five checks clear but a max-OI strike within 150 pts ahead — 3y 37% win (35% / 44%), n=65. FLAGGED-level odds." },
+};
+
 /** Ledger chip: what the live card would have said at that night's 15:00. */
 function CardChip({ t }: { t: ClosingTrade }) {
   if (!t.card_verdict) return null;
-  const short = t.card_verdict === "CLEAN" ? "CLEAN"
+  const tier = t.tier ? TIER_STYLE[t.tier] : undefined;
+  const short = t.card_verdict === "CLEAN" ? (tier ? `CLEAN·${tier.short}` : "CLEAN")
     : t.card_verdict === "FLAGGED" ? `FLAG${t.card_red?.length ? "·" + t.card_red.length : ""}`
     : "INC";
   const title = t.card_verdict === "FLAGGED"
     ? `red: ${(t.card_red ?? []).join(", ")}`
     : t.card_verdict === "INCOMPLETE"
       ? "some check inputs unavailable for this night"
-      : "all five checks clear at 15:00";
+      : tier ? tier.title : "all five checks clear at 15:00 (tier unknown — a shadow input was unavailable)";
   return (
     <span title={title}
           className={`rounded px-1 text-[9px] font-mono ${CARD_CHIP[t.card_verdict] ?? "text-muted"}`}>
@@ -558,6 +605,140 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
       </table>
       <p className="mt-1 text-[10px] leading-relaxed text-muted">{cb.note}</p>
 
+      {cb.tiers && (
+        <div className="mt-2 rounded border border-amber-400/30 bg-amber-400/5 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted">
+            Clean Gold · Silver · Bronze
+            <span className="ml-2 normal-case tracking-normal text-muted/70">
+              registered {cb.tiers.registered_on} · the verdict graded by the OI wall and the CPR · never a gate
+            </span>
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <tbody className="font-mono">
+              {([
+                ["gold", "GOLD"], ["silver", "SILVER"], ["bronze", "BRONZE"],
+              ] as const).map(([k, T]) => (
+                <tr key={k} className="border-b border-edge/30">
+                  <td className="py-1 text-left font-sans">
+                    <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${TIER_STYLE[T].cls}`}
+                          title={cb.tiers?.notes?.[T]}>{TIER_STYLE[T].label}</span>
+                  </td>
+                  {WINDOWS.map(([w]) => (
+                    <td key={w} className="py-1 text-right">{cell(cb.tiers?.windows?.[w]?.[k])}</td>
+                  ))}
+                </tr>
+              ))}
+              <tr className="border-b border-edge/30">
+                <td className="py-1 text-left font-sans text-muted">CLEAN · untiered (an input unknown)</td>
+                {WINDOWS.map(([w]) => (
+                  <td key={w} className="py-1 text-right">{cell(cb.tiers?.windows?.[w]?.clean_untiered)}</td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">{cb.tiers.note}</p>
+        </div>
+      )}
+
+      {cb.cpr_shadow && (
+        <div className="mt-2 rounded border border-edge/60 bg-panel2/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted">
+            Shadow · narrow CPR inside CLEAN
+            <span className="ml-2 normal-case tracking-normal text-muted/70">
+              registered {cb.cpr_shadow.registered_on} · narrow ≤ {cb.cpr_shadow.narrow_pct}% of price · never a gate
+            </span>
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <tbody className="font-mono">
+              {([
+                ["clean_narrow", "CLEAN · narrow CPR"],
+                ["clean_rest", "CLEAN · rest"],
+                ["flagged_narrow", "FLAGGED · narrow (control)"],
+              ] as const).map(([k, label]) => (
+                <tr key={k} className="border-b border-edge/30">
+                  <td className="py-1 text-left font-sans text-muted">{label}</td>
+                  {WINDOWS.map(([w]) => (
+                    <td key={w} className="py-1 text-right">{cell(cb.cpr_shadow?.windows?.[w]?.[k])}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">{cb.cpr_shadow.note}</p>
+        </div>
+      )}
+
+      {cb.oi_shadow && (
+        <div className="mt-2 rounded border border-edge/60 bg-panel2/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted">
+            Shadow · OI wall inside CLEAN
+            <span className="ml-2 normal-case tracking-normal text-muted/70">
+              registered {cb.oi_shadow.registered_on} · previous close OI, ±{cb.oi_shadow.span} of the print · road &gt; {cb.oi_shadow.road_pts} pts ahead · never a gate
+              {cb.oi_shadow.coverage && ` · ${cb.oi_shadow.coverage.stamped}/${cb.oi_shadow.coverage.ledger} nights stamped`}
+            </span>
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <tbody className="font-mono">
+              {([
+                ["clean_road", "CLEAN · road (wall >150 ahead)"],
+                ["clean_capped", "CLEAN · capped (wall ≤150 ahead)"],
+                ["clean_behind", "CLEAN · wall behind"],
+                ["flagged_road", "FLAGGED · road (control)"],
+              ] as const).map(([k, label]) => (
+                <tr key={k} className={`border-b border-edge/30 ${k === "clean_capped" ? "bg-bear/5" : ""}`}>
+                  <td className="py-1 text-left font-sans text-muted">{label}</td>
+                  {WINDOWS.map(([w]) => (
+                    <td key={w} className="py-1 text-right">{cell(cb.oi_shadow?.windows?.[w]?.[k])}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">{cb.oi_shadow.note}</p>
+        </div>
+      )}
+
+      {cb.shadow_exit && (
+        <div className="mt-2 rounded border border-edge/60 bg-panel2/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted">
+            Shadow · 10:45 exit vs the 09:50 ledger
+            <span className="ml-2 normal-case tracking-normal text-muted/70">
+              registered {cb.shadow_exit.registered_on} · same trades, later print · never the ledger of record
+            </span>
+          </p>
+          <table className="mt-1 w-full text-[11px]">
+            <tbody className="font-mono">
+              {([
+                ["clean_0950", "CLEAN · exit 09:50"],
+                ["clean_1045", "CLEAN · exit 10:45"],
+                ["flagged_0950", "FLAGGED · exit 09:50"],
+                ["flagged_1045", "FLAGGED · exit 10:45"],
+              ] as const).map(([k, label]) => (
+                <tr key={k} className="border-b border-edge/30">
+                  <td className="py-1 text-left font-sans text-muted">{label}</td>
+                  {WINDOWS.map(([w]) => (
+                    <td key={w} className="py-1 text-right">{cell(cb.shadow_exit?.windows?.[w]?.[k])}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1 text-[10px] text-muted">
+            Live (real contract mids):{" "}
+            {cb.shadow_exit.live?.n ? (
+              <>
+                {cb.shadow_exit.live.n} paired nights · mean 09:50 {cb.shadow_exit.live.mean_real_0950_pct}% · mean 10:45{" "}
+                {cb.shadow_exit.live.mean_real_1045_pct}% · 10:45 better on {cb.shadow_exit.live.nights_1045_better}/
+                {cb.shadow_exit.live.n}
+              </>
+            ) : (
+              "no paired nights yet — quotes accrue at 15:05 / 09:50 / 10:45"
+            )}
+          </p>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted">{cb.shadow_exit.note}</p>
+        </div>
+      )}
+
       {live.length > 0 && (
         <div className="mt-2 rounded border border-accent/30 bg-accent/5 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wide text-accent">
@@ -582,6 +763,18 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
                           title={row.red?.length ? `red: ${row.red.join(", ")}` : undefined}>
                       {row.verdict}
                     </span>
+                    {row.tier && TIER_STYLE[row.tier] && (
+                      <span className={`ml-1 rounded border px-1 font-mono text-[9px] ${TIER_STYLE[row.tier].cls}`}
+                            title={TIER_STYLE[row.tier].title}>
+                        {TIER_STYLE[row.tier].label.replace("Clean ", "")}
+                      </span>
+                    )}
+                    {row.oi_state && (
+                      <span className={`ml-1 rounded px-1 font-mono text-[9px] ${row.oi_state === "CAPPED" ? "bg-bear/15 text-bear" : row.oi_state === "ROAD" ? "bg-accent/15 text-accent" : "bg-panel2 text-muted"}`}
+                            title="shadow: previous session's OI wall relative to the 15:00 print at decision time">
+                        {row.oi_state.toLowerCase()}
+                      </span>
+                    )}
                   </td>
                   <td className={`py-1 text-right ${signCls(row.signed_move_pts)}`}>
                     {row.signed_move_pts != null ? signed(row.signed_move_pts, 1)
@@ -1243,10 +1436,19 @@ export function ClosingLab() {
 
           {/* ledger */}
           <section className="card px-4 py-3">
-            <button onClick={() => setShowTrades((s) => !s)}
-                    className="text-xs font-semibold uppercase tracking-wide text-muted hover:text-white">
-              {showTrades ? "▾" : "▸"} Trade ledger ({primary?.n ?? 0} nights)
-            </button>
+            <div className="flex items-center gap-3">
+              <button onClick={() => setShowTrades((s) => !s)}
+                      className="text-xs font-semibold uppercase tracking-wide text-muted hover:text-white">
+                {showTrades ? "▾" : "▸"} Trade ledger ({primary?.n ?? 0} nights)
+              </button>
+              {(primary?.n ?? 0) > 0 && (
+                <a href={`${API_BASE}/closing/trades.xlsx`} download
+                   className="rounded border border-edge/60 bg-panel2 px-2 py-0.5 text-[10px] text-muted hover:border-accent/40 hover:text-accent"
+                   title="Download the full ledger as an Excel workbook — every stamped field (verdict, tier, CPR, 10:45 shadow exit, attribution), oldest night first">
+                  ⬇ xlsx
+                </a>
+              )}
+            </div>
             {showTrades && (
               <div className="mt-2 max-h-[32rem] overflow-auto">
                 <table className="w-full text-[11px]">

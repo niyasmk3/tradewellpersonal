@@ -1603,6 +1603,7 @@ export interface ClosingTrade {
   f_calendar_clear?: boolean | null;
   tags?: string[];
   card_verdict?: string;
+  tier?: string | null;
   card_red?: string[];
 }
 
@@ -1669,7 +1670,14 @@ export interface ClosingTonight {
   weekday?: string;
   as_of?: string;
   provisional?: boolean;
+  /** The card is for the LAST session (weekend / holiday / pre-open), not today's. */
+  stale?: boolean;
+  stale_reason?: string;
   signal_time?: string;
+  /** A = CLEAN + narrow CPR, B = CLEAN + wide CPR, C = FLAGGED; null when unresolvable. */
+  // Clean Gold / Silver / Bronze (app/closing/tiers.py) — a label over the OI-wall and CPR shadows.
+  tier?: "GOLD" | "SILVER" | "BRONZE" | null;
+  tier_note?: string | null;
   values?: {
     day_open: number;
     p1400: number | null;
@@ -1686,6 +1694,19 @@ export interface ClosingTonight {
     vix_prev_close: number | null;
     vix_0915: number | null;
     range_pos: number | null;
+    // Shadow signal (app/closing/cpr.py, registered 22-Aug) — informational only.
+    cpr_bc?: number | null;
+    cpr_tc?: number | null;
+    cpr_width_pts?: number | null;
+    cpr_width_pct?: number | null;
+    cpr_narrow?: boolean | null;
+    // Shadow signal (app/closing/oiwall.py, registered 22-Aug) — previous
+    // session's close OI walls on the held expiry. Informational only.
+    oi_ce_wall?: number | null;
+    oi_pe_wall?: number | null;
+    oi_ahead_pts?: number | null;
+    oi_pcr?: number | null;
+    oi_state?: "ROAD" | "CAPPED" | "BEHIND" | null;
   };
   checks?: ClosingTonightCheck[];
   red?: string[];
@@ -1721,7 +1742,70 @@ export interface ClosingCardBackfill {
       net_pct: number | null;
       signed_move_pts: number | null;
       backfill_verdict: string | null;
+      cpr_narrow?: boolean | null;
+      tier?: string | null;
+      x1045_net_pct?: number | null;
+      oi_state?: "ROAD" | "CAPPED" | "BEHIND" | null;
     }[];
+    note: string;
+  };
+  // The CPR shadow signal against the ledger (app/closing/cpr.py summary).
+  cpr_shadow?: {
+    registered_on: string;
+    definition: string;
+    narrow_pct: number;
+    windows: Record<string, Record<"clean_narrow" | "clean_rest" | "flagged_narrow", ClosingCardCell>>;
+    note: string;
+  };
+  // Clean Gold / Silver / Bronze against the ledger (app/closing/tiers.py summary).
+  tiers?: {
+    registered_on: string;
+    definition: string;
+    labels: Record<string, string>;
+    notes: Record<string, string>;
+    windows: Record<string, Record<"gold" | "silver" | "bronze" | "clean_untiered", ClosingCardCell>>;
+    note: string;
+  };
+  // The OI-wall shadow signal against the ledger (app/closing/oiwall.py summary).
+  oi_shadow?: {
+    registered_on: string;
+    definition: string;
+    road_pts: number;
+    span: number;
+    windows: Record<string, Record<"clean_road" | "clean_capped" | "clean_behind" | "flagged_road", ClosingCardCell>>;
+    coverage: { stamped: number; ledger: number };
+    note: string;
+  };
+  // The 10:45 shadow exit against the 09:50 ledger (app/closing/shadow_exit.py).
+  shadow_exit?: {
+    registered_on: string;
+    definition: string;
+    exit_bar: string;
+    windows: Record<
+      string,
+      Record<"clean_0950" | "clean_1045" | "flagged_0950" | "flagged_1045", ClosingCardCell> & {
+        unknown_n?: number;
+      }
+    >;
+    live: {
+      n: number;
+      mean_real_0950_pct?: number;
+      mean_real_1045_pct?: number;
+      nights_1045_better?: number;
+      note: string;
+      rows: {
+        night: string;
+        verdict: string | null;
+        direction: string | null;
+        entry_mid: number;
+        mid_0950: number;
+        mid_1045: number;
+        real_0950_pct: number;
+        real_1045_pct: number;
+        model_0950_pct: number | null;
+        model_1045_pct: number | null;
+      }[];
+    };
     note: string;
   };
 }

@@ -12,7 +12,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from app.closing import attribution, signals, store, tonight, validate
+from app.closing import attribution, cpr, oiwall, shadow_exit, signals, store, tiers, tonight, validate
 from app.closing.calendar import IST
 # Safe import direction: overnight.filters depends only on closing.calendar
 # (tonight.py already rides this edge for MID_LO/MID_HI).
@@ -23,6 +23,7 @@ from app.closing.study import (
     DEFAULT_SIGNAL_MODE,
     SIGNAL_MODES,
     StudyConfig,
+    VixLookup,
     build_days,
     run_study,
     variant_sweep,
@@ -182,9 +183,16 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
     # so every ledger row shows what the 15:00 card would have said, and the
     # summary compares CLEAN vs FLAGGED against the P&L that followed. Runs
     # after attribution.build (which stamps the calendar flags it reads).
+    vix_lookup = VixLookup(vix)
     for tt in (primary.get("trades") or [], check.get("trades") or []):
         overnight_filters.annotate(tt, spine, vix)
         attribution.stamp_card(tt)
+        cpr.annotate(tt, days)          # shadow — stamped, never scored
+        oiwall.annotate(tt, days)       # shadow — stamped, never scored
+        tiers.annotate(tt)              # Gold/Silver/Bronze over the two shadows
+        # 10:45 shadow exit — same trades re-priced at the later print;
+        # the 09:50 ledger stays the ledger of record.
+        shadow_exit.annotate(tt, days, vix_lookup, model, cfg)
     # Join against the 3-YEAR ledger, not the 1-year one: the decision log is
     # append-only and forever, and a card older than the primary window would
     # silently lose its grade right as the sample count approached the house
@@ -202,9 +210,22 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
             "net_pct": graded["net_pct"] if graded else None,
             "signed_move_pts": graded["signed_move_pts"] if graded else None,
             "backfill_verdict": graded["card_verdict"] if graded else None,
+            "cpr_narrow": (row.get("values") or {}).get("cpr_narrow"),
+            "oi_state": (row.get("values") or {}).get("oi_state"),
+            "tier": tiers.tier(row.get("verdict"), (row.get("values") or {}).get("oi_state"),
+                               (row.get("values") or {}).get("cpr_narrow")),
+            "x1045_net_pct": graded.get("x1045_net_pct") if graded else None,
         })
     card_backfill = attribution.card_summary(check.get("trades") or [],
                                              split=today - timedelta(days=365 * PRIMARY_YEARS))
+    card_backfill["cpr_shadow"] = cpr.summary(
+        check.get("trades") or [], split=today - timedelta(days=365 * PRIMARY_YEARS))
+    card_backfill["oi_shadow"] = oiwall.summary(
+        check.get("trades") or [], split=today - timedelta(days=365 * PRIMARY_YEARS))
+    card_backfill["tiers"] = tiers.summary(
+        check.get("trades") or [], split=today - timedelta(days=365 * PRIMARY_YEARS))
+    card_backfill["shadow_exit"] = shadow_exit.summary(
+        check.get("trades") or [], split=today - timedelta(days=365 * PRIMARY_YEARS))
     card_backfill["live"] = {
         "rows": live_cards,
         "note": ("Decision-time cards from .closing_tonight.jsonl joined "
