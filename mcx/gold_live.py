@@ -57,8 +57,27 @@ def snapshot(kite, fut) -> dict:
         clim = json.loads(CLIM.read_text())
     except Exception:
         pass
+    # Live TRIAL evaluation — the exact simulate_day the ledger grades with.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from hypotheses import RULES, simulate_day
+    b5 = [[int(b["date"].timestamp()), b["open"], b["high"],
+           b["low"], b["close"]] for b in today]
+    live_trades = {t["rule"]: t for t in simulate_day(b5, prev_close,
+                                                      live=True)}
+    cards = []
+    for rule, meta in RULES.items():
+        t = live_trades.get(rule)
+        state = ("open" if t and t.get("exit") is None
+                 else "closed" if t else "none")
+        cards.append({"rule": rule, "label": meta["label"],
+                      "qualify": meta["qualify"], "state": state,
+                      **{k: t.get(k) for k in
+                         ("dir", "entry", "exit", "reason", "pct",
+                          "rupees", "last") if t}})
+
     return {
         "updated": now.strftime("%H:%M:%S IST"),
+        "cards": cards,
         "contract": fut.get("tradingsymbol"),
         "expiry": str(fut.get("expiry") or "")[:10],
         "prev_close": prev_close,

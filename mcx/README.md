@@ -50,12 +50,22 @@ NIFTY cards.
 - [ ] **P1:** nightly refresh + climatology page section (session
       structure, day-types, gap stats, vol regimes) — automatic, no
       opinions, published to the research page.
-- [ ] **P2:** pre-register 2–3 hypotheses FROM the climatology (written
-      expectations first, thresholds frozen before any grading). Candidate
-      questions, to be refined only before P2 grading begins: does the
-      09:00 open burst continue or fade? does the 18:00–20:00 window trend
-      with the US open? do >0.5% gaps fill? Grade by walk-forward backtest
-      + forward shadow ledger, both net of realistic MCX charges.
+- [x] **P2 (frozen 25-Aug, same day):** three rules pre-registered in
+      hypotheses.py — H1 gap-fade, H2 burst-continuation, H3 US-window
+      follow — parameters chosen from climatology magnitudes BEFORE any
+      grading, then backtested once on all stored MCX 3m sessions (~110
+      days, GOLDM 1 lot, ~Rs250 RT charges, idealised exits):
+        H1-gapfade   35 trades  9W  net −Rs78,806  ← gaps RUN, fading them bled
+        H2-burst     37 trades 17W  net −Rs10,578
+        H3-uswindow  44 trades 23W  net +Rs25,267  ← only survivor so far
+      Lessons recorded: (a) two of three pre-registered ideas would have
+      lost money — this is exactly what the freeze-then-grade order is for;
+      (b) the tempting "so fade H1 → gap CONTINUATION must win" is a NEW
+      hypothesis (H4) that must be pre-registered separately if ever tried,
+      never a sign-flip of a failed rule; (c) backtest is one ~110-session
+      period with idealised exits — the FORWARD shadow ledger (started
+      25-Aug, TRIAL cards on gold.html) is the only evidence that counts
+      toward promotion: 30+ forward samples per rule, then verdicts.
 - [ ] **P3:** only if something survives 100+ episodes with the PROGRAM.md
       live bar: discuss next steps. Not before.
 

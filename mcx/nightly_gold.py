@@ -84,6 +84,37 @@ def main() -> int:
         "mcx_day": day_stats(db, "GOLD_FUT", 250),
         "xau_sessions_stored": xau_days,
     }
+    # Deterministic hypothesis ledger over every stored session. Days before
+    # the 25-Aug freeze are BACKTEST; days after are FORWARD — the page keeps
+    # them separate because only forward samples earn promotion.
+    sys.path.insert(0, str(HERE))
+    from hypotheses import FROZEN_AT, RULES, simulate_all
+    freeze_day = int(datetime.strptime(FROZEN_AT, "%Y-%m-%d")
+                     .replace(tzinfo=IST).timestamp() + 19800) // 86400
+    trades = simulate_all(db)
+    def summary(rows):
+        per = {}
+        for r in RULES:
+            rt = [t for t in rows if t["rule"] == r]
+            wins = sum(1 for t in rt if (t.get("rupees") or 0) > 0)
+            per[r] = {"trades": len(rt), "wins": wins,
+                      "net_rupees": round(sum(t.get("rupees") or 0 for t in rt))}
+        return per
+    ledger = {
+        "frozen_at": FROZEN_AT,
+        "charges_note": "GOLDM 1 lot, ~Rs250 round trip, exits idealised",
+        "backtest": summary([t for t in trades if t["day"] < freeze_day]),
+        "forward": summary([t for t in trades if t["day"] >= freeze_day]),
+        "recent": [t for t in trades][-12:],
+    }
+    paper_txt = json.dumps(ledger, indent=1)
+    (DATA / "gold_paper.json").write_text(paper_txt)
+    try:
+        (HERE.parents[1] / "frontend" / "public" / "gold_paper.json"
+         ).write_text(paper_txt)
+    except Exception as e:
+        print(f"gold paper deploy skipped: {e}")
+
     OUT.write_text(json.dumps(out, indent=1))
     # Deploy the live page from its canonical, version-controlled copy —
     # same pattern as research.html (frontend/public/ is git-excluded).

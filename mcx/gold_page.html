@@ -27,10 +27,12 @@
 </style>
 </head>
 <body>
-<h1>Gold Lab <small id="contract">—</small> <span class="tag">EXPERIMENT — NO SIGNALS YET</span></h1>
+<h1>Gold Lab <small id="contract">—</small> <span class="tag">SHADOW TRIAL — ADVISORY NOTHING, PAPER EVERYTHING</span></h1>
+<div class="row" id="cards"></div>
 <div class="row" id="stats"></div>
 <canvas id="chart" width="1200" height="340"></canvas>
 <div class="row" id="watch"></div>
+<div class="card" id="ledger" style="margin-top:14px">loading ledger…</div>
 <p class="note">Watch-conditions above are the pre-registered hypothesis
 <b>candidates</b> (charter: recorder/mcx/README.md) being observed live —
 they are research questions, not trade advice. Signal cards can only appear
@@ -44,7 +46,42 @@ function card(title, body) {
   return `<div class="card"><h3>${title}</h3>${body}</div>`;
 }
 
+function trialCard(c) {
+  const badge = `<span class="tag" style="font-size:10px">TRIAL</span>`;
+  if (c.state === "none")
+    return card(`${c.label} ${badge}`,
+      `<span class="mut">no setup — needs ${c.qualify}</span>`);
+  if (c.state === "open") {
+    const sign = c.dir === "LONG" ? 1 : -1;
+    const p = c.last ? sign*100*(c.last-c.entry)/c.entry : null;
+    return card(`${c.label} ${badge}`,
+      `<div class="big" style="color:var(--amber)">OPEN · ${c.dir} @ ${fmt(c.entry)}</div>
+       <span class="${p>=0?"up":"dn"}">now ${p==null?"—":(p>=0?"+":"")+fmt(p)}% (paper)</span>`);
+  }
+  return card(`${c.label} ${badge}`,
+    `<div class="big ${c.rupees>=0?"up":"dn"}">${c.rupees>=0?"+":""}₹${c.rupees} · ${c.reason}</div>
+     <span class="mut">${c.dir} ${fmt(c.entry)} → ${fmt(c.exit)} (${c.pct>=0?"+":""}${fmt(c.pct)}%)</span>`);
+}
+
+function renderLedger(L) {
+  if (!L) return;
+  const row = (name, s) => {
+    const b = s.backtest, f = s.forward;
+    return `<tr><td style="padding:2px 12px 2px 0">${name}</td>
+      <td style="padding:2px 12px">${b.trades} tr · ${b.wins}W · <span class="${b.net_rupees>=0?"up":"dn"}">₹${b.net_rupees}</span></td>
+      <td style="padding:2px 12px">${f.trades} tr · ${f.wins}W · <span class="${f.net_rupees>=0?"up":"dn"}">₹${f.net_rupees}</span></td></tr>`;
+  };
+  const rules = Object.keys(L.backtest || {});
+  $("ledger").innerHTML = `<h3>Shadow paper ledger (GOLDM 1 lot, net of ~₹250 charges)</h3>
+    <table style="font-size:13px"><tr class="mut"><td></td>
+    <td style="padding:2px 12px"><b>Backtest</b> (pre-freeze ${L.frozen_at})</td>
+    <td style="padding:2px 12px"><b>Forward</b> (the only part that earns promotion)</td></tr>
+    ${rules.map(r => row(r, {backtest:L.backtest[r], forward:L.forward[r]})).join("")}</table>
+    <span class="mut" style="font-size:12px">Exits idealised, no slippage model yet — the forward book measures how honest that is. 30+ forward samples per rule before any verdict.</span>`;
+}
+
 function render(d) {
+  if (d.cards) $("cards").innerHTML = d.cards.map(trialCard).join("");
   const bars = d.bars || [];
   const last = bars.length ? bars[bars.length-1][4] : null;
   const dayO = bars.length ? bars[0][1] : null;
@@ -140,6 +177,8 @@ async function tick() {
   try {
     const r = await fetch("gold_live.json?t=" + Date.now());
     if (r.ok) { lastData = await r.json(); render(lastData); }
+    const p = await fetch("gold_paper.json?t=" + Date.now());
+    if (p.ok) renderLedger(await p.json());
   } catch (e) { console.warn("gold tick:", e); }
 }
 // First paint after layout (a 0-width canvas draws nothing), redraw on resize.
