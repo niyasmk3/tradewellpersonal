@@ -196,6 +196,29 @@ def build() -> str:
     scoreboard = table(["Book", "Closed", "Win / Loss", "Total P&L (gross)", "Avg / trade"],
                        score_rows)
 
+    gold = load_json(DATA / "gold_climatology.json", {})
+    gold_html = ('<p class="note">No gold data yet — the first nightly pass '
+                 'writes this section automatically.</p>')
+    if gold:
+        def top_hours(d: dict | None, k: int = 4) -> str:
+            items = sorted(((v, h) for h, v in (d or {}).items()),
+                           reverse=True)[:k]
+            return ", ".join(f"{h}:00 ({v}%)" for v, h in items) or "—"
+        md = gold.get("mcx_day") or {}
+        gold_html = (
+            f"<p><b>MCX GOLD</b> — busiest hours (IST): "
+            f"{top_hours(gold.get('mcx_hour_shares_ist'))}. "
+            f"Avg daily range {md.get('avg_range_pct', '—')}% · avg overnight "
+            f"gap {md.get('avg_gap_pct', '—')}% "
+            f"({md.get('gap_over_half_pct_share', '—')}% of days gap &gt;0.5%).</p>"
+            f"<p><b>XAUUSD (international spot)</b> — busiest hours (IST): "
+            f"{top_hours(gold.get('xau_hour_shares_ist'))}. "
+            f"{gold.get('xau_sessions_stored', 0)} sessions stored.</p>"
+            f"<p class=\"note\">Updated {esc(str(gold.get('updated', '')))} · "
+            "climatology only — no signals, no trades, no opinions. "
+            "Venue-portable by design: MCX is the legal venue today; XAUUSD "
+            "is the NRI-era venue. Charter and rules: recorder/mcx/README.md</p>")
+
     def book_tag(t: dict) -> str:
         if not is_shadow(t):
             return "real"
@@ -380,6 +403,10 @@ def build() -> str:
          "Gross figures; net-of-charges lives on the dashboard Paper tab.")}
 {section("Every fill, graded", fills)}
 {section("Every card the engine issued", cards_html)}
+{section("Gold lab — experiment #2 (climatology)", gold_html,
+         "A second evidence stream, same rules: measure first, believe later. "
+         "Gold has no signal engine — this section is the market's own habits, "
+         "refreshed nightly from MCX and Dukascopy data.")}
 {section("NSE data collection (free archives, nightly)", nse)}
 {section("Live capture health", cap)}
 {section("Daily report archive (full history)", history)}

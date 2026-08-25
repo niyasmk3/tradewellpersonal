@@ -28,6 +28,9 @@ mkdir -p "$OUT_DIR"
   echo
   echo "=== Seller shadows (fade / theta windows / overnight decay) ======"
   "$PY" "$ROOT/recorder/seller_shadows.py" 2>&1
+  echo
+  echo "=== Gold lab (MCX + XAUUSD refresh + climatology) ================"
+  "$PY" "$ROOT/recorder/mcx/nightly_gold.py" 2>&1
 } > "$OUT_DIR/$STAMP.txt"
 
 # One-page visual dashboard of everything above — bookmarkable.
