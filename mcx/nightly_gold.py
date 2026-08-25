@@ -85,6 +85,14 @@ def main() -> int:
         "xau_sessions_stored": xau_days,
     }
     OUT.write_text(json.dumps(out, indent=1))
+    # Deploy the live page from its canonical, version-controlled copy —
+    # same pattern as research.html (frontend/public/ is git-excluded).
+    try:
+        page_src = HERE / "gold_page.html"
+        page_dst = HERE.parents[1] / "frontend" / "public" / "gold.html"
+        page_dst.write_text(page_src.read_text())
+    except Exception as e:
+        print(f"gold page deploy skipped: {e}")
     print(f"gold climatology → {OUT.name} "
           f"(XAUUSD days stored: {xau_days})")
     return 0

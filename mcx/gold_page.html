@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gold Lab — live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0b0f14; --panel:#111722; --line:#1d2735; --tx:#d7e0ea;
+          --mut:#77839a; --up:#31b06e; --dn:#e05252; --amber:#d9a441; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--tx);
+         font:14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; padding:18px; }
+  h1 { font-size:18px; } h1 small { color:var(--mut); font-weight:400; }
+  .tag { border:1px solid var(--amber); color:var(--amber); border-radius:4px;
+         padding:1px 7px; font-size:11px; vertical-align:2px; }
+  .row { display:flex; gap:14px; flex-wrap:wrap; margin:14px 0; }
+  .card { background:var(--panel); border:1px solid var(--line);
+          border-radius:8px; padding:12px 14px; flex:1; min-width:210px; }
+  .card h3 { font-size:12px; color:var(--mut); text-transform:uppercase;
+             letter-spacing:.5px; margin-bottom:6px; }
+  .big { font-size:20px; font-weight:600; }
+  .up { color:var(--up); } .dn { color:var(--dn); } .mut { color:var(--mut); }
+  canvas { width:100%; height:340px; background:var(--panel);
+           border:1px solid var(--line); border-radius:8px; }
+  .note { color:var(--mut); font-size:12px; margin-top:14px; }
+  a { color:#6ea8dc; }
+</style>
+</head>
+<body>
+<h1>Gold Lab <small id="contract">—</small> <span class="tag">EXPERIMENT — NO SIGNALS YET</span></h1>
+<div class="row" id="stats"></div>
+<canvas id="chart" width="1200" height="340"></canvas>
+<div class="row" id="watch"></div>
+<p class="note">Watch-conditions above are the pre-registered hypothesis
+<b>candidates</b> (charter: recorder/mcx/README.md) being observed live —
+they are research questions, not trade advice. Signal cards can only appear
+here after P2 grading earns them, the same road the condor walked.
+Refreshes every minute during MCX hours · <a href="research.html">research page</a></p>
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d=2) => v == null ? "—" : Number(v).toFixed(d);
+
+function card(title, body) {
+  return `<div class="card"><h3>${title}</h3>${body}</div>`;
+}
+
+function render(d) {
+  const bars = d.bars || [];
+  const last = bars.length ? bars[bars.length-1][4] : null;
+  const dayO = bars.length ? bars[0][1] : null;
+  const hi = bars.length ? Math.max(...bars.map(b=>b[2])) : null;
+  const lo = bars.length ? Math.min(...bars.map(b=>b[3])) : null;
+  const pc = d.prev_close;
+  $("contract").textContent = `${d.contract || ""} · updated ${d.updated || "—"}`;
+
+  const chg = (last && pc) ? 100*(last-pc)/pc : null;
+  const rng = (hi && lo && last) ? 100*(hi-lo)/last : null;
+  const avgR = d.clim && d.clim.avg_range_pct;
+  $("stats").innerHTML =
+    card("Last price", `<div class="big">${fmt(last)}</div>
+      <span class="${chg>=0?"up":"dn"}">${chg==null?"—":(chg>=0?"+":"")+fmt(chg)}% vs prev close</span>`) +
+    card("Today's range", `<div class="big">${fmt(rng)}%</div>
+      <span class="mut">3-yr average: ${fmt(avgR)}% — ${rng && avgR ? (rng>avgR?"busier":"quieter") : "…"} than usual</span>`) +
+    card("Busiest hours (3-yr habit)", `<div class="big">18–20h IST</div>
+      <span class="mut">evening session carries the day — plan attention there</span>`);
+
+  // watch panels
+  let gapHtml = "—";
+  if (dayO && pc) {
+    const gap = 100*(dayO-pc)/pc;
+    const filled = bars.some(b => b[3] <= pc && pc <= b[2]);
+    gapHtml = `<div class="big ${gap>=0?"up":"dn"}">${(gap>=0?"+":"")+fmt(gap)}%</div>
+      <span class="mut">H-gap: 45% of days gap &gt;0.5% — today ${Math.abs(gap)>0.5?"qualifies":"does not qualify"};
+      status: <b>${filled ? "FILLED" : "unfilled"}</b></span>`;
+  }
+  let burstHtml = `<span class="mut">forms 09:00–09:30</span>`;
+  const b930 = bars.filter(b => { const t = new Date(b[0]*1000);
+    const m = t.getHours()*60+t.getMinutes(); return m >= 540 && m < 570; });
+  if (b930.length && last) {
+    const bo = b930[0][1], bc = b930[b930.length-1][4];
+    const dir = bc >= bo ? 1 : -1, mag = 100*(bc-bo)/bo;
+    const now = 100*(last-bc)/bc;
+    const cont = dir*now > 0;
+    burstHtml = `<div class="big">${mag>=0?"+":""}${fmt(mag)}% ${dir>0?"▲":"▼"}</div>
+      <span class="mut">H-burst: since 09:30 price moved ${now>=0?"+":""}${fmt(now)}% →
+      <b>${cont ? "CONTINUING" : "FADING"}</b> so far</span>`;
+  }
+  let usHtml;
+  const nowIst = bars.length ? new Date(bars[bars.length-1][0]*1000) : new Date();
+  const mNow = nowIst.getHours()*60 + nowIst.getMinutes();
+  if (mNow < 1080) usHtml = `<div class="big">${Math.floor((1080-mNow)/60)}h ${(1080-mNow)%60}m</div>
+      <span class="mut">until the 18:00–20:00 IST window (US open) — gold's loudest hours</span>`;
+  else {
+    const w = bars.filter(b => { const t = new Date(b[0]*1000);
+      const m = t.getHours()*60+t.getMinutes(); return m >= 1080 && m < 1200; });
+    if (w.length) {
+      const wm = 100*(w[w.length-1][4]-w[0][1])/w[0][1];
+      usHtml = `<div class="big ${wm>=0?"up":"dn"}">${wm>=0?"+":""}${fmt(wm)}%</div>
+        <span class="mut">H-window: US-open window move ${mNow<1200?"(live)":"(closed)"}</span>`;
+    } else usHtml = `<span class="mut">no window bars yet</span>`;
+  }
+  $("watch").innerHTML =
+    card("Watch · overnight gap", gapHtml) +
+    card("Watch · 09:00 burst", burstHtml) +
+    card("Watch · US-open window", usHtml);
+
+  // chart
+  const cv = $("chart"), ctx = cv.getContext("2d");
+  const W = cv.width = cv.clientWidth * devicePixelRatio;
+  const H = cv.height = 340 * devicePixelRatio;
+  ctx.clearRect(0,0,W,H);
+  if (!bars.length) { ctx.fillStyle="#77839a";
+    ctx.font = `${13*devicePixelRatio}px sans-serif`;
+    ctx.fillText("Waiting for today's first bars (MCX opens 09:00 IST)…", 20, 40);
+    return; }
+  const pad = 10*devicePixelRatio, right = 70*devicePixelRatio;
+  const min = Math.min(lo, pc||lo), max = Math.max(hi, pc||hi);
+  const y = v => pad + (max-v)/(max-min || 1)*(H-2*pad);
+  const n = Math.max(bars.length, 150);
+  const bw = (W-right-2*pad)/n;
+  if (pc) { ctx.strokeStyle="#3a4a60";
+    ctx.setLineDash([6,6]); ctx.beginPath();
+    ctx.moveTo(pad, y(pc)); ctx.lineTo(W-right, y(pc)); ctx.stroke();
+    ctx.setLineDash([]); }
+  bars.forEach((b,i) => {
+    const x = pad + i*bw + bw/2;
+    const [ , o, h2, l2, c ] = b;
+    ctx.strokeStyle = ctx.fillStyle = c >= o ? "#31b06e" : "#e05252";
+    ctx.beginPath(); ctx.moveTo(x, y(h2)); ctx.lineTo(x, y(l2)); ctx.stroke();
+    const t = Math.min(y(o), y(c)), hgt = Math.max(Math.abs(y(o)-y(c)), devicePixelRatio);
+    ctx.fillRect(x-bw*0.35, t, bw*0.7, hgt);
+  });
+  ctx.fillStyle="#d7e0ea"; ctx.font = `${12*devicePixelRatio}px sans-serif`;
+  [max, (max+min)/2, min].forEach(v =>
+    ctx.fillText(fmt(v), W-right+6*devicePixelRatio, y(v)+4*devicePixelRatio));
+}
+
+let lastData = null;
+async function tick() {
+  try {
+    const r = await fetch("gold_live.json?t=" + Date.now());
+    if (r.ok) { lastData = await r.json(); render(lastData); }
+  } catch (e) { console.warn("gold tick:", e); }
+}
+// First paint after layout (a 0-width canvas draws nothing), redraw on resize.
+requestAnimationFrame(() => requestAnimationFrame(tick));
+addEventListener("resize", () => lastData && render(lastData));
+setInterval(tick, 60000);
+</script>
+</body>
+</html>
