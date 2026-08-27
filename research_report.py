@@ -223,6 +223,31 @@ def build() -> str:
             "Venue-portable by design: MCX is the legal venue today; XAUUSD "
             "is the NRI-era venue. Charter and rules: recorder/mcx/README.md</p>")
 
+    # LIVE book — broker truth. The app's journal is immutable once closed
+    # (by design); the reconciled Kite tradebook is the system of record for
+    # what the human actually did. Rendered so the true history is visible.
+    lb = load_json(DATA / "live_book.json", {})
+    live_html = ('<p class="note">No tradebook imported yet — run '
+                 'recorder/tradebook_import.py on a Kite Console CSV.</p>')
+    if lb.get("round_trips"):
+        s = lb.get("summary", {})
+        rows_lb = [[t["sell_at"][:10], esc(t["symbol"]), str(t["qty"]),
+                    f'{t["buy"]:.2f} → {t["sell"]:.2f}',
+                    money(t["gross"])]
+                   for t in reversed(lb["round_trips"])]
+        live_html = (
+            f'<p><b>{s.get("trips", 0)} round trips · {s.get("wins", 0)} wins · '
+            f'gross {money(s.get("gross_rupees", 0))}</b> '
+            f'<span class="note">(before ~₹90/trip charges; source: Kite '
+            f'Console tradebook — import a fresh CSV to update)</span></p>'
+            + table(["Exit date", "Contract", "Qty", "Buy → Sell", "Gross"],
+                    rows_lb))
+        if lb.get("open_positions"):
+            live_html += "".join(
+                f'<p class="note">OPEN: {esc(o["symbol"])} x{o["qty"]} @ '
+                f'{o["buy"]} since {esc(o["buy_at"][:16])}</p>'
+                for o in lb["open_positions"])
+
     def book_tag(t: dict) -> str:
         if not is_shadow(t):
             return "real"
@@ -405,6 +430,11 @@ def build() -> str:
 <div class="tab" id="findings">
 {section("Paper book scoreboard", scoreboard + touch_html,
          "Gross figures; net-of-charges lives on the dashboard Paper tab.")}
+{section("Your LIVE book — broker truth", live_html,
+         "Reconciled from Kite Console's tradebook (FIFO-paired). The "
+         "dashboard journal is immutable once rows close — this table is "
+         "what actually happened at the broker, and it wins every "
+         "disagreement.")}
 {section("Every fill, graded", fills)}
 {section("Every card the engine issued", cards_html)}
 {section("Gold lab — experiment #2 (climatology)", gold_html,
