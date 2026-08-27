@@ -145,3 +145,39 @@ as you wanted.
 
 One login, a few glances, one report. Everything else is the machine
 building your evidence.
+
+---
+
+## The 2-minute daily read (updated 27-Aug — the lab grew rooms)
+
+**Morning (1 minute, before your 08:45 login):**
+1. Phone: any Telegram cards overnight? (Gold trades evenings; its TRIAL
+   results arrive while you sleep.)
+2. If NIFTY gapped big at open, remember the almanac: **gaps ≥0.5% fill
+   only 19% of days.** Don't bet on "it will come back."
+
+**Evening (1 minute, after 16:00):** open
+`localhost:3777/research.html` → Findings tab, glance top to bottom:
+- **Entry quality (north-star)** — is the touched-+5% percentage rising?
+  That single number = "are signals getting better".
+- **Your LIVE book** — broker truth of your own trading. This table beats
+  the journal in any disagreement.
+- **Gold lab** — forward column only (backtest is homework, forward is the
+  exam). 30+ per rule before believing anything.
+- **NIFTY climatology** — the almanac. Base rates that protect you from
+  YouTube patterns and your own hunches.
+
+**How to trust ANY number on these pages — three questions:**
+1. **What's the n?** (the sample count in brackets). n<10 = story,
+   n<30 = hint, n>100 = knowledge. The pages always show it — that's
+   deliberate.
+2. **Forward or backtest?** Backtest = rehearsed with hindsight risk;
+   forward = graded live, blind. Only forward earns promotions.
+3. **Does it refresh itself?** Everything on these pages rebuilds nightly
+   from raw recorded data — nothing is hand-typed, so nothing can be
+   quietly "adjusted". To verify any claim, just ask: "show me the working
+   for X" and the raw query runs again in front of you.
+
+Gold's live page: `localhost:3777/gold.html` (evenings are its show).
+Terms you don't know: research page → **Glossary** tab (theta, delta,
+GOLDEN, everything).
