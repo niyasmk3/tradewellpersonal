@@ -93,9 +93,23 @@ def snapshot(kite, fut) -> dict:
     }
 
 
+def push(msg: str) -> None:
+    """TRIAL-card alert to the same Telegram webhook the NIFTY stack uses.
+    Every message says TRIAL/paper — these are experiments, never advice."""
+    url = read_env_key("ALERT_WEBHOOK_URL")
+    if not url:
+        return
+    try:
+        import requests
+        requests.post(url, json={"text": msg}, timeout=6)
+    except Exception:
+        pass
+
+
 def main() -> int:
     kite = fut = None
     fut_day = None
+    prev_state: dict[str, str] = {}
     while True:
         now = datetime.now(IST)
         if not in_session(now):
@@ -109,6 +123,20 @@ def main() -> int:
             tmp = OUT.with_suffix(".tmp")
             tmp.write_text(json.dumps(data))
             tmp.replace(OUT)
+            # Alert on TRIAL state changes (first pass records silently, so a
+            # feeder restart never replays old cards to the phone).
+            for c in data.get("cards", []):
+                r, s = c["rule"], c["state"]
+                was = prev_state.get(r)
+                if was is not None and was != s:
+                    if s == "open":
+                        push(f"🥇 GOLD TRIAL {r}: OPEN {c.get('dir')} @ "
+                             f"{c.get('entry')} — paper only, no order exists")
+                    elif s == "closed":
+                        push(f"🥇 GOLD TRIAL {r}: closed via {c.get('reason')} "
+                             f"{c.get('pct', 0):+.2f}% (₹{c.get('rupees', 0):+,} "
+                             f"paper, 1 GOLDM lot)")
+                prev_state[r] = s
         except Exception as e:
             print(f"{now:%H:%M:%S} gold_live: {e} — retrying", flush=True)
             kite = None            # forces re-auth pickup after morning login

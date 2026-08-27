@@ -77,6 +77,16 @@ function renderLedger(L) {
     <td style="padding:2px 12px"><b>Backtest</b> (pre-freeze ${L.frozen_at})</td>
     <td style="padding:2px 12px"><b>Forward</b> (the only part that earns promotion)</td></tr>
     ${rules.map(r => row(r, {backtest:L.backtest[r], forward:L.forward[r]})).join("")}</table>
+    <div style="margin-top:10px"><b style="font-size:12px" class="mut">RECENT TRADES</b>
+    <table style="font-size:12px">${(L.recent||[]).slice(-8).reverse().map(t => {
+      const d = new Date((t.day*86400 - 19800 + 43200)*1000);
+      const ds = d.toLocaleDateString("en-IN", {day:"2-digit", month:"short"});
+      return `<tr><td style="padding:1px 10px 1px 0" class="mut">${ds}</td>
+        <td style="padding:1px 10px">${t.rule}</td>
+        <td style="padding:1px 10px">${t.dir} ${fmt(t.entry)} → ${fmt(t.exit)}</td>
+        <td style="padding:1px 10px" class="mut">${t.reason}</td>
+        <td style="padding:1px 10px" class="${t.rupees>=0?"up":"dn"}">₹${t.rupees>=0?"+":""}${t.rupees}</td></tr>`;
+    }).join("")}</table></div>
     <span class="mut" style="font-size:12px">Exits idealised, no slippage model yet — the forward book measures how honest that is. 30+ forward samples per rule before any verdict.</span>`;
 }
 
