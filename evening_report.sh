@@ -31,6 +31,9 @@ mkdir -p "$OUT_DIR"
   echo
   echo "=== Gold lab (MCX + XAUUSD refresh + climatology) ================"
   "$PY" "$ROOT/recorder/mcx/nightly_gold.py" 2>&1
+  echo
+  echo "=== NIFTY climatology (3y habits, knowledge only) ================"
+  "$PY" "$ROOT/recorder/nifty_climatology.py" 2>&1
 } > "$OUT_DIR/$STAMP.txt"
 
 # One-page visual dashboard of everything above — bookmarkable.

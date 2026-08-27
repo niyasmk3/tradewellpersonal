@@ -248,6 +248,32 @@ def build() -> str:
                 f'{o["buy"]} since {esc(o["buy_at"][:16])}</p>'
                 for o in lb["open_positions"])
 
+    nc = load_json(DATA / "nifty_climatology.json", {})
+    nifty_clim_html = '<p class="note">First nightly pass pending.</p>'
+    if nc.get("sessions"):
+        g5, g3 = nc.get("gap_05", {}), nc.get("gap_03", {})
+        orb = nc.get("orb_continuation", {})
+        dow = nc.get("avg_range_by_dow", {})
+        wk = " · ".join(f"{k} {v}%" for k, v in dow.items()
+                        if k in ("Mon", "Tue", "Wed", "Thu", "Fri"))
+        nifty_clim_html = (
+            f"<ul style='margin-left:18px'>"
+            f"<li><b>Big gaps do NOT fill:</b> gaps ≥0.5% closed back to the "
+            f"previous day's price only <b>{g5.get('fill_pct')}%</b> of the "
+            f"time ({g5.get('n')} cases); even ≥0.3% gaps filled just "
+            f"{g3.get('fill_pct')}% ({g3.get('n')}). NIFTY gaps RUN — the "
+            f"same lesson gold's H1 backtest paid ₹79k to learn.</li>"
+            f"<li><b>Opening-range 'breakout' is a coin flip:</b> the first "
+            f"30 minutes' direction continued through the day only "
+            f"{orb.get('pct')}% of the time ({orb.get('n')} qualifying days) "
+            f"— the classic retail ORB pattern has no edge here.</li>"
+            f"<li><b>The 10:00–12:00 band carries "
+            f"{nc.get('toxic_window_share_pct')}% of daily movement</b> — "
+            f"proportional to its length: the toxic window is not quiet, it "
+            f"moves without going anywhere. Chop, not sleep.</li>"
+            f"<li><b>No magic weekday:</b> average ranges nearly identical "
+            f"({wk}).</li></ul>")
+
     def book_tag(t: dict) -> str:
         if not is_shadow(t):
             return "real"
@@ -441,6 +467,10 @@ def build() -> str:
          "A second evidence stream, same rules: measure first, believe later. "
          "Gold has no signal engine — this section is the market's own habits, "
          "refreshed nightly from MCX and Dukascopy data.")}
+{section("NIFTY climatology — 3-year habits", nifty_clim_html,
+         "Knowledge, not signals: base rates from 747 sessions of 3-minute "
+         "candles. A map of how this market usually behaves — useful priors "
+         "for the human today and for the research run later.")}
 {section("NSE data collection (free archives, nightly)", nse)}
 {section("Live capture health", cap)}
 {section("Daily report archive (full history)", history)}

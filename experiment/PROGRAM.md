@@ -119,6 +119,13 @@ week — confounded experiments teach nothing, twice.
       but it is pure discipline and free. MUST land before the first real
       run, in a calm dedicated session, with the selftest re-run — harness.py
       is ground truth and does not get edited casually or late at night.
+- [ ] DEFERRED to September, post-ignition (decided 27-Aug): a NIFTY-futures
+      candle-rules lab cloning the gold pattern. Edge prior is LOW (NIFTY
+      intraday is the most arbitraged tape in India — the 747-session
+      climatology already shows ORB continuation at a coin-flip 52%), and
+      the verdict queue is full. Revisit only if gold's forward book proves
+      window-rules pay after charges. Climatology (knowledge only) shipped
+      27-Aug instead: gaps ≥0.5% fill just 19% — NIFTY gaps run.
 - [ ] tape-state instability (744-session climatology, 19-Aug): base rates at
       11:00 are two-way 35.8% / stretched 35.1% / developing 29.2%, but only
       47% of days keep their 11:00 state at 14:00 — and of days developing at
