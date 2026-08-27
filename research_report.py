@@ -114,6 +114,10 @@ GLOSSARY: list[tuple[str, str]] = [
     ("Option selling (the mirror)", "The seller collects the premium the buyer pays and profits when nothing dramatic happens — theta (the rent) works FOR them. Wins small and often, loses rarely but hugely. Naked selling needs ~₹1.5–2L margin per lot; the capped-risk form is a spread."),
     ("Straddle", "One CE plus one PE at the same at-the-money strike. SELLING it is the classic 'collect rent from both sides' bet that the market stays quiet — and the classic way to get hurt when it doesn't."),
     ("Seller shadows", "Our zero-risk studies of the sell side: the exact other side of our fills (fade), straddle-selling in specific windows, and overnight decay — all computed from our own recorded tape, graded nightly, decision at 30+ samples."),
+    ("Theta (time decay)", "An option is a melting ice cube: part of its price is pure time, and that part evaporates every day even if NIFTY stands still. Mild while expiry is weeks away, brutal in the final days — which is why cheap 1–2 day options feel like bargains and behave like nearly-melted ice. Buyers PAY theta daily; sellers collect it."),
+    ("Delta", "How much the option's premium moves when NIFTY moves 1 point. A near-ATM option has delta around 0.5: NIFTY drops 100 → a PE gains roughly 40–50. Deep out-of-the-money options have tiny delta — the market must travel far before they even notice."),
+    ("Gamma", "How fast delta itself changes. Near expiry gamma explodes: tiny NIFTY wiggles flip an option's value violently in minutes. It's why expiry-day trading is a casino and why the condor module refuses to open positions at DTE 0 — 'gamma risk EXTREME' is this."),
+    ("Vega / IV crush", "Sensitivity to implied volatility — the market's fear meter (VIX). When fear deflates, ALL premiums shrink, even if your direction was right. Being correct about NIFTY and still losing money on the option is usually vega's work; it's why our thesis-level label grades the market call separately from the premium outcome."),
 ]
 
 
