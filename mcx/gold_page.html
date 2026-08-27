@@ -48,20 +48,29 @@ function card(title, body) {
 }
 
 function trialCard(c) {
-  const badge = `<span class="tag" style="font-size:10px">TRIAL</span>`;
+  const badge = `<span class="tag" style="font-size:10px">PAPER TRIAL</span>`;
+  const win = c.window ? ` · window ${c.window} IST` : "";
   if (c.state === "none")
     return card(`${c.label} ${badge}`,
-      `<span class="mut">no setup — needs ${c.qualify}</span>`);
+      `<span class="mut">no setup — needs ${c.qualify}${win}</span>`);
+  const levels = (c.target_px || c.stop_px) ?
+    `<div style="margin-top:4px; font-size:12px">
+       <span class="up">TARGET ${fmt(c.target_px,1)}</span> &nbsp;·&nbsp;
+       <span class="dn">STOP ${fmt(c.stop_px,1)}</span>
+       <span class="mut">${win}</span></div>` : "";
   if (c.state === "open") {
     const sign = c.dir === "LONG" ? 1 : -1;
     const p = c.last ? sign*100*(c.last-c.entry)/c.entry : null;
+    const rup = (p!=null && c.entry) ? Math.round(p/100*c.entry*10) : null;
     return card(`${c.label} ${badge}`,
-      `<div class="big" style="color:var(--amber)">OPEN · ${c.dir} @ ${fmt(c.entry)}</div>
-       <span class="${p>=0?"up":"dn"}">now ${p==null?"—":(p>=0?"+":"")+fmt(p)}% (paper)</span>`);
+      `<div class="big" style="color:var(--amber)">${c.dir} @ ${fmt(c.entry)} · OPEN</div>
+       <span class="${p>=0?"up":"dn"}">now ${p==null?"—":(p>=0?"+":"")+fmt(p)}%${rup==null?"":" (₹"+(rup>=0?"+":"")+rup+" paper)"}</span>
+       ${levels}`);
   }
   return card(`${c.label} ${badge}`,
     `<div class="big ${c.rupees>=0?"up":"dn"}">${c.rupees>=0?"+":""}₹${c.rupees} · ${c.reason}</div>
-     <span class="mut">${c.dir} ${fmt(c.entry)} → ${fmt(c.exit)} (${c.pct>=0?"+":""}${fmt(c.pct)}%)</span>`);
+     <span class="mut">${c.dir} ${fmt(c.entry)} → ${fmt(c.exit)} (${c.pct>=0?"+":""}${fmt(c.pct)}%)</span>
+     ${levels}`);
 }
 
 function renderLedger(L) {

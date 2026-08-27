@@ -69,11 +69,21 @@ def snapshot(kite, fut) -> dict:
         t = live_trades.get(rule)
         state = ("open" if t and t.get("exit") is None
                  else "closed" if t else "none")
-        cards.append({"rule": rule, "label": meta["label"],
-                      "qualify": meta["qualify"], "state": state,
-                      **{k: t.get(k) for k in
-                         ("dir", "entry", "exit", "reason", "pct",
-                          "rupees", "last") if t}})
+        c = {"rule": rule, "label": meta["label"],
+             "qualify": meta["qualify"], "state": state,
+             "window": f"{meta['entry_after']}–{meta['exit_by']}",
+             **{k: t.get(k) for k in
+                ("dir", "entry", "exit", "reason", "pct",
+                 "rupees", "last") if t}}
+        # Homepage-style plan levels: same arithmetic the simulator exits on.
+        if t and t.get("entry"):
+            sign = 1 if t["dir"] == "LONG" else -1
+            c["stop_px"] = round(t["entry"] * (1 - sign * meta["stop_pct"] / 100), 1)
+            c["target_px"] = (round(prev_close, 1) if rule == "H1-gapfade"
+                              and prev_close else
+                              round(t["entry"] * (1 + sign * meta.get(
+                                  "target_pct", 0) / 100), 1))
+        cards.append(c)
 
     return {
         "updated": now.strftime("%H:%M:%S IST"),
