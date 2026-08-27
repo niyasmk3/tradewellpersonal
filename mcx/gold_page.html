@@ -27,10 +27,11 @@
 </style>
 </head>
 <body>
-<h1>Gold Lab <small id="contract">—</small> <span class="tag">SHADOW TRIAL — ADVISORY NOTHING, PAPER EVERYTHING</span></h1>
+<h1>Gold Lab <small id="contract">—</small> <small id="age"></small> <span class="tag">SHADOW TRIAL — ADVISORY NOTHING, PAPER EVERYTHING</span></h1>
 <div class="row" id="cards"></div>
 <div class="row" id="stats"></div>
 <canvas id="chart" width="1200" height="340"></canvas>
+<div class="card" id="pulse" style="margin-top:14px; display:none"></div>
 <div class="row" id="watch"></div>
 <div class="card" id="ledger" style="margin-top:14px">loading ledger…</div>
 <p class="note">Watch-conditions above are the pre-registered hypothesis
@@ -153,40 +154,93 @@ function render(d) {
 
   // chart
   const cv = $("chart"), ctx = cv.getContext("2d");
-  const W = cv.width = cv.clientWidth * devicePixelRatio;
-  const H = cv.height = 340 * devicePixelRatio;
+  const dpr = devicePixelRatio || 1;
+  const W = cv.width = cv.clientWidth * dpr;
+  const H = cv.height = 340 * dpr;
   ctx.clearRect(0,0,W,H);
   if (!bars.length) { ctx.fillStyle="#77839a";
-    ctx.font = `${13*devicePixelRatio}px sans-serif`;
+    ctx.font = `${13*dpr}px sans-serif`;
     ctx.fillText("Waiting for today's first bars (MCX opens 09:00 IST)…", 20, 40);
     return; }
-  const pad = 10*devicePixelRatio, right = 70*devicePixelRatio;
+  const pad = 10*dpr, right = 74*dpr, bottom = 16*dpr;
   const min = Math.min(lo, pc||lo), max = Math.max(hi, pc||hi);
-  const y = v => pad + (max-v)/(max-min || 1)*(H-2*pad);
+  const y = v => pad + (max-v)/(max-min || 1)*(H-2*pad-bottom);
   const n = Math.max(bars.length, 150);
   const bw = (W-right-2*pad)/n;
+  const xs = i => pad + i*bw + bw/2;
+  // hour grid + labels
+  ctx.font = `${10*dpr}px sans-serif`;
+  bars.forEach((b,i) => { const t = new Date(b[0]*1000);
+    if (t.getMinutes() === 0) {
+      ctx.strokeStyle = "rgba(90,104,128,.15)"; ctx.beginPath();
+      ctx.moveTo(xs(i), pad); ctx.lineTo(xs(i), H-bottom-2*dpr); ctx.stroke();
+      ctx.fillStyle = "#5a6880"; ctx.fillText(t.getHours()+":00", xs(i)-9*dpr, H-3*dpr);
+    }});
   if (pc) { ctx.strokeStyle="#3a4a60";
     ctx.setLineDash([6,6]); ctx.beginPath();
     ctx.moveTo(pad, y(pc)); ctx.lineTo(W-right, y(pc)); ctx.stroke();
     ctx.setLineDash([]); }
   bars.forEach((b,i) => {
-    const x = pad + i*bw + bw/2;
+    const x = xs(i);
     const [ , o, h2, l2, c ] = b;
     ctx.strokeStyle = ctx.fillStyle = c >= o ? "#31b06e" : "#e05252";
     ctx.beginPath(); ctx.moveTo(x, y(h2)); ctx.lineTo(x, y(l2)); ctx.stroke();
-    const t = Math.min(y(o), y(c)), hgt = Math.max(Math.abs(y(o)-y(c)), devicePixelRatio);
+    const t = Math.min(y(o), y(c)), hgt = Math.max(Math.abs(y(o)-y(c)), dpr);
     ctx.fillRect(x-bw*0.35, t, bw*0.7, hgt);
   });
-  ctx.fillStyle="#d7e0ea"; ctx.font = `${12*devicePixelRatio}px sans-serif`;
-  [max, (max+min)/2, min].forEach(v =>
-    ctx.fillText(fmt(v), W-right+6*devicePixelRatio, y(v)+4*devicePixelRatio));
+  // overlays — same trio as the NIFTY chart
+  const closes = bars.map(b=>b[4]);
+  const ema = p => { const k = 2/(p+1); let e = closes[0];
+    return closes.map(c => e = c*k + e*(1-k)); };
+  let pv=0, vv=0;
+  const vwap = bars.map(b => { const tp=(b[2]+b[3]+b[4])/3, v=(b[5]||1);
+    pv += tp*v; vv += v; return pv/vv; });
+  const line = (arr, color) => { ctx.strokeStyle = color; ctx.lineWidth = 1.4*dpr;
+    ctx.beginPath(); arr.forEach((v,i) => i ? ctx.lineTo(xs(i), y(v)) : ctx.moveTo(xs(i), y(v)));
+    ctx.stroke(); ctx.lineWidth = 1; };
+  line(vwap, "#4a7dcf"); line(ema(9), "#d9a441"); line(ema(20), "#9a6fd0");
+  // live last-price line + tag + pulse dot
+  const lp = closes[closes.length-1], up = pc ? lp >= pc : true;
+  const col = up ? "#31b06e" : "#e05252";
+  ctx.strokeStyle = col; ctx.setLineDash([3,3]); ctx.beginPath();
+  ctx.moveTo(pad, y(lp)); ctx.lineTo(W-right, y(lp)); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = col;
+  ctx.fillRect(W-right+2*dpr, y(lp)-9*dpr, right-4*dpr, 18*dpr);
+  ctx.fillStyle = "#0b0f14"; ctx.font = `bold ${11*dpr}px sans-serif`;
+  ctx.fillText(fmt(lp), W-right+6*dpr, y(lp)+4*dpr);
+  ctx.fillStyle = col; ctx.beginPath();
+  ctx.arc(xs(bars.length-1), y(lp), 3*dpr, 0, 7); ctx.fill();
+  // y labels + legend
+  ctx.fillStyle = "#d7e0ea"; ctx.font = `${12*dpr}px sans-serif`;
+  [max, min].forEach(v => ctx.fillText(fmt(v), W-right+6*dpr, y(v)+4*dpr));
+  ctx.font = `${10*dpr}px sans-serif`;
+  [["VWAP","#4a7dcf"],["EMA9","#d9a441"],["EMA20","#9a6fd0"]].forEach((l,i) => {
+    ctx.fillStyle = l[1]; ctx.fillText(l[0], pad + i*52*dpr, pad + 4*dpr); });
+
+  // plain-language pulse, NIFTY-style
+  const pulse = $("pulse");
+  if (pc) {
+    const pos = (last-lo)/((hi-lo)||1)*100;
+    const used = rng && avgR ? rng/avgR*100 : null;
+    const gap2 = 100*(dayO-pc)/pc;
+    let txt = `Gold is trading ${pos<33?"near the bottom":pos>66?"near the top":"in the middle"} of today's range`;
+    if (used) txt += `, having covered ${used>130?"far more than":used<70?"only part of":"a good chunk of"} a normal day's travel (${used.toFixed(0)}%)`;
+    txt += `. Overnight gap ${gap2>=0?"+":""}${gap2.toFixed(2)}%${Math.abs(gap2)>0.5?" — a qualifying gap day for the fade trial":""}. `;
+    const hr = new Date(bars[bars.length-1][0]*1000).getHours();
+    txt += hr < 17 ? "The loud 18:00–20:00 US window is still ahead."
+         : hr < 20 ? "This IS the loud window — gold's busiest hours, live now."
+         : "The loud window has passed; the session tail is usually quiet.";
+    pulse.style.display = "block";
+    pulse.innerHTML = `<h3>Market pulse · gold</h3><span class="mut">${txt}</span>`;
+  }
 }
 
-let lastData = null;
+let lastData = null, lastStamp = "";
 async function tick() {
   try {
     const r = await fetch("gold_live.json?t=" + Date.now());
-    if (r.ok) { lastData = await r.json(); render(lastData); }
+    if (r.ok) { lastData = await r.json(); render(lastData);
+      lastStamp = lastData.updated || ""; }
     const p = await fetch("gold_paper.json?t=" + Date.now());
     if (p.ok) renderLedger(await p.json());
   } catch (e) { console.warn("gold tick:", e); }
@@ -194,7 +248,19 @@ async function tick() {
 // First paint after layout (a 0-width canvas draws nothing), redraw on resize.
 requestAnimationFrame(() => requestAnimationFrame(tick));
 addEventListener("resize", () => lastData && render(lastData));
-setInterval(tick, 60000);
+setInterval(tick, 20000);
+// live freshness chip — green while the feeder breathes, amber when stale
+setInterval(() => {
+  const el = $("age");
+  if (!el || !lastStamp) return;
+  const [h,m,s] = lastStamp.split(" ")[0].split(":").map(Number);
+  const now = new Date();
+  let age = (now.getHours()*3600 + now.getMinutes()*60 + now.getSeconds())
+            - (h*3600 + m*60 + s);
+  if (age < 0) age += 86400;
+  el.textContent = `· feed ${age}s ago`;
+  el.style.color = age <= 90 ? "#31b06e" : "#d9a441";
+}, 1000);
 </script>
 </body>
 </html>

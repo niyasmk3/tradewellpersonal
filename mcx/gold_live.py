@@ -82,7 +82,8 @@ def snapshot(kite, fut) -> dict:
         "expiry": str(fut.get("expiry") or "")[:10],
         "prev_close": prev_close,
         "bars": [[int(b["date"].timestamp()), b["open"], b["high"],
-                  b["low"], b["close"]] for b in today],
+                  b["low"], b["close"], b.get("volume") or 0]
+                 for b in today],
         "clim": {
             "avg_range_pct": (clim.get("mcx_day") or {}).get("avg_range_pct"),
             "avg_gap_pct": (clim.get("mcx_day") or {}).get("avg_gap_pct"),
@@ -142,7 +143,7 @@ def main() -> int:
             kite = None            # forces re-auth pickup after morning login
             time.sleep(120)
             continue
-        time.sleep(60)
+        time.sleep(25)   # livelier chart; still gentle on the historical API
 
 
 if __name__ == "__main__":
