@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.config import get_settings
 
 from app.signals.models import TradingMode
-from app.signals.modes import ladder_params
+from app.signals.modes import ladder_params, paper_only_block
 from app.signals.risk import price_ladder
 from app.signals.store import signal_store
 from app.state import market_state
@@ -145,14 +145,12 @@ def enter(body: EnterRequest) -> Trade:
     if product not in ("MIS", "NRML"):
         raise HTTPException(status_code=400, detail="product must be MIS or NRML")
     cfg = get_settings()
-    # Scalp cards are PAPER-ONLY until the paper book earns the flip: at scalp
-    # cadence the charges model shows friction eating 20-30%% of gross, and the
-    # SEBI 93%%-lose statistic is disproportionately made of option scalpers.
-    if card.mode is TradingMode.SCALP and not cfg.scalp_live_enabled:
-        raise HTTPException(
-            status_code=409,
-            detail=("Scalp mode is paper-only: let the paper book accumulate 50+ "
-                    "honest fills, then set SCALP_LIVE_ENABLED=true if the expectancy survives."))
+    # Audition modes are PAPER-ONLY until the paper book earns the flip —
+    # scalp since launch (friction), intraday since 31-Aug (August: 14% WR,
+    # -Rs5,050, zero Target-1 exits). One rule source: modes.paper_only_block.
+    block = paper_only_block(card.mode, cfg)
+    if block:
+        raise HTTPException(status_code=409, detail=block)
     # Same gate as the card: no configured capital means sizing cannot shrink
     # the position to pay for a wider stop, so the premium stop keeps governing.
     disaster_pct = (cfg.premium_disaster_pct

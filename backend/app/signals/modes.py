@@ -45,6 +45,25 @@ def all_profiles(cfg: Settings) -> dict[str, ModeProfile]:
     return _build_all(cfg)
 
 
+def paper_only_block(mode: TradingMode, cfg: Settings) -> str | None:
+    """Reason a mode's cards must NOT reach an order path (journal entry or
+    Kite hand-off), or None when the mode is live. ONE place for the
+    audition rules so the two order routes can never drift apart. The paper
+    book keeps filling audition modes regardless — that is how they earn
+    their way back.
+    """
+    if mode is TradingMode.SCALP and not cfg.scalp_live_enabled:
+        return ("Scalp mode is paper-only: let the paper book accumulate 50+ "
+                "honest fills, then set SCALP_LIVE_ENABLED=true if the "
+                "expectancy survives.")
+    if mode is TradingMode.INTRADAY and not cfg.intraday_live_enabled:
+        return ("Intraday is in paper audition (August: 14% win rate, "
+                "-Rs5,050, zero Target-1 exits in the month): 50+ honest "
+                "paper fills at positive net expectancy flip "
+                "INTRADAY_LIVE_ENABLED=true and re-arm live entries.")
+    return None
+
+
 def ladder_params(cfg: Settings, mode: TradingMode) -> tuple[float, float, float] | None:
     """(premium_sl_pct, rr_target1, rr_target2) for `mode`, or None if unknown.
 
@@ -70,7 +89,11 @@ def _build_all(cfg: Settings) -> dict[str, ModeProfile]:
     all_profiles = {
         TradingMode.INTRADAY.value: ModeProfile(
             mode=TradingMode.INTRADAY,
-            label="Intraday",
+            # Demoted to paper audition 31-Aug (August: 14% WR, -Rs5,050,
+            # zero T1 exits) — earns "Intraday" back at 50 honest paper
+            # fills with positive net expectancy (INTRADAY_LIVE_ENABLED).
+            label=("Intraday" if cfg.intraday_live_enabled
+                   else "Intraday (paper audition)"),
             timeframe=cfg.signal_timeframe,           # 3m
             expiry_key="nearest",                     # weekly for NIFTY
             validity_seconds=cfg.signal_validity_seconds,

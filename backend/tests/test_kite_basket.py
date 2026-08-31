@@ -36,6 +36,15 @@ from app.signals.models import (
 NOW = (int(time.time()) + 19800) // 86400 * 86400 - 19800 + 12 * 3600
 kb.time.time = lambda: float(NOW)  # type: ignore
 
+# Intraday entered paper audition on 31-Aug (INTRADAY_LIVE_ENABLED=false by
+# default). These tests exercise BASKET MECHANICS with intraday cards, so the
+# audition gate is armed off here — it has its own tests in
+# test_audition_evening.py. Wraps the real settings (the .env KITE_API_KEY
+# must survive) instead of building fresh ones.
+_real_get_settings = kb.get_settings
+kb.get_settings = lambda: _real_get_settings().model_copy(
+    update={"intraday_live_enabled": True})
+
 
 class _FakeBuilder:
     def __init__(self, universes):

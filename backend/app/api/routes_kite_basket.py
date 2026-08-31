@@ -23,7 +23,7 @@ from app.config import get_settings
 from app.kite.instruments import chain_key
 from app.services import feed
 from app.signals.models import TradingMode
-from app.signals.modes import build_profiles
+from app.signals.modes import build_profiles, paper_only_block
 from app.signals.store import signal_store
 from app.state import market_state
 from app.trades.store import trade_store
@@ -150,9 +150,9 @@ def basket(
     profile = build_profiles(cfg).get(mode.value)
     if profile is None:
         raise HTTPException(status_code=409, detail=f"Mode '{mode.value}' is not enabled")
-    if mode is TradingMode.SCALP and not cfg.scalp_live_enabled:
-        raise HTTPException(status_code=409,
-                            detail="Scalp mode is paper-only — no Kite hand-off until SCALP_LIVE_ENABLED")
+    block = paper_only_block(mode, cfg)
+    if block:
+        raise HTTPException(status_code=409, detail=block)
 
     is_ce = card.direction.value == "CE"
     contract = _resolve_contract(symbol, profile.expiry_key, card.token, card.strike, is_ce)

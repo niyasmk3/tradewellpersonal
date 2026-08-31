@@ -83,6 +83,19 @@ class Settings(BaseSettings):
     # evidence, not enthusiasm — 50+ honest-fill paper scalps whose expectancy
     # survives the charges model (friction eats 20-30%% of gross at this cadence).
     scalp_live_enabled: bool = Field(default=False, alias="SCALP_LIVE_ENABLED")
+    # INTRADAY DEMOTED TO PAPER AUDITION (31-Aug, user decision on August
+    # evidence: 14 clean fills, 14% WR, -Rs5,050, ZERO Target-1 exits in 31
+    # days, avg loss 7x avg win). Same re-entry bar as scalp's audition: 50
+    # honest paper fills at positive net expectancy flip this to true — the
+    # paper book keeps filling and grading intraday cards throughout.
+    intraday_live_enabled: bool = Field(default=False, alias="INTRADAY_LIVE_ENABLED")
+    # EVENING-POSITIONAL SIZE CUT (31-Aug): positional entries at/after 14:30
+    # carry overnight-gap risk no stop can act on (18-Aug: one 15:21 entry
+    # gapped to -50.8%, -Rs3,884 — more than the rest of the month's
+    # positional book combined). Suggested lots are scaled by this factor
+    # until the overnight-hold ledger renders its verdict. 1.0 disables.
+    evening_positional_size_factor: float = Field(
+        default=0.5, ge=0.1, le=1.0, alias="EVENING_POSITIONAL_SIZE_FACTOR")
     # Refuse a scalp card when estimated round-trip charges exceed this share
     # of the gross move to Target 1 (at the suggested size). 0 disables.
     scalp_max_friction_pct: float = Field(default=0.20, ge=0, le=1, alias="SCALP_MAX_FRICTION_PCT")

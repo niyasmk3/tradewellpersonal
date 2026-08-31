@@ -176,11 +176,23 @@ class SignalService:
         halved = bool(card.event_note and lots > 1)
         if halved:
             lots = lots // 2
+        # EVENING-POSITIONAL GAP CUT (31-Aug): a positional entry at/after
+        # 14:30 rides the overnight gap — the one risk no stop can act on
+        # (18-Aug: 15:21 entry gapped to -50.8%). Scale the suggestion until
+        # the overnight-hold ledger renders its verdict; 1-lot suggestions
+        # cannot shrink, so the note carries the caution alone.
+        evening = (card.mode.value == "positional"
+                   and self.cfg.evening_positional_size_factor < 1.0
+                   and ((int(_time.time()) + 19800) % 86400) // 60 >= 14 * 60 + 30)
+        if evening and lots > 1:
+            lots = max(1, int(lots * self.cfg.evening_positional_size_factor))
         card.suggested_lots = max(0, lots)
         card.sizing_note = (
             f"{lots} lot(s) risks ≈₹{lots * per_lot_risk:,.0f} "
             f"({self.cfg.risk_per_trade_pct:.1f}% of ₹{capital:,.0f}) if the stop is hit"
             + (f" · HALVED for {card.event_note}" if halved else "")
+            + (" · EVENING entry: size cut — overnight gaps bypass stops"
+               if evening else "")
         )
 
     def _frame_integrity_veto(self, df, now: int) -> str | None:
