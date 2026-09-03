@@ -448,9 +448,9 @@ class Settings(BaseSettings):
     # always-buy-CE control; see docs/closing-day-strategy-2026-08-19.md.
     closing_signal_mode: str = Field(default="day_open", alias="CLOSING_SIGNAL_MODE")
     # Morning auto-grade: once the 09:50 exit print has settled on a trading
-    # day, the ops loop syncs and re-runs the closing + overnight analyses so
-    # yesterday's night lands in the ledgers (and grades the live 3pm card)
-    # without a manual click. Advisory analytics only — no orders, no pushes.
+    # day, the ops loop syncs and re-runs the closing analysis so yesterday's
+    # night lands in the ledger (and grades the live 3pm card) without a
+    # manual click. Advisory analytics only — no orders, no pushes.
     closing_auto_grade: bool = Field(default=True, alias="CLOSING_AUTO_GRADE")
 
     @property

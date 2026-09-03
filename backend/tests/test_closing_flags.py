@@ -15,7 +15,7 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.closing.calendar import IST
-from app.overnight import filters
+from app.closing import flags as filters
 
 
 def test_registration_is_frozen():
@@ -135,29 +135,3 @@ def test_live_scoreboard_counts_only_after_registration():
     assert sb["filtered_nights"] == 1
     assert sb["filters_fail"]["n"] == 1
     assert sb["verdict_due"] == 29
-
-
-def test_classify_agrees_with_the_registered_candidate():
-    """classify() (which partitions the Overnight ledger) and the
-    `lasthr_confirm` lambda in app/closing/signals.py (the pre-registered
-    candidate the docstrings point at) are two implementations of ONE rule.
-    Pin them to each other across a grid, so a refinement to either cannot
-    silently diverge the live scoreboard from the registered hypothesis."""
-    from app.closing.signals import CANDIDATES
-    from app.overnight.service import classify
-    lam = {k: f for k, _l, f in CANDIDATES}["lasthr_confirm"]
-    base = 24000.0
-    grid = [-120.0, -40.0, -0.5, 0.0, 0.5, 40.0, 120.0]
-    for body in grid:
-        for lasthr in grid:
-            p1500 = base + body
-            trade = {"signal_price": p1500, "day_open": base,
-                     "p1400": p1500 - lasthr}
-            row = {"p1500": p1500, "open": base, "p1400": p1500 - lasthr}
-            side = lam(row)          # +1 CE / -1 PE / None stand-aside
-            verdict = classify(trade)
-            if side is None:
-                assert verdict in ("SKIPPED", "UNCONFIRMABLE"), (body, lasthr)
-            else:
-                assert verdict == "TRADED", (body, lasthr)
-                assert side == (1 if body > 0 else -1)

@@ -67,8 +67,8 @@ const CURVE_SERIES = [
 
 const LEDGER_DISPLAY_CAP = 100;
 
-/** Same convention as OpeningLab.errHint — a 404 here means the backend
- *  process predates the /rnd routes, not that it is down. */
+/** A 404 here means the backend process predates the /rnd routes, not that
+ *  it is down. */
 function errHint(err: string): string {
   if (err.includes("404")) {
     return "The backend hasn't loaded the R&D endpoints yet — they arrive with the next backend restart.";

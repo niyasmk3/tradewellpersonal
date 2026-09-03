@@ -168,12 +168,12 @@ def verdict_events(summary: dict, announced: set) -> list[dict]:
 
 
 # ---- closing morning grade --------------------------------------------------
-# The Closing/Overnight ledgers grade a night only when the NEXT session's
-# 09:50 print exists in the store — which used to mean the tabs sat a day
-# stale until someone clicked Sync + Analyze. This job closes that loop: on
-# trading days, once the 09:50 exit bar has settled, it syncs and re-runs
-# both analyses so yesterday's night appears in the ledger and the live 3pm
-# card gets its grade. Advisory analytics only; nothing is pushed or traded.
+# The Closing ledger grades a night only when the NEXT session's 09:50 print
+# exists in the store — which used to mean the tab sat a day stale until
+# someone clicked Sync + Analyze. This job closes that loop: on trading days,
+# once the 09:50 exit bar has settled, it syncs and re-runs the analysis so
+# yesterday's night appears in the ledger and the live 3pm card gets its
+# grade. Advisory analytics only; nothing is pushed or traded.
 
 # The 09:50 bar's OPEN — the exit print — is frozen from 09:50:00 and the bar
 # itself closes at 09:55; a minute of slack covers Kite's historical lag.
@@ -182,19 +182,16 @@ _GRADE_AFTER_HM = (9, 56)
 
 def should_grade_closing(now: datetime, state: dict, authenticated: bool,
                          trading_day: bool, enabled: bool = True) -> bool:
-    """Pure gate: trading day, past the exit print, authenticated, and at
-    least one of the two tabs still ungraded today. An unauthenticated
-    morning simply retries each pass until the user logs in — the grade then
-    lands minutes later instead of never. Closing and overnight carry their
-    OWN done-keys so a transient failure in one never costs the other its
-    retries for the day."""
+    """Pure gate: trading day, past the exit print, authenticated, and the
+    tab still ungraded today. An unauthenticated morning simply retries each
+    pass until the user logs in — the grade then lands minutes later instead
+    of never."""
     if not (enabled and trading_day and authenticated):
         return False
     if (now.hour, now.minute) < _GRADE_AFTER_HM:
         return False
     today = now.date().isoformat()
-    return (state.get("closing_grade_date") != today
-            or state.get("overnight_grade_date") != today)
+    return state.get("closing_grade_date") != today
 
 
 def has_exit_print(ts_values, today) -> bool:
@@ -211,33 +208,20 @@ def has_exit_print(ts_values, today) -> bool:
     return False
 
 
-def _closing_grade_work(lots: int, today, need_closing: bool,
-                        need_overnight: bool) -> dict:
+def _closing_grade_work(lots: int, today) -> dict:
     """The blocking leg, run off the event loop: incremental sync, verify the
-    exit print landed, then whichever analyses are still owed. Each leg
-    reports its own success so the caller stamps them independently."""
+    exit print landed, then the analysis still owed."""
     from app.closing import service as closing_service
     from app.kite.client import kite_service
-    from app.overnight import service as overnight_service
     from app.patterns import store as patterns_store
 
     closing_service.run_sync(kite_service.kite)
     tail = patterns_store.load_tail(90)
     if not has_exit_print(tail["ts"].astype(int).tolist(), today):
         return {"exit_print": False}
-    out: dict = {"exit_print": True, "closing_ok": False, "overnight_ok": False}
-    if need_closing:
-        r = closing_service.run_analysis(lots)
-        out["closing_ok"] = True
-        out["closing_n"] = (r.get("primary") or {}).get("n")
-    if need_overnight:
-        try:
-            overnight_service.run_analysis(lots)
-            out["overnight_ok"] = True
-        except Exception:
-            log.warning("ops: overnight refresh failed — retrying next pass",
-                        exc_info=True)
-    return out
+    r = closing_service.run_analysis(lots)
+    return {"exit_print": True, "closing_ok": True,
+            "closing_n": (r.get("primary") or {}).get("n")}
 
 
 async def run_closing_grade_once(now: datetime | None = None):
@@ -260,8 +244,6 @@ async def run_closing_grade_once(now: datetime | None = None):
                                 cfg.closing_auto_grade):
         return None
     today = ist.date().isoformat()
-    need_closing = state.get("closing_grade_date") != today
-    need_overnight = state.get("overnight_grade_date") != today
     from app.api.routes_closing import _lock as closing_lock
     from app.api.routes_patterns import _lock as patterns_lock
     if closing_lock.locked() or patterns_lock.locked():
@@ -269,17 +251,14 @@ async def run_closing_grade_once(now: datetime | None = None):
     async with closing_lock:
         async with patterns_lock:
             result = await asyncio.to_thread(
-                _closing_grade_work, cfg.closing_lots, ist.date(),
-                need_closing, need_overnight)
+                _closing_grade_work, cfg.closing_lots, ist.date())
     if not result.get("exit_print"):
         log.info("ops: closing grade waiting — today's 09:50 print not in "
                  "the store yet; retrying next pass")
         return result
     state = load_state()
-    if need_closing and result.get("closing_ok"):
+    if result.get("closing_ok"):
         state["closing_grade_date"] = today
-    if need_overnight and result.get("overnight_ok"):
-        state["overnight_grade_date"] = today
     save_state(state)
     log.info("ops: closing morning grade: %s", result)
     return result

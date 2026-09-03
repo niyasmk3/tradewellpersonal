@@ -53,8 +53,8 @@ from app.closing.data import VIX_TOKEN, _in_session
 from app.closing.pricing import atm_strike, dte_days
 from app.closing.study import OPEN_BAR, SIGNAL_BAR, StudyConfig, build_days, close_ref
 from app.config import get_settings
+from app.closing.flags import MID_HI, MID_LO
 from app.market import calendar as mcal
-from app.overnight.filters import MID_HI, MID_LO
 from app.patterns.data import NIFTY_TOKEN
 
 log = logging.getLogger("tradewell.closing")

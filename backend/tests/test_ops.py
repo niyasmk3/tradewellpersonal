@@ -152,17 +152,12 @@ def test_closing_grade_gate():
     assert not should_grade_closing(at_10, fresh, True, False)
     assert not should_grade_closing(at_10, fresh, False, True)
     assert not should_grade_closing(at_10, fresh, True, True, enabled=False)
-    # both tabs graded today: a later pass is a no-op; a NEW day re-arms
-    both = {"closing_grade_date": "2026-08-21", "overnight_grade_date": "2026-08-21"}
-    assert not should_grade_closing(at_10, both, True, True)
-    assert should_grade_closing(at_10, {"closing_grade_date": "2026-08-20",
-                                        "overnight_grade_date": "2026-08-20"},
+    # graded today: a later pass is a no-op; a NEW day re-arms
+    assert not should_grade_closing(at_10, {"closing_grade_date": "2026-08-21"},
+                                    True, True)
+    assert should_grade_closing(at_10, {"closing_grade_date": "2026-08-20"},
                                 True, True)
-    # a transient overnight failure must not cost overnight its retries:
-    # closing stamped, overnight not -> the pass still fires
-    assert should_grade_closing(at_10, {"closing_grade_date": "2026-08-21"},
-                                True, True)
-    print("  GRADE  -> trading-day + settled-exit + auth + per-tab once-per-date gate")
+    print("  GRADE  -> trading-day + settled-exit + auth + once-per-date gate")
 
 
 def test_exit_print_detection():

@@ -1,4 +1,8 @@
-"""Pre-registered filters for the Overnight tab — flags, never gates.
+"""Pre-registered overnight-hold filters — flags, never gates.
+
+Registered for the (since-retired) Overnight tab and kept here because the
+Closing analysis annotates its trade rows with the same flags; the frozen
+definitions below survive the tab so the registration is not silently reset.
 
 Round 4 of the study (docs/closing-day-strategy-2026-08-19.md) tested 46
 filters over the confirmed trades and adversarially verified the top five.
@@ -18,9 +22,9 @@ Two came out worth registering:
     family-wise significance on its own. Registered as the SECOND layer.
 
 Why flags and not gates: the backtest holdout is SPENT — 46 filters were
-mined against it, so these numbers are hypotheses, not results. The tab shows
-each night's flags and a live scoreboard that grades ONLY nights after the
-registration date; the headline strategy changes only if the live ledger
+mined against it, so these numbers are hypotheses, not results. Each night's
+flags ride on the trade rows, and a live scoreboard grades ONLY nights after
+the registration date; the headline strategy changes only if the live ledger
 clears the house 30-sample rule. Registration date and definitions are frozen
 here — editing them resets the live count.
 """

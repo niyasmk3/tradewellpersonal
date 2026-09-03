@@ -15,6 +15,20 @@
       "name": "frontend-attached",
       "url": "http://localhost:3000",
       "port": 3000
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "/Users/shibinraj/Documents/AntiGravity/Tradewell/backend/.venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--reload",
+        "--port",
+        "8000"
+      ],
+      "port": 8000,
+      "cwd": "backend"
     }
   ]
 }

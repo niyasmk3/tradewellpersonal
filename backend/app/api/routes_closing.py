@@ -22,10 +22,10 @@ from app.kite.client import kite_service
 log = logging.getLogger("tradewell.closing")
 
 router = APIRouter(prefix="/closing", tags=["closing"])
-# Shared with routes_overnight: both tabs' jobs read/write the same stores
-# (.closing_vix.db + the patterns spine + the pricing model inputs), so their
-# single-flight guards must be the SAME lock — two per-router locks let two
-# "Sync + Analyze" clicks upsert the same SQLite tables concurrently
+# Single-flight guard for the jobs that read/write the closing stores
+# (.closing_vix.db + the patterns spine + the pricing model inputs) — the ops
+# morning grade takes this SAME lock, so a user-clicked "Sync + Analyze" and
+# the auto-grade can never upsert the same SQLite tables concurrently
 # (review catch).
 _lock = asyncio.Lock()
 

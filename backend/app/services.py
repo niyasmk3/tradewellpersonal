@@ -322,11 +322,13 @@ class FeedController:
                 self._level_loop(settings.signal_eval_seconds)))
 
         if settings.condor_enabled:
-            # Iron Condor module (advisory, shadow-first — cards render on the
-            # /condor tab, nothing is pushed). Own loop at a slow cadence:
-            # condor conditions move at regime speed, not tick speed. The
-            # snapshot logger inside it is the module's real day-one payload —
-            # per-strike IV/OI/spread history that cannot be reconstructed.
+            # Iron Condor engine (advisory, shadow-first — the tab is retired;
+            # nothing is pushed). Own loop at a slow cadence: condor conditions
+            # move at regime speed, not tick speed. The snapshot logger inside
+            # it is the module's real payload — per-strike IV/OI/spread history
+            # that cannot be reconstructed, and the only real NIFTY option
+            # quotes the closing calibration has (closing/calibration.py reads
+            # its chain_snap table).
             from app.condor.service import CondorService
             from app.condor.snapshots import SnapshotLogger
             from app.condor.store import condor_store, condor_trace
@@ -595,8 +597,8 @@ class FeedController:
         # Cleared with the rest (review catch): a stale watcher surviving a
         # stop/restart would keep serving old cfg/state to the alerts route.
         self.level_watch = None
-        # Same rule for the condor service — a stale one would keep serving
-        # last feed generation's universes/expiries to /condor routes.
+        # Same rule for the condor service — a stale one would keep snapshotting
+        # last feed generation's universes/expiries.
         self.condor = None
         self._token_in_use = None
         self.running = False

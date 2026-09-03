@@ -12,11 +12,8 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from app.closing import attribution, cpr, events, oiwall, shadow_exit, signals, store, tiers, tonight, validate
+from app.closing import attribution, cpr, events, flags as overnight_filters, oiwall, shadow_exit, signals, store, tiers, tonight, validate
 from app.closing.calendar import IST
-# Safe import direction: overnight.filters depends only on closing.calendar
-# (tonight.py already rides this edge for MID_LO/MID_HI).
-from app.overnight import filters as overnight_filters
 from app.closing.data import sync
 from app.closing.pricing import build_model
 from app.closing.study import (
