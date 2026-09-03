@@ -15,6 +15,7 @@ from app.api import (
     routes_auth,
     routes_backtest,
     routes_closing,
+    routes_gold,
     routes_kite_basket,
     routes_paper,
     routes_settings,
@@ -87,6 +88,13 @@ async def lifespan(app: FastAPI):
 
     closing_snapshot = asyncio.create_task(closing_snapshot_loop())
 
+    # Gold paper-card loop (app/gold/live.py): app-lifetime like the others,
+    # but self-gated per pass by GOLD_LIVE_ENABLED (default off) — the task
+    # idles until the flag is armed. Alerts are transitions-only, PAPER/TRIAL.
+    from app.gold.live import gold_live_loop
+
+    gold_live = asyncio.create_task(gold_live_loop())
+
     # If a valid access token was supplied via .env, start the feed immediately.
     if kite_service.is_authenticated:
         try:
@@ -103,6 +111,7 @@ async def lifespan(app: FastAPI):
     watchdog.cancel()
     ops.cancel()
     closing_snapshot.cancel()
+    gold_live.cancel()
     await feed.stop()
 
 
@@ -138,6 +147,7 @@ app.include_router(routes_settings.router)
 app.include_router(routes_patterns.router)
 app.include_router(routes_rnd.router)
 app.include_router(routes_closing.router)
+app.include_router(routes_gold.router)
 
 
 @app.get("/health", tags=["meta"])

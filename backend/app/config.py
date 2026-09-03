@@ -429,6 +429,16 @@ class Settings(BaseSettings):
     # same pattern as CONDOR_ENABLED.
     rnd_policy_ledgers: bool = Field(default=False, alias="RND_POLICY_LEDGERS")
 
+    # --- Gold / forex research module (app/gold, spec 27-Aug-2026) ---
+    # Shadow-first like the condor: the live paper-card loop is OFF by default
+    # and never places orders even when on. The RULE PARAMETERS are frozen
+    # constants in app/gold/rules.py on purpose (pre-registration contract —
+    # an .env-tunable parameter is an editable one, and an edited parameter
+    # kills the experiment); only the loop's plumbing is configurable here.
+    gold_live_enabled: bool = Field(default=False, alias="GOLD_LIVE_ENABLED")
+    # One historical-API call per pass during MCX hours — rate-trivial.
+    gold_live_poll_s: float = Field(default=45.0, gt=0, alias="GOLD_LIVE_POLL_S")
+
     # --- Closing Day Strategy tab (app/closing) ---
     # A research surface only: it places no orders and emits no signals, so
     # there is no enable flag to forget. Almost every number the study needs

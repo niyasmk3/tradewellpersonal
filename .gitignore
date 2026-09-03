@@ -50,6 +50,11 @@ venv/
 .closing_snapshot_stamps.json
 .closing_exit_quotes.jsonl
 .overnight_results.json
+# Gold module (app/gold): MCX + XAUUSD candle stores + results
+.gold_candles.db
+.gold_xau.db
+.gold_results.json
+
 # Reconstructed Tickertape MMI daily series (2012->present; Wayback + a public
 # 2012-2024 dataset, cross-validated). Regenerable but expensive (~1h of
 # rate-limited archive scraping) — keep the file, not the wait. The joined

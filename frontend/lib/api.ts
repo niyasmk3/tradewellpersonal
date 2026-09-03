@@ -1510,6 +1510,156 @@ export interface OvernightLadderRung {
   unknown_n?: number;
 }
 
+// --- Gold tab (app/gold) ------------------------------------------------------
+// MCX GOLDM + XAUUSD shadow lab: three frozen rules, one simulate_day code
+// path, backtest/forward split against the freeze date. Paper everything.
+
+export interface GoldRuleSpec {
+  key: string;
+  name: string;
+  blurb: string;
+  qualify_pct: number;
+  direction: "with" | "against";
+  entry_after: string;
+  target: string;
+  stop_pct: number;
+  exit_by: string;
+}
+
+export interface GoldSummary {
+  n: number;
+  win_rate_pct?: number;
+  gross_rs?: number;
+  net_rs?: number;
+  avg_net_rs?: number;
+  best_rs?: number;
+  worst_rs?: number;
+  profit_factor?: number | null;
+  exit_mix?: { target: number; stop: number; time: number };
+  best_day_share_pct?: number | null;
+  from?: string;
+  to?: string;
+}
+
+export interface GoldCard {
+  rule: string;
+  name: string;
+  state: "no_data" | "pending" | "no_setup" | "open" | "closed";
+  date: string | null;
+  phase?: "backtest" | "forward";
+  signal_pct: number | null;
+  qualified: boolean;
+  direction: "LONG" | "SHORT" | null;
+  entry_ts: number | null;
+  entry_px: number | null;
+  target_px: number | null;
+  stop_px: number | null;
+  exit_ts: number | null;
+  exit_px: number | null;
+  exit_reason: "target" | "stop" | "time" | null;
+  points: number | null;
+  gross_rs: number | null;
+  net_rs: number | null;
+  last_px: number | null;
+  note: string | null;
+}
+
+export interface GoldHourShare {
+  hour: number;
+  share_pct: number;
+}
+
+export interface GoldVenueClimatology {
+  sessions?: number;
+  days?: number;
+  bars?: number;
+  day_candles?: number;
+  hourly_travel: GoldHourShare[];
+  busiest_hours_ist: number[];
+  evening_share_pct: number | null;
+  avg_day_range_pct?: number;
+  avg_abs_gap_pct?: number;
+  gap_over_half_pct?: number;
+}
+
+export interface GoldClimatology {
+  mcx: GoldVenueClimatology | null;
+  xauusd: GoldVenueClimatology | null;
+  clock_agreement: {
+    mcx_top3: number[];
+    xau_top3: number[];
+    shared: number[];
+    verdict: string;
+  } | null;
+  note: string;
+}
+
+export interface GoldPhaseBlock {
+  per_rule: Record<string, GoldSummary>;
+  total: GoldSummary;
+}
+
+export interface GoldResults {
+  generated_at?: string;
+  symbol: string;
+  contract: string | null;
+  freeze_date: string;
+  rules: GoldRuleSpec[];
+  sizing: { note: string; rs_per_point: number; charges_rt_rs: number };
+  disclaimer: string;
+  compliance: string[];
+  data: {
+    symbol: string;
+    m3_bars: number;
+    sessions: number;
+    day_bars: number;
+    xau_bars: number;
+    last_mcx_sync: string | null;
+    last_xau_sync: string | null;
+  };
+  climatology: GoldClimatology;
+  backtest: GoldPhaseBlock;
+  forward: GoldPhaseBlock;
+  gates: {
+    min_forward_samples: number;
+    live_money_bar: string;
+    per_rule: Record<string, { forward_n: number; verdict_due: number }>;
+  };
+}
+
+export interface GoldStatus {
+  symbol: string;
+  contract: string | null;
+  m3_bars: number;
+  day_bars: number;
+  xau_bars: number;
+  xau_days_ok: number;
+  last_mcx_sync: string | null;
+  last_xau_sync: string | null;
+  results_available: boolean;
+  results_generated_at: string | null;
+  live_enabled: boolean;
+  freeze_date: string;
+}
+
+export interface GoldLive {
+  date: string;
+  contract: { symbol: string; tradingsymbol: string; token: number; expiry: string };
+  prev_close: number | null;
+  market_hours: boolean;
+  cards: GoldCard[];
+  fetched_at: number;
+  note: string;
+}
+
+export interface GoldTradesResponse {
+  rows: GoldCard[];
+  count: number;
+  total: number;
+  rule: string;
+  phase: string;
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) {
@@ -1656,4 +1806,15 @@ export const api = {
   closingSync: () => postJSON<Record<string, unknown>>("/closing/sync", {}),
   closingAnalyze: (lots?: number) =>
     postJSON<ClosingResults>(`/closing/analyze${lots ? `?lots=${lots}` : ""}`, {}),
+
+  goldStatus: () => getJSON<GoldStatus>("/gold/status"),
+  goldResults: () => getJSON<GoldResults>("/gold/results"),
+  goldTrades: (rule = "all", phase = "all", limit = 400) =>
+    getJSON<GoldTradesResponse>(`/gold/trades?rule=${rule}&phase=${phase}&limit=${limit}`),
+  goldSync: () => postJSON<Record<string, unknown>>("/gold/sync", {}),
+  /** Dukascopy backfill — up to ~940 day files on the first run; minutes, not seconds. */
+  goldSyncXau: (years = 3) =>
+    postJSON<Record<string, unknown>>(`/gold/sync-xau?years=${years}`, {}),
+  goldAnalyze: () => postJSON<GoldResults>("/gold/analyze", {}),
+  goldLive: () => getJSON<GoldLive>("/gold/live"),
 };

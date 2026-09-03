@@ -14,6 +14,7 @@ const MODULES = [
   { key: "patterns", label: "Patterns", href: "/patterns", title: "Research module — 3y NIFTY 5-min patterns lab" },
   { key: "rnd", label: "R&D", href: "/rnd", title: "Research & Development — signal window analytics" },
   { key: "closing", label: "Closing Day", href: "/closing", title: "Closing Day Strategy — 15:00 direction, held overnight to 09:50 (unfiltered study)" },
+  { key: "gold", label: "Gold", href: "/gold", title: "Gold lab — MCX GOLDM + XAUUSD shadow research: three frozen rules, forward samples only (paper)" },
 ] as const;
 
 export function ModuleSwitcher() {
@@ -24,7 +25,9 @@ export function ModuleSwitcher() {
       ? "rnd"
       : path.startsWith("/closing")
         ? "closing"
-        : "pulse";
+        : path.startsWith("/gold")
+          ? "gold"
+          : "pulse";
   return (
     <nav className="inline-flex rounded-md border border-edge bg-panel p-0.5" aria-label="Module">
       {MODULES.map((m) => (

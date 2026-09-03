@@ -71,12 +71,41 @@ def backup_paths(src_dir: Path) -> list[Path]:
     knobs), the dot-JSON stores/journals, the append-only archives, and the
     Patterns lab's candle cache."""
     out = []
+    # .gold_candles.db holds MCX intraday Kite deletes as contracts roll —
+    # irreplaceable; .gold_xau.db (1.3M refetchable Dukascopy bars) is
+    # deliberately NOT here.
     for pat in (".env", ".*.json", ".*.jsonl", ".patterns_candles.db",
-                ".condor_chain.db"):
+                ".condor_chain.db", ".gold_candles.db"):
         for p in sorted(src_dir.glob(pat)):
             if p.is_file() and p.name not in _BACKUP_EXCLUDE:
                 out.append(p)
     return out
+
+
+def _db_snapshot(db: Path, tmpdir: Path) -> Path:
+    """Consistent SQLite copy for the tarball. Gold's candle store is written
+    during MCX's evening session — the first .db here that can legitimately be
+    mid-write at the 15:40 backup — and tar-ing a live database can capture a
+    torn page set. sqlite3's online backup API takes a consistent snapshot;
+    on any failure the raw file goes in as before (a possibly-torn copy still
+    beats no copy)."""
+    import sqlite3
+
+    try:
+        snap = tmpdir / db.name
+        src = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            dst = sqlite3.connect(str(snap))
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        return snap
+    except Exception:
+        log.warning("ops: sqlite snapshot of %s failed — raw copy goes in", db.name)
+        return db
 
 
 def make_backup(src_dir: Path, dest_dir: Path, date_tag: str, keep: int = 14) -> Path:
@@ -93,9 +122,11 @@ def make_backup(src_dir: Path, dest_dir: Path, date_tag: str, keep: int = 14) ->
     # Temp file on the DESTINATION filesystem so replace() stays atomic.
     fd_path = tempfile.mktemp(prefix=".tw-backup-", dir=str(dest_dir))
     try:
-        with tarfile.open(fd_path, "w:gz") as tar:
+        with tarfile.open(fd_path, "w:gz") as tar, \
+                tempfile.TemporaryDirectory(prefix=".tw-dbsnap-") as snapdir:
             for p in files:
-                tar.add(str(p), arcname=p.name)
+                src = _db_snapshot(p, Path(snapdir)) if p.suffix == ".db" else p
+                tar.add(str(src), arcname=p.name)
         Path(fd_path).replace(final)
     finally:
         Path(fd_path).unlink(missing_ok=True)
