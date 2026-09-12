@@ -230,29 +230,57 @@ def build() -> str:
             "is the NRI-era venue. Charter and rules: recorder/mcx/README.md</p>")
 
     # LIVE book — broker truth. The app's journal is immutable once closed
-    # (by design); the reconciled Kite tradebook is the system of record for
-    # what the human actually did. Rendered so the true history is visible.
+    # (by design). Kite Console's settled P&L statement is the system of
+    # record; the tradebook importer is the fill-level fallback. NOTE the
+    # statement lags the current session by one day (open rows are valued at
+    # the PREVIOUS close), so today's exits appear tomorrow.
+    pnl = load_json(DATA / "pnl_statement.json", {})
     lb = load_json(DATA / "live_book.json", {})
-    live_html = ('<p class="note">No tradebook imported yet — run '
-                 'recorder/tradebook_import.py on a Kite Console CSV.</p>')
-    if lb.get("round_trips"):
-        s = lb.get("summary", {})
-        rows_lb = [[t["sell_at"][:10], esc(t["symbol"]), str(t["qty"]),
-                    f'{t["buy"]:.2f} → {t["sell"]:.2f}',
-                    money(t["gross"])]
-                   for t in reversed(lb["round_trips"])]
+    live_html = ('<p class="note">Nothing imported yet — run '
+                 'recorder/pnl_import.py on a Kite Console P&L .xlsx.</p>')
+    if pnl.get("rows"):
+        d = pnl.get("by_direction", {})
+        rows_lb = [[esc(t["symbol"]), str(t["qty"]),
+                    (f'{t["buy_value"]/t["qty"]:.2f} → '
+                     f'{t["sell_value"]/t["qty"]:.2f}' if t["qty"] else "—"),
+                    money(t["realized"]), f'{t["pct"]:+.1f}%']
+                   for t in sorted(pnl["rows"],
+                                   key=lambda t: t["realized"], reverse=True)]
+        top = max(pnl["rows"], key=lambda t: t["realized"])
+        share = (100 * top["realized"] / pnl["gross_realized"]
+                 if pnl.get("gross_realized") else 0)
         live_html = (
-            f'<p><b>{s.get("trips", 0)} round trips · {s.get("wins", 0)} wins · '
-            f'gross {money(s.get("gross_rupees", 0))}</b> '
-            f'<span class="note">(before ~₹90/trip charges; source: Kite '
-            f'Console tradebook — import a fresh CSV to update)</span></p>'
-            + table(["Exit date", "Contract", "Qty", "Buy → Sell", "Gross"],
-                    rows_lb))
-        if lb.get("open_positions"):
-            live_html += "".join(
-                f'<p class="note">OPEN: {esc(o["symbol"])} x{o["qty"]} @ '
-                f'{o["buy"]} since {esc(o["buy_at"][:16])}</p>'
-                for o in lb["open_positions"])
+            f'<p><b>{pnl["trades"]} round trips · {pnl["wins"]}W/'
+            f'{pnl["losses"]}L ({pnl["win_rate_pct"]}%) · gross '
+            f'{money(pnl["gross_realized"])} · net after charges '
+            f'{money(pnl["net_after_charges"])}</b></p>'
+            f'<p class="note">Profit factor {pnl["profit_factor"]} · avg win '
+            f'₹{pnl["avg_win"]:,} vs avg loss ₹{pnl["avg_loss"]:,} · '
+            f'PE {d.get("PE", {}).get("trades")} trades '
+            f'{d.get("PE", {}).get("wins")}W {money(d.get("PE", {}).get("net", 0))} '
+            f'· CE {d.get("CE", {}).get("trades")} trades '
+            f'{d.get("CE", {}).get("wins")}W {money(d.get("CE", {}).get("net", 0))}</p>'
+            f'<p class="note"><b>Concentration check:</b> the single best '
+            f'contract is {esc(top["symbol"])} at {money(top["realized"])} — '
+            f'{share:.0f}% of all profit. The promotion bar in PROGRAM.md '
+            f'wants no single source above 25%.</p>'
+            + table(["Contract", "Qty", "Avg buy → sell", "Realized", "%"],
+                    rows_lb)
+            + f'<p class="note">Source: {esc(pnl.get("source", ""))} '
+              f'(Console settles one day late — today\'s exits appear '
+              f'tomorrow). Fill-level detail: recorder/tradebook_import.py.</p>')
+        for o in pnl.get("open_positions") or []:
+            live_html += (f'<p class="note">OPEN: {esc(o["symbol"])} x{o["qty"]} '
+                          f'value ₹{o["value"]:,.0f}, marked {money(o["unrealized"])} '
+                          f'at the previous close ({o["prev_close"]}).</p>')
+        if not pnl.get("open_positions"):
+            live_html += '<p class="note">Flat as of the statement date.</p>'
+    elif lb.get("round_trips"):
+        s_ = lb.get("summary", {})
+        live_html = (
+            f'<p><b>{s_.get("trips", 0)} round trips · {s_.get("wins", 0)} wins '
+            f'· gross {money(s_.get("gross_rupees", 0))}</b> '
+            f'<span class="note">(tradebook fallback)</span></p>')
 
     nc = load_json(DATA / "nifty_climatology.json", {})
     nifty_clim_html = '<p class="note">First nightly pass pending.</p>'
@@ -463,10 +491,11 @@ def build() -> str:
 {section("Paper book scoreboard", scoreboard + touch_html,
          "Gross figures; net-of-charges lives on the dashboard Paper tab.")}
 {section("Your LIVE book — broker truth", live_html,
-         "Reconciled from Kite Console's tradebook (FIFO-paired). The "
+         "Imported from Kite Console's settled F&O P&L statement. The "
          "dashboard journal is immutable once rows close — this table is "
          "what actually happened at the broker, and it wins every "
-         "disagreement.")}
+         "disagreement. Console settles one day late, so the newest "
+         "session appears the next morning.")}
 {section("Every fill, graded", fills)}
 {section("Every card the engine issued", cards_html)}
 {section("Gold lab — experiment #2 (climatology)", gold_html,
