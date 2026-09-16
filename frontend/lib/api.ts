@@ -1660,6 +1660,160 @@ export interface GoldTradesResponse {
   phase: string;
 }
 
+// --- Algo tab (app/algo) -------------------------------------------------------
+// Mirrors api/routes_algo.py. Only the dry-run broker exists on the backend;
+// every mode above it is refused by construction until its build step lands.
+
+export type AlgoMode = "dry" | "paper" | "live";
+
+export interface AlgoArm {
+  strategy: string;
+  mode: AlgoMode;
+  by: string;
+  armed_at: number;
+  expires_at: number;
+  remaining_s: number;
+}
+
+export interface AlgoKillState {
+  tripped: boolean;
+  tripped_at?: number;
+  code?: string;
+  detail?: string;
+  cleared_at?: number;
+  cleared_by?: string;
+  previous?: { code?: string; detail?: string; tripped_at?: number };
+}
+
+export interface AlgoPreflightItem {
+  key: string;
+  ok: boolean | null;          // null = not checked (e.g. static IP before LIVE)
+  detail: string;
+}
+
+export interface AlgoContract {
+  freeze_date: string;
+  max_orders_per_sec: number;
+  max_orders_per_day: number;
+  exit_reserve_orders: number;
+  max_open_orders_per_day: number;
+  max_open_positions: number;
+  max_lots_per_order: number;
+  max_notional_per_order_rs: number;
+  daily_loss_cap_rs: number;
+  unset_live_caps: string[];
+  allowed_segments: string[];
+  allowed_order_types: string[];
+  entry_window_min: [number, number];
+  hard_flatten_min: number;
+  cas_freeze_min: [number, number];
+  max_tick_age_s: number;
+  max_clock_skew_s: number;
+  max_reconcile_age_s: number;
+  arm_ttl_s: number;
+  consecutive_rejects_kill: number;
+  modes: AlgoMode[];
+  reachable_modes: AlgoMode[];
+}
+
+export interface AlgoClosingAdapter {
+  entry_policy: "clean" | "all";
+  entry_window_min: [number, number];
+  exit_window_min: [number, number];
+  lots: number;
+  product: string;
+  limit_buffer_pct: number;
+  card_logged: boolean;
+  card: {
+    date: string;
+    as_of: string;
+    verdict: "CLEAN" | "FLAGGED" | "INCOMPLETE";
+    red: string[];
+    direction: "CE" | "PE" | null;
+    strike: number | null;
+    expiry: string | null;
+    next_trading_day: string | null;
+  } | null;
+  would_fire: boolean;
+  decision: string;
+}
+
+export interface AlgoPosition {
+  ts: number;
+  key: string;
+  day: string;
+  strategy: string;
+  leg: string;
+  mode: AlgoMode;
+  tradingsymbol: string;
+  side: string;
+  quantity: number;
+  lots?: number;
+  price: number | null;
+}
+
+export interface AlgoStatus {
+  now: string;
+  day: string;
+  ist_minute: number;
+  arm: AlgoArm | null;
+  kill: AlgoKillState;
+  preflight: AlgoPreflightItem[];
+  world: {
+    trading_day: boolean;
+    token_state: string;
+    feed_healthy: boolean;
+    last_tick_age_s: number | null;
+    clock_skew_s: number | null;
+    day_pnl_rs: number;
+    reconciled_at: number | null;
+  };
+  today: { orders: number; open_orders: number; spent_keys: string[] };
+  positions: AlgoPosition[];
+  contract: AlgoContract;
+  adapters: { closing: AlgoClosingAdapter };
+  strategies: string[];
+  checks: { code: string; scope: "all" | "open" | "exit" }[];
+  note: string;
+}
+
+/** One append-only ledger line. Fields beyond the common three depend on `type`. */
+export interface AlgoLedgerRow {
+  ts: number;
+  type: "intent" | "verdict" | "order" | "result" | "skip" | "kill" | "clear" | "arm" | "disarm" | "reconcile";
+  day: string;
+  key?: string;
+  strategy?: string;
+  leg?: string;
+  purpose?: string;
+  tradingsymbol?: string;
+  side?: string;
+  quantity?: number;
+  lots?: number;
+  price?: number | null;
+  note?: string;
+  allowed?: boolean;
+  code?: string;
+  reason?: string;
+  blocks?: string[];
+  mode?: string;
+  status?: string;
+  ok?: boolean;
+  broker_order_id?: string | null;
+  message?: string;
+  detail?: string;
+  by?: string;
+  closes?: string | null;
+  expires_at?: number;
+  streak?: number;
+}
+
+export interface AlgoLedgerResponse {
+  rows: AlgoLedgerRow[];
+  count: number;
+  day: string | null;
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) {
@@ -1674,10 +1828,14 @@ async function getJSON<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function postJSON<T>(path: string, body: unknown): Promise<T> {
+async function postJSON<T>(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body ?? {}),
   });
   if (!res.ok) {
@@ -1817,4 +1975,19 @@ export const api = {
     postJSON<Record<string, unknown>>(`/gold/sync-xau?years=${years}`, {}),
   goldAnalyze: () => postJSON<GoldResults>("/gold/analyze", {}),
   goldLive: () => getJSON<GoldLive>("/gold/live"),
+
+  // Algo tab. Mutating calls carry the control token from .env as a header;
+  // KILL deliberately takes none — stopping the runner must always work.
+  algoStatus: () => getJSON<AlgoStatus>("/algo/status"),
+  algoLedger: (n = 300, day?: string) =>
+    getJSON<AlgoLedgerResponse>(`/algo/ledger?n=${n}${day ? `&day=${day}` : ""}`),
+  algoArm: (token: string, strategy: string, mode: AlgoMode, confirm: string) =>
+    postJSON<AlgoStatus>("/algo/arm", { strategy, mode, confirm, by: "ui" },
+      { "X-Algo-Token": token }),
+  algoDisarm: (token: string, reason = "") =>
+    postJSON<AlgoStatus>("/algo/disarm", { reason, by: "ui" }, { "X-Algo-Token": token }),
+  algoKill: (reason = "kill button") =>
+    postJSON<AlgoStatus>("/algo/kill", { reason, by: "ui" }),
+  algoClear: (token: string, reason = "") =>
+    postJSON<AlgoStatus>("/algo/clear", { reason, by: "ui" }, { "X-Algo-Token": token }),
 };

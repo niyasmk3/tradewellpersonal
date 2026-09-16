@@ -463,6 +463,15 @@ class Settings(BaseSettings):
     # manual click. Advisory analytics only — no orders, no pushes.
     closing_auto_grade: bool = Field(default=True, alias="CLOSING_AUTO_GRADE")
 
+    # --- Algo execution module (app/algo, plan 16-Sep-2026) ---
+    # The RISK LIMITS are frozen constants in app/algo/contract.py on purpose
+    # (an .env-tunable limit is an editable one). Only the plumbing lives here.
+    # ALGO_CONTROL_TOKEN gates every mutating /algo route (arm, disarm, clear):
+    # the API has no auth and adding an arm endpoint to it would let any local
+    # process arm a trading engine. Empty = those routes refuse, always.
+    algo_control_token: str = Field(default="", alias="ALGO_CONTROL_TOKEN")
+    algo_poll_s: float = Field(default=15.0, gt=0, alias="ALGO_POLL_S")
+
     @property
     def condor_symbol_list(self) -> list[str]:
         return [s.strip().upper() for s in self.condor_symbols.split(",") if s.strip()]

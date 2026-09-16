@@ -83,3 +83,10 @@ backend/.events.json
 
 # OI wall shadow signal (app/closing/oiwall.py): cached previous-session bhavcopies
 .oiwall_cache/
+
+# Algo execution module (16-Sep). The order ledger is the audit trail for an
+# account that can place orders, and the kill-switch latch is machine state —
+# neither belongs in git, and both are chmod 0600 at creation.
+.algo_orders.jsonl
+.algo_killswitch.json
+.algo_killswitch.json.tmp

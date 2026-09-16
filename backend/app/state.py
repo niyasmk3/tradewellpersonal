@@ -216,6 +216,22 @@ class MarketState:
             )
         return int(time.time()) - newest if newest else None
 
+    def tick_skew_s(self) -> float | None:
+        """Wall clock at the newest tick's receipt minus that tick's exchange
+        timestamp — the only clock cross-check this process has. Kite stamps
+        whole seconds, so ~0-1.5s is a healthy reading; a large value means
+        this Mac's clock has drifted (or the feed is replaying), and every
+        time-based rule downstream is suspect. None until a tick lands.
+        Only meaningful IN SESSION: after the close the ticker keeps sending
+        ticks stamped with the last trade, so the number turns into the tape's
+        age — callers gate on is_market_open() before trusting it."""
+        with self._lock:
+            wall = self._last_tick_wall
+            newest = max((t.get("ts") or 0 for t in self.ticks.values()), default=0)
+        if wall is None or not newest:
+            return None
+        return round(wall - newest, 2)
+
     def set_option_chain(self, key: str, chain: OptionChain) -> None:
         # `key` is a compound "SYMBOL:expiry" key (see kite.instruments.chain_key).
         with self._lock:

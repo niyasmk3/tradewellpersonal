@@ -15,6 +15,7 @@ const MODULES = [
   { key: "rnd", label: "R&D", href: "/rnd", title: "Research & Development — signal window analytics" },
   { key: "closing", label: "Closing Day", href: "/closing", title: "Closing Day Strategy — 15:00 direction, held overnight to 09:50 (unfiltered study)" },
   { key: "gold", label: "Gold", href: "/gold", title: "Gold lab — MCX GOLDM + XAUUSD shadow research: three frozen rules, forward samples only (paper)" },
+  { key: "algo", label: "Algo", href: "/algo", title: "Algo execution — arm a strategy's adapter behind the guard; dry-run only today (no order can be placed)" },
 ] as const;
 
 export function ModuleSwitcher() {
@@ -27,7 +28,9 @@ export function ModuleSwitcher() {
         ? "closing"
         : path.startsWith("/gold")
           ? "gold"
-          : "pulse";
+          : path.startsWith("/algo")
+            ? "algo"
+            : "pulse";
   return (
     <nav className="inline-flex rounded-md border border-edge bg-panel p-0.5" aria-label="Module">
       {MODULES.map((m) => (

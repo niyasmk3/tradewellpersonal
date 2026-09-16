@@ -12,6 +12,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    routes_algo,
     routes_auth,
     routes_backtest,
     routes_closing,
@@ -95,6 +96,14 @@ async def lifespan(app: FastAPI):
 
     gold_live = asyncio.create_task(gold_live_loop())
 
+    # Algo runner (app/algo/runner.py): app-lifetime, idles until a human ARMS
+    # a strategy from the Algo tab (arms never persist, so a restart always
+    # comes up disarmed). Only the dry-run broker exists today; nothing in this
+    # process can place an order. See docs/algo-tab-plan-2026-09-16.md.
+    from app.algo.runner import algo_loop
+
+    algo = asyncio.create_task(algo_loop())
+
     # If a valid access token was supplied via .env, start the feed immediately.
     if kite_service.is_authenticated:
         try:
@@ -112,6 +121,7 @@ async def lifespan(app: FastAPI):
     ops.cancel()
     closing_snapshot.cancel()
     gold_live.cancel()
+    algo.cancel()
     await feed.stop()
 
 
@@ -148,6 +158,7 @@ app.include_router(routes_patterns.router)
 app.include_router(routes_rnd.router)
 app.include_router(routes_closing.router)
 app.include_router(routes_gold.router)
+app.include_router(routes_algo.router)
 
 
 @app.get("/health", tags=["meta"])
