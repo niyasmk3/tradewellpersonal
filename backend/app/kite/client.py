@@ -14,7 +14,10 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import time
+
 from kiteconnect import KiteConnect
+from kiteconnect.exceptions import TokenException
 
 from app.config import get_settings
 
@@ -38,6 +41,8 @@ class KiteService:
         self._api_secret = settings.kite_api_secret
         self.access_token: str | None = None
         self.user_id: str | None = None
+        # (state, checked_at) cache for validate_token — 'unknown' until probed.
+        self._token_check: tuple[str, float] = ("unknown", 0.0)
         self.kite = KiteConnect(api_key=self._api_key) if self._api_key else None
 
         # Reuse a previously issued token: .env wins, then today's cached token.
@@ -78,6 +83,38 @@ class KiteService:
     def is_authenticated(self) -> bool:
         return bool(self.kite is not None and self.access_token)
 
+    def validate_token(self, max_age_s: float = 300.0, force: bool = False) -> str:
+        """'valid' / 'invalid' / 'unknown' — does Kite actually ACCEPT the token?
+
+        is_authenticated only proves a token EXISTS; three stale-dashboard
+        incidents (09-Aug expired-but-green, 16-Sep today-dated-but-rejected)
+        came from trusting it. This probes Kite REST at most once per
+        max_age_s and caches the verdict. A TokenException flips the session
+        dead via invalidate() so the login gate reappears everywhere; network
+        or other errors return 'unknown' and KEEP the token — a wifi blip
+        must never flash the login gate.
+        """
+        if not self.is_authenticated:
+            return "invalid"
+        state, checked_at = self._token_check
+        now = time.time()
+        if not force and now - checked_at < max_age_s:
+            return state
+        # Claim the slot before probing so concurrent health polls (threadpool)
+        # can't stampede Kite with parallel profile() calls.
+        self._token_check = (state, now)
+        try:
+            self.kite.profile()
+            self._token_check = ("valid", time.time())
+        except TokenException:
+            log.warning("Token probe: Kite REJECTED the stored token")
+            self._token_check = ("invalid", time.time())
+            self.invalidate()
+        except Exception as exc:  # network / rate limit / Kite outage
+            log.debug("Token probe inconclusive: %s", exc)
+            self._token_check = ("unknown", time.time())
+        return self._token_check[0]
+
     def login_url(self) -> str | None:
         return self.kite.login_url() if self.kite is not None else None
 
@@ -86,6 +123,7 @@ class KiteService:
             raise RuntimeError("KITE_API_KEY is not configured")
         self.access_token = token
         self.kite.set_access_token(token)
+        self._token_check = ("unknown", 0.0)   # fresh token, fresh verdict
 
     def invalidate(self) -> None:
         """Drop a token Kite has rejected (daily ~07:30 IST flush or revocation)

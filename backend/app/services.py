@@ -393,6 +393,7 @@ class FeedController:
         """
         failures = 0
         starved_restarts = 0
+        token_page_day = None   # one dead-token page per IST day
         while True:
             await asyncio.sleep(interval)
             try:
@@ -422,6 +423,28 @@ class FeedController:
                     # no on_close, no on_noreconnect) — ticker_dead never fires,
                     # so tick age is the only reliable liveness signal.
                     age = market_state.last_tick_age()
+                    # 16-Sep lesson (third stale morning): when Kite REJECTS
+                    # the token, feed restarts are pure noise — every ticker
+                    # handshake will fail. Probe (cached 120s); on a
+                    # confirmed-dead token, page the human once per day and
+                    # wait — invalidate() has already surfaced the login gate.
+                    tstate = await asyncio.to_thread(
+                        kite_service.validate_token, 120.0)
+                    if tstate == "invalid":
+                        if token_page_day != today:
+                            token_page_day = today
+                            from app.notify import push_text
+                            push_text(
+                                "Tradewell: Kite login needed",
+                                (f"Ticks silent for {age}s and Kite rejects the "
+                                 "stored token — feed restarts are pointless. "
+                                 "Open the dashboard and log in."),
+                                get_settings())
+                        log.warning(
+                            "Supervisor: starved %ss but token is DEAD — "
+                            "waiting for re-login, not restarting", age)
+                        starved_restarts = 0
+                        continue
                     starved_restarts += 1
                     # THE 04-AUG LESSON, paid in 84 phone pushes: an
                     # in-process feed restart CANNOT revive a dead KiteTicker

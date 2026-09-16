@@ -154,9 +154,17 @@ app.include_router(routes_gold.router)
 def health() -> dict:
     from app.state import market_state
 
+    # PROBED, not assumed (16-Sep, third stale-morning): validate_token asks
+    # Kite whether the stored token actually works, cached 5 min. A rejected
+    # token invalidates the session inline, so `authenticated` below flips
+    # false in the same response and the login gate appears instead of a
+    # green badge over a dead feed. Runs on the threadpool (sync route), so
+    # the rare probe's latency never blocks the event loop.
+    token_state = kite_service.validate_token()
     return {
         "status": "ok",
         "authenticated": kite_service.is_authenticated,
+        "token_state": token_state,   # 'valid' | 'invalid' | 'unknown'
         "feed_running": feed.running,
         "feed_healthy": feed.healthy,
         "ticker_connected": market_state.ticker_connected,
