@@ -1,6 +1,14 @@
 """Tradewell backend — Phase 1 live market dashboard API.
 
-Run:  uvicorn app.main:app --reload --port 8000
+Run:  ./scripts/start_stack.sh          (from the repo root — the ONLY way)
+
+NEVER run this app with uvicorn --reload. Reload mode's watchfiles watcher
+sits in the same directory Tradewell rewrites state files into every few
+seconds; on this Mac (Python 3.9 + rust-notify) that event storm deadlocks
+the main thread — proven 17-Sep by a `sample` stack of a hung 09:15-open
+process (__semwait_signal under _rust_notify, `--reload` on its cmdline).
+Reload mode also silently REPLACES the process whenever any editing session
+touches a source file, which reads as an unexplained backend death.
 """
 from __future__ import annotations
 
