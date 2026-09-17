@@ -612,6 +612,8 @@ class SignalService:
         # veto block on purpose: vetoed copies land in the shadow stores with
         # their tags intact, so every ledger can later split by tape state.
         if fresh.signal is not None:
+            fresh.signal.macd_aligned = self._macd_aligned(
+                df, fresh.signal.direction.value)
             tape = self._tape_state(df, now)
             if tape is not None:
                 t_state, t_pct, t_side = tape
@@ -857,6 +859,39 @@ class SignalService:
         card.lot_size = (_option_lot_size(pick.token)
                          or (meta.lot_size if meta and meta.lot_size else 0)) or None
         return card
+
+    @staticmethod
+    def _macd_aligned(df, direction: str):
+        """True when MACD(12,26,9) sits on the card's side of its signal line
+        at issue. LOG-ONLY field (17-Sep sizing: the only MACD variant that
+        passed all four walk-forward cells, ~0.70 removal efficiency even
+        GIVEN ema-alignment — a momentum-deceleration read the 9/20 cross
+        can't see). The 30-fill live readout decides whether it ever becomes
+        a veto; until then it is a stamp, never a gate. None below 35 bars.
+        Params 12/26/9 are frozen — tuning them would be fitting the label
+        to the ledger it exists to test.
+        """
+        try:
+            closes = [float(x) for x in df["close"].tolist()]
+            if len(closes) < 35:
+                return None
+
+            def _ema(seq, span):
+                k = 2.0 / (span + 1)
+                s = seq[0]
+                out = []
+                for v in seq:
+                    s = v * k + s * (1 - k)
+                    out.append(s)
+                return out
+
+            e12, e26 = _ema(closes, 12), _ema(closes, 26)
+            macd = [a - b for a, b in zip(e12, e26)]
+            sig = _ema(macd, 9)
+            hist = macd[-1] - sig[-1]
+            return hist > 0 if direction == "CE" else hist < 0
+        except Exception:
+            return None
 
     @staticmethod
     def _tape_state(df, now: int):

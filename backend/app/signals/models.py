@@ -222,6 +222,9 @@ class SignalCard(BaseModel):
     tape_state: Optional[str] = None
     tape_resolved_pct: Optional[float] = None   # 0-100+, |close-open|/range
     tape_aligned: Optional[bool] = None
+    # MACD(12,26,9) on the card's side of its signal line at birth — LOG-ONLY
+    # (17-Sep sizing; live 30-fill readout decides if it earns a veto).
+    macd_aligned: Optional[bool] = None
     # GOLDEN = every filter that measured positive stacked at once: a
     # confirm-gated mode, developing tape, direction with the day. A LABEL,
     # not a promise — the paper book grades golden vs ordinary fills and 30+

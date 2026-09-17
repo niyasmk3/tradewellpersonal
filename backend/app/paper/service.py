@@ -550,6 +550,7 @@ def summarize(store: TradeStore, exit_slippage_pct: float = 0.0,
             # re-joining against the signal archive. None on pre-label rows.
             "golden": getattr(t, "golden", None),
             "tape": getattr(t, "tape_state", None),
+            "macd": getattr(t, "macd_aligned", None),
         }
         if cls == "setup":
             # Per-setup grouping key, parsed from the atomic fill tag

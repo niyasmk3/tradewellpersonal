@@ -230,6 +230,8 @@ export interface SignalCard {
   tape_aligned: boolean | null;
   /** GOLDEN label: confirm-gated + developing tape + with the day. Display + ledger only. */
   golden: boolean;
+  /** MACD(12,26,9) on the card's side of its signal line at birth — log-only. */
+  macd_aligned?: boolean | null;
   /** Contract multiplier — required to turn premium levels into rupees. */
   lot_size: number | null;
   trading_capital: number | null;
@@ -299,6 +301,8 @@ export interface RepriceResult {
 
 export interface AuthStatus {
   authenticated: boolean;
+  /** Probed against Kite (cached ~5min): 'valid' | 'invalid' | 'unknown'. */
+  token_state?: string;
   api_key_configured: boolean;
   login_url: string | null;
   user_id: string | null;
@@ -431,6 +435,7 @@ export interface PaperRow {
   /** GOLDEN label + tape state at the card's birth (null on pre-label rows). */
   golden?: boolean | null;
   tape?: string | null;
+  macd?: boolean | null;
 }
 
 export interface PaperSummary {
@@ -1233,6 +1238,13 @@ export interface ClosingTrade {
   charges_rs: number;
   net_rs: number;
   qty: number;
+  // real contract prints beside the modelled fills (app/closing/realquote.py)
+  // — only nights whose contract Kite still listed when captured.
+  real_in?: number | null;
+  real_out?: number | null;
+  real_net_pct?: number | null;
+  real_net_rs?: number | null;
+  real_delta_rs?: number | null;
   // loss attribution + registered calendar flags (app/closing/attribution.py)
   loss_reason?: string | null;
   direction_pct?: number | null;
@@ -1648,6 +1660,9 @@ export interface GoldLive {
   prev_close: number | null;
   market_hours: boolean;
   cards: GoldCard[];
+  /** Today's CLOSED 3m bars — exactly what simulate_day scored. Absent from
+   *  backends predating the chart. */
+  candles?: { ts: number; open: number; high: number; low: number; close: number }[];
   fetched_at: number;
   note: string;
 }

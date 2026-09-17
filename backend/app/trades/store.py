@@ -208,6 +208,7 @@ class TradeStore:
                 entry_score=card.confidence,
                 tape_state=getattr(card, "tape_state", None),
                 golden=getattr(card, "golden", None),
+                macd_aligned=getattr(card, "macd_aligned", None),
                 created_at=now, entered_at=now,
                 # Set at creation (not a follow-up update) so a hollow tag is
                 # ATOMIC with the fill — an untagged hollow row would be

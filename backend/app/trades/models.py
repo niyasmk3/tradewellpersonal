@@ -133,6 +133,7 @@ class Trade(BaseModel):
     # colour. None on rows recorded before the fields existed.
     tape_state: Optional[str] = None
     golden: Optional[bool] = None
+    macd_aligned: Optional[bool] = None
     # First premium print of the first session AFTER entry, latched once by the
     # monitor. entry -> next_open isolates the overnight gap — the component no
     # intraday exit can manage (a gap settles before any stop can act), which
