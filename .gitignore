@@ -90,3 +90,8 @@ backend/.events.json
 .algo_orders.jsonl
 .algo_killswitch.json
 .algo_killswitch.json.tmp
+
+# Feed supervisor escalation memory (app/feed_escalation.py, 17-Sep): how
+# many times the process has replaced itself today — survives the exec.
+.supervisor_state.json
+.supervisor_state.json.tmp

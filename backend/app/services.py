@@ -40,7 +40,7 @@ def _seed_vix_history(kite, vix_token) -> list[float]:
         return []
     from datetime import datetime, timedelta
 
-    to_dt = datetime.now()
+    to_dt = datetime.now(_IST)          # Kite reads a naive string as IST; be explicit
     rows = kite.historical_data(vix_token, to_dt - timedelta(days=370), to_dt, "day")
     return [float(r["close"]) for r in rows if r.get("close")]
 
@@ -371,16 +371,38 @@ class FeedController:
         return self.running and not market_state.ticker_dead
 
     @staticmethod
-    def _tick_starved(max_silence_s: int = 180) -> bool:
-        """Market open but no tick for `max_silence_s`. NIFTY/BANKNIFTY tick
-        many times a second in session, so 3 minutes of silence is always a
-        broken socket, never a quiet market."""
+    def _session_silence(now=None, age=None):
+        """Seconds of IN-SESSION silence, or None when the market is closed.
+
+        GRACE AT THE OPEN (17-Sep). The newest tick's age at 09:15:17 is the
+        whole overnight gap — 61,812s that morning — and the supervisor read
+        it as seventeen hours of silence "while market open", restarted the
+        feed on the first check after the bell and replaced the process two
+        checks later. Silence is the SMALLER of tick age and time since
+        today's open, the rule FeedWatchdog has applied since July: a socket
+        gets the full window from the bell before anyone calls it dead. A
+        socket that really is dead still gets restarted — three minutes
+        later, not seventeen hours early.
+        `now` (IST datetime) and `age` are injectable so the rule tests
+        without a clock or a feed.
+        """
         from app.market import calendar as mcal
 
-        if not mcal.is_market_open():
-            return False
-        age = market_state.last_tick_age()
-        return age is None or age > max_silence_s
+        dt = now or mcal.now_ist()
+        if not mcal.is_market_open(dt):
+            return None
+        if age is None and now is None:
+            age = market_state.last_tick_age()
+        since_open = (dt.hour * 60 + dt.minute - mcal.OPEN_MIN) * 60 + dt.second
+        return float(since_open if age is None else min(age, since_open))
+
+    @classmethod
+    def _tick_starved(cls, max_silence_s: int = 180, now=None, age=None) -> bool:
+        """Market open AND no tick for `max_silence_s` of SESSION time.
+        NIFTY/BANKNIFTY tick many times a second in session, so 3 minutes of
+        silence is always a broken socket, never a quiet market."""
+        silence = cls._session_silence(now=now, age=age)
+        return silence is not None and silence > max_silence_s
 
     async def supervisor(self, interval: float = 60.0) -> None:
         """Watchdog that owns feed recovery. Restarts the feed when:
@@ -394,6 +416,8 @@ class FeedController:
         failures = 0
         starved_restarts = 0
         token_page_day = None   # one dead-token page per IST day
+        exhausted_page_day = None   # one "restarts exhausted" page per IST day
+        exhausted_log_at = 0.0
         while True:
             await asyncio.sleep(interval)
             try:
@@ -445,7 +469,10 @@ class FeedController:
                             "waiting for re-login, not restarting", age)
                         starved_restarts = 0
                         continue
-                    starved_restarts += 1
+                    # Capped at 3: while a self-restart is barred the branch
+                    # below is re-entered every minute, and an unbounded count
+                    # would make the escalation log claim "17 feed restarts".
+                    starved_restarts = min(starved_restarts + 1, 3)
                     # THE 04-AUG LESSON, paid in 84 phone pushes: an
                     # in-process feed restart CANNOT revive a dead KiteTicker
                     # (Twisted reactor, known since 20-Jul), so the supervisor
@@ -455,12 +482,47 @@ class FeedController:
                     # the whole process. Same-day token reloads; the fresh
                     # ticker connects clean.
                     if starved_restarts >= 3:
+                        # 17-Sep: the process-level cure looped too. execv
+                        # zeroes starved_restarts, so a socket Kite kept
+                        # closing drew a self-restart — and a push — every
+                        # three minutes for an hour. feed_escalation.py is
+                        # the memory execv cannot erase: one self-restart
+                        # per cooldown, three per day, then page once and
+                        # wait for a human, exactly like the dead-token path.
+                        from app import feed_escalation as esc
+                        from app.notify import push_text
+                        esc_state = esc.load()
+                        allowed = esc.verdict(esc_state, _time.time(), today)
+                        if allowed != "restart":
+                            if exhausted_page_day != today:
+                                exhausted_page_day = today
+                                push_text(
+                                    "Tradewell: feed dead, restarts exhausted",
+                                    (f"Ticks silent for {age}s and a process restart "
+                                     f"{esc_state.get('count', 0)}x today did not revive "
+                                     "the socket. Not restarting again — check the "
+                                     "Kite login (another session?) and Zerodha status, "
+                                     "then restart by hand."),
+                                    get_settings())
+                            if _time.time() - exhausted_log_at >= 300:
+                                exhausted_log_at = _time.time()
+                                log.error(
+                                    "Supervisor: starved %ss, self-restart %s "
+                                    "(%s today, last %.0fs ago) — waiting for a human",
+                                    age, allowed, esc_state.get("count", 0),
+                                    _time.time() - float(esc_state.get("last_at") or 0))
+                            # "Waiting" means waiting: the count stays pinned, so
+                            # the next minute lands here again instead of going
+                            # back to in-process restarts that are already known
+                            # not to work (two were tried before every exec).
+                            # Ticks resuming resets it, below.
+                            continue
+                        esc.save(esc.record(esc_state, _time.time(), today))
                         log.error(
                             "Supervisor: %d feed restarts did not revive ticks "
                             "(age %ss) — escalating to full process restart",
                             starved_restarts - 1, age)
                         from app.api.routes_system import _exec_self, _relaunch_argv
-                        from app.notify import push_text
                         push_text(
                             "Tradewell: self-healing restart",
                             (f"Ticker silent for {age}s despite "
@@ -469,7 +531,9 @@ class FeedController:
                             get_settings())
                         _exec_self(_relaunch_argv(), delay_s=2.0)
                         return          # this process is about to be replaced
-                    log.warning("Supervisor: no ticks for %ss while market open — restarting feed", age)
+                    log.warning("Supervisor: no ticks for %ss of session time "
+                                "(newest tick %ss old) — restarting feed",
+                                int(self._session_silence() or 0), age)
                     await self.restart()
                 elif self._started_day and self._started_day != today:
                     log.info("Supervisor: IST day rolled over — re-resolving universe")

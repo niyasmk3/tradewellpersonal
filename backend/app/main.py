@@ -47,6 +47,16 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+# Log timestamps in IST on ANY host clock. The default converter is the host's
+# local zone, and a week in UTC+4 (17-Sep) turned every log line into a
+# 90-minute lie: a 09:17 IST restart read as 07:47 "before the open".
+import time as _time  # noqa: E402
+
+# staticmethod matters: a plain function on the class is BOUND when a Formatter
+# instance calls self.converter(created), arrives with two arguments and raises
+# on every log line. (time.localtime, the default, is a builtin and never binds.)
+logging.Formatter.converter = staticmethod(lambda secs=None: _time.gmtime(
+    (_time.time() if secs is None else secs) + 19800))
 log = logging.getLogger("tradewell")
 
 

@@ -268,10 +268,11 @@ def fetch_today(kite) -> pd.DataFrame:
     import time
     from datetime import datetime
 
+    from app.market.calendar import IST
     from app.patterns.data import NIFTY_TOKEN, _in_session, resolve_proxy_token
 
-    day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    now_dt = datetime.now()
+    day_start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    now_dt = datetime.now(IST)
     rows = []
     for d in kite.historical_data(NIFTY_TOKEN, day_start, now_dt, "5minute"):
         dt = d["date"]

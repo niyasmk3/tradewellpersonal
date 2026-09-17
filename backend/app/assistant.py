@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 
 from app.config import get_settings
+from app.market.calendar import IST
 
 log = logging.getLogger("tradewell.assistant")
 
@@ -167,7 +168,7 @@ def _implied_odds(now_ts: float | None = None) -> str | None:
     and expiry, labelled with real dates so "by 7th August" maps directly."""
     import math
     import time as _t
-    from datetime import date, timedelta
+    from datetime import date, timedelta, datetime
 
     from app.kite.instruments import chain_key
     from app.options.iv import _norm_cdf
@@ -183,7 +184,7 @@ def _implied_odds(now_ts: float | None = None) -> str | None:
     except Exception:
         return None
     now_ts = now_ts or _t.time()
-    today = date.fromtimestamp(now_ts + 19800)          # IST calendar day
+    today = datetime.fromtimestamp(now_ts, IST).date()  # IST calendar day, any host
     days_to_exp = (exp - today).days
     if days_to_exp <= 0:
         return None

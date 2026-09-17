@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timedelta
 
 from app.patterns import store
+from app.market.calendar import IST
 
 log = logging.getLogger("tradewell.patterns")
 
@@ -57,13 +58,15 @@ def resolve_proxy_token(kite) -> int:
 
 def sync(kite, years: int = 3) -> dict:
     """Pull index OHLC + proxy volume into the store. Returns a summary dict."""
-    now = datetime.now()
+    # IST, never host-local: Kite parses a naive from/to as IST, so a naive
+    # datetime.now() on a UTC+4 host ended every sync 90 minutes early (17-Sep).
+    now = datetime.now(IST)
     start = now - timedelta(days=int(years * 365.25))
     last = store.last_ts()
     if last is not None:
         # Restart from the beginning of the last stored day so a partial final
         # day is refetched whole; overlap is deduped by the ts primary key.
-        resume = datetime.fromtimestamp(last).replace(hour=0, minute=0, second=0)
+        resume = datetime.fromtimestamp(last, IST).replace(hour=0, minute=0, second=0)
         start = max(start, resume)
 
     log.info("Patterns sync: index %s from %s to %s", NIFTY_TOKEN, start.date(), now.date())
@@ -95,7 +98,7 @@ def sync(kite, years: int = 3) -> dict:
         proxy_error = str(exc)
         log.warning("Volume-proxy sync failed (analysis continues without it): %s", exc)
 
-    store.set_meta("last_sync", datetime.now().isoformat())
+    store.set_meta("last_sync", datetime.now(IST).isoformat())
     summary = {
         "index_bars_written": written,
         "proxy_bars_matched": proxy_updated,

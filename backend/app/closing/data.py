@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 
 from app.closing import store
 from app.patterns import data as patterns_data
+from app.closing.calendar import IST
 
 log = logging.getLogger("tradewell.closing")
 
@@ -37,11 +38,11 @@ _in_session = patterns_data._in_session
 
 def sync_vix(kite, years: int = 3) -> dict:
     """Pull India VIX 5-min bars into the store. Incremental on re-run."""
-    now = datetime.now()
+    now = datetime.now(IST)                 # naive = host-local = wrong off-IST
     start = now - timedelta(days=int(years * 365.25))
     last = store.last_vix_ts()
     if last is not None:
-        resume = datetime.fromtimestamp(last).replace(hour=0, minute=0, second=0)
+        resume = datetime.fromtimestamp(last, IST).replace(hour=0, minute=0, second=0)
         start = max(start, resume)
 
     log.info("Closing sync: INDIA VIX from %s to %s", start.date(), now.date())
@@ -54,7 +55,7 @@ def sync_vix(kite, years: int = 3) -> dict:
         seen.add(epoch)
         rows.append((epoch, d["open"], d["high"], d["low"], d["close"]))
     written = store.upsert_vix(rows)
-    store.set_meta("last_vix_sync", datetime.now().isoformat())
+    store.set_meta("last_vix_sync", datetime.now(IST).isoformat())
     return {"vix_bars_written": written, "vix_bars_total": store.vix_count()}
 
 

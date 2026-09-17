@@ -113,12 +113,12 @@ def run_sync(kite) -> dict:
     contract = resolve_contract(kite)
     symbol = contract["symbol"]
     prev = store.get_meta("mcx_contract")
-    now = datetime.now()
+    now = datetime.now(IST)                 # naive = host-local = wrong off-IST
 
     start = now - timedelta(days=_INTRADAY_LOOKBACK_D)
     last = store.mcx_last_ts(symbol, "3m")
     if last is not None:
-        start = max(start, datetime.fromtimestamp(last).replace(
+        start = max(start, datetime.fromtimestamp(last, IST).replace(
             hour=0, minute=0, second=0, microsecond=0))
     rows, seen = [], set()
 
@@ -151,7 +151,7 @@ def run_sync(kite) -> dict:
                             exc_info=True)
         covered = [x for x in (last, max(seen) if seen else None) if x is not None]
         if covered:
-            start = datetime.fromtimestamp(max(covered)).replace(
+            start = datetime.fromtimestamp(max(covered), IST).replace(
                 hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     _collect_3m(contract["token"], start)
     m3_written = store.upsert_mcx(symbol, "3m", rows)
@@ -163,7 +163,7 @@ def run_sync(kite) -> dict:
         day_start = now - timedelta(days=int(_DAY_YEARS * 365.25))
         last_day = store.mcx_last_ts(symbol, "day")
         if last_day is not None:
-            day_start = max(day_start, datetime.fromtimestamp(last_day))
+            day_start = max(day_start, datetime.fromtimestamp(last_day, IST))
         day_rows = [
             (int(d["date"].timestamp()), d["open"], d["high"], d["low"],
              d["close"], float(d.get("volume", 0) or 0))
@@ -178,7 +178,7 @@ def run_sync(kite) -> dict:
     store.set_meta("mcx_contract", contract["tradingsymbol"])
     store.set_meta("mcx_token", str(contract["token"]))
     store.set_meta("mcx_symbol", symbol)
-    store.set_meta("last_mcx_sync", datetime.now().isoformat())
+    store.set_meta("last_mcx_sync", datetime.now(IST).isoformat())
     summary = {
         "contract": contract,
         "m3_bars_written": m3_written,

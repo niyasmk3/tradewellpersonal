@@ -20,11 +20,22 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _epoch(dt) -> int | None:
-    """Kite exchange timestamps are naive IST datetimes -> true UTC epoch."""
+    """A kiteconnect tick datetime -> true UTC epoch, on ANY host clock.
+
+    kiteconnect builds exchange_timestamp / last_trade_time with
+    `datetime.fromtimestamp(epoch)` — a NAIVE datetime in the HOST's local
+    zone, not IST. The old `replace(tzinfo=IST)` was correct only while this
+    Mac sat in IST; on a UTC+4 host (17-Sep, seen live) every tick landed
+    exactly 90 minutes in the past: tick age read 5400s all session, the
+    supervisor restarted the feed every minute and the process every three,
+    candles were keyed 90 minutes early, and the health badge showed a dead
+    feed over a live socket. `timestamp()` on a naive datetime uses the same
+    local zone fromtimestamp() did, so the round trip is exact everywhere.
+    """
     if dt is None:
         return None
     try:
-        return int(dt.replace(tzinfo=_IST).timestamp())
+        return int(dt.timestamp())
     except Exception:
         return None
 
