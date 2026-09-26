@@ -345,6 +345,10 @@ def live_cards(kite) -> dict:
         "market_hours": (now.weekday() <= 4
                          and _SESSION_OPEN <= (now.hour, now.minute) <= (23, 55)),
         "cards": rules.simulate_day(bars, prev_close, live=True),
+        # The same closed bars the cards were computed from — the tab's chart
+        # draws exactly what simulate_day saw, so a marker can never sit on a
+        # candle the engine didn't score.
+        "candles": bars,
         "fetched_at": int(time.time()),
         "note": "Paper/TRIAL cards — stateless recomputation of today's tape "
                 "on every read; nothing here places orders.",

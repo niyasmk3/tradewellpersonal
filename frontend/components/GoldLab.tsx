@@ -21,6 +21,7 @@ import {
 } from "@/lib/api";
 import { fmt, fmtInt, signed } from "@/lib/format";
 import { usePolling } from "@/lib/usePolling";
+import { GoldChart } from "./GoldChart";
 import { ModuleSwitcher } from "./ModuleSwitcher";
 
 const rs = (n: number | null | undefined) =>
@@ -394,8 +395,11 @@ export function GoldLab() {
           )}
         </div>
         {live.data ? (
-          <div className="grid gap-2 md:grid-cols-3">
-            {live.data.cards.map((c) => <LiveCard key={c.rule} c={c} />)}
+          <div className="grid gap-2">
+            {(live.data.candles?.length ?? 0) > 0 && <GoldChart data={live.data} />}
+            <div className="grid gap-2 md:grid-cols-3">
+              {live.data.cards.map((c) => <LiveCard key={c.rule} c={c} />)}
+            </div>
           </div>
         ) : (
           <p className="text-[11px] text-muted">
