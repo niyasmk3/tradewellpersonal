@@ -250,7 +250,10 @@ def _closing_grade_work(lots: int, today) -> dict:
     tail = patterns_store.load_tail(90)
     if not has_exit_print(tail["ts"].astype(int).tolist(), today):
         return {"exit_print": False}
-    r = closing_service.run_analysis(lots)
+    # kite rides along so the ledger's real-quote legs backfill in the
+    # same morning pass that grades the night (the 09:50 bar just printed,
+    # and the contract is still listed).
+    r = closing_service.run_analysis(lots, kite=kite_service.kite)
     return {"exit_print": True, "closing_ok": True,
             "closing_n": (r.get("primary") or {}).get("n")}
 

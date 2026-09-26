@@ -12,7 +12,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from app.closing import attribution, cpr, events, flags as overnight_filters, oiwall, shadow_exit, signals, store, tiers, tonight, validate
+from app.closing import attribution, cpr, events, flags as overnight_filters, oiwall, realquote, shadow_exit, signals, store, tiers, tonight, validate
 from app.closing.calendar import IST
 from app.closing.data import sync
 from app.closing.pricing import build_model
@@ -141,7 +141,7 @@ _RULE_WHY = {
 }
 
 
-def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
+def run_analysis(lots: int = 1, signal_mode: Optional[str] = None, kite=None) -> dict:
     spine = patterns_store.load_frame()
     if len(spine) < MIN_BARS:
         raise ClosingError(
@@ -191,6 +191,11 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None) -> dict:
         # 10:45 shadow exit — same trades re-priced at the later print;
         # the 09:50 ledger stays the ledger of record.
         shadow_exit.annotate(tt, days, vix_lookup, model, cfg)
+    # Real premium legs beside the modelled ones, for nights whose contract
+    # Kite still lists. Fetches only with a live session; the cache serves
+    # older captures either way. Primary only — it is the ledger of record.
+    realquote.backfill(kite, primary.get("trades") or [])
+    realquote.annotate(primary.get("trades") or [])
     # Join against the 3-YEAR ledger, not the 1-year one: the decision log is
     # append-only and forever, and a card older than the primary window would
     # silently lose its grade right as the sample count approached the house

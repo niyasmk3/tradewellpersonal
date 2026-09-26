@@ -1537,6 +1537,18 @@ export function ClosingLab() {
                       <th className="py-1 text-right font-normal">move</th>
                       <th className="py-1 text-right font-normal">in</th>
                       <th className="py-1 text-right font-normal">out</th>
+                      <th className="py-1 text-right font-normal"
+                          title="REAL contract prints (15:05 fill / next 09:50 open), captured while the contract was still listed — blank once Kite has deleted it. The in/out columns beside it are modelled.">
+                        real in
+                      </th>
+                      <th className="py-1 text-right font-normal"
+                          title="REAL contract prints (15:05 fill / next 09:50 open), captured while the contract was still listed — blank once Kite has deleted it. The in/out columns beside it are modelled.">
+                        real out
+                      </th>
+                      <th className="py-1 text-right font-normal"
+                          title="net % on the REAL fills, same charge schedule — read against net % to see the model's error on this night">
+                        real %
+                      </th>
                       <th className="py-1 text-right font-normal">net %</th>
                       <th className="py-1 text-right font-normal">net</th>
                       <th className="py-1 text-center font-normal"
@@ -1574,6 +1586,12 @@ export function ClosingLab() {
                         </td>
                         <td className="py-1 text-right text-muted">{fmt(t.fill_in, 1)}</td>
                         <td className="py-1 text-right text-muted">{fmt(t.fill_out, 1)}</td>
+                        <td className="py-1 text-right">{t.real_in == null ? <span className="text-muted/50">—</span> : fmt(t.real_in, 1)}</td>
+                        <td className="py-1 text-right">{t.real_out == null ? <span className="text-muted/50">—</span> : fmt(t.real_out, 1)}</td>
+                        <td className={`py-1 text-right ${signCls(t.real_net_pct)}`}
+                            title={t.real_delta_rs != null ? `real − modelled: ${t.real_delta_rs > 0 ? "+" : ""}₹${t.real_delta_rs}` : undefined}>
+                          {t.real_net_pct == null ? <span className="text-muted/50">—</span> : pct(t.real_net_pct, 0)}
+                        </td>
                         <td className={`py-1 text-right ${signCls(t.net_pct)}`}>{pct(t.net_pct, 0)}</td>
                         <td className={`py-1 text-right ${signCls(t.net_rs)}`}>{rs(t.net_rs)}</td>
                         <td className="py-1 text-center"><WhyChips t={t} /></td>
@@ -1585,7 +1603,11 @@ export function ClosingLab() {
                 <p className="mt-1 text-[10px] text-muted">
                   * entry VIX outside the range the pricing model was calibrated on.
                   Spot columns: today's 09:15 open, the 15:00 print, and the next
-                  session's 09:50 print. `move` is signed from the 15:05 fill:
+                  session's 09:50 print. `in`/`out` are MODELLED premiums;
+                  `real in`/`real out` are the contract's actual prints at the
+                  same clocks, captured while Kite still lists it — recent
+                  nights only, and the history stays honest about being
+                  forward-only. `move` is signed from the 15:05 fill:
                   positive means the index went the way the signal pointed.
                   `why` (losers only): DIR = wrong direction, θ = theta decay,
                   VOL = vol crush, FEE = spread+charges — hover for the full

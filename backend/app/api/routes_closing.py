@@ -63,7 +63,10 @@ async def analyze(lots: Optional[int] = Query(default=None, ge=1, le=100)) -> di
     async with _lock:
         try:
             n = lots if lots is not None else get_settings().closing_lots
-            return await asyncio.to_thread(run_analysis, n)
+            # Kite rides along when logged in so the real-quote column can
+            # backfill; analysis itself never requires it.
+            kite = kite_service.kite if kite_service.is_authenticated else None
+            return await asyncio.to_thread(run_analysis, n, None, kite)
         except ClosingError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
         except Exception as exc:  # pragma: no cover - unexpected
@@ -127,7 +130,8 @@ _LEDGER_LEAD = [
     "day_open", "p1400", "signal_price", "gap_pts", "entry_spot", "exit_spot",
     "signed_move_pts", "strike", "expiry", "dte_entry", "vix_in", "vix_out",
     "mid_in", "mid_out", "fill_in", "fill_out", "qty", "gross_rs", "charges_rs",
-    "net_rs", "net_pct", "loss_reason", "cpr_width_pct", "f_cpr_narrow",
+    "net_rs", "net_pct", "real_in", "real_out", "real_net_rs", "real_net_pct",
+    "real_delta_rs", "loss_reason", "cpr_width_pct", "f_cpr_narrow",
     "x1045_exit_spot", "x1045_fill_out", "x1045_net_rs", "x1045_net_pct",
     "x1045_delta_rs",
 ]

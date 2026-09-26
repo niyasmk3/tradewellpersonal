@@ -49,6 +49,7 @@ venv/
 .closing_snapshot.jsonl
 .closing_snapshot_stamps.json
 .closing_exit_quotes.jsonl
+.closing_realquotes.json
 .overnight_results.json
 # Gold module (app/gold): MCX + XAUUSD candle stores + results
 .gold_candles.db
