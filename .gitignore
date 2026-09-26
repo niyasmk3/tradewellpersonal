@@ -11,6 +11,7 @@ venv/
 .env.local
 *.local
 .kite_session.json
+.kite_session.dead-*
 
 # Runtime state — per-machine, regenerated on start. .trades.json and
 # .signals.json hold real trading activity; .instruments_cache.json is a ~13MB
@@ -67,6 +68,7 @@ venv/
 # Node / Next
 node_modules/
 .next/
+.next-lab/
 out/
 *.tsbuildinfo
 npm-debug.log*
@@ -96,3 +98,12 @@ backend/.events.json
 # many times the process has replaced itself today — survives the exec.
 .supervisor_state.json
 .supervisor_state.json.tmp
+
+# Strategy Lab (app/lab, 24-Sep): versions/runs/paper ledger/experiments DB
+# plus the synced futures candle store. Both WAL-mode.
+.lab.db
+.lab.db-shm
+.lab.db-wal
+.lab_futures.db
+.lab_futures.db-shm
+.lab_futures.db-wal

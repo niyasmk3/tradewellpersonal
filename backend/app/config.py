@@ -472,6 +472,15 @@ class Settings(BaseSettings):
     algo_control_token: str = Field(default="", alias="ALGO_CONTROL_TOKEN")
     algo_poll_s: float = Field(default=15.0, gt=0, alias="ALGO_POLL_S")
 
+    # --- Strategy Lab (app/lab) ---
+    # The 40-strategy research + paper-trading module. Committed default is
+    # OFF (the gold/condor pattern): the tab, catalog, backtests and syncs
+    # all work regardless — this flag only arms the AUTOMATED daily paper
+    # loop, which writes simulated ledgers. Nothing in app/lab can place an
+    # order in any mode.
+    lab_paper_enabled: bool = Field(default=False, alias="LAB_PAPER_ENABLED")
+    lab_poll_s: float = Field(default=20.0, gt=0, alias="LAB_POLL_S")
+
     @property
     def condor_symbol_list(self) -> list[str]:
         return [s.strip().upper() for s in self.condor_symbols.split(",") if s.strip()]

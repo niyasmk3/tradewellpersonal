@@ -23,12 +23,39 @@
         "-m",
         "uvicorn",
         "app.main:app",
-        "--reload",
         "--port",
         "8000"
       ],
       "port": 8000,
       "cwd": "backend"
+    },
+    {
+      "name": "lab-api",
+      "runtimeExecutable": "/Users/shibinraj/Documents/AntiGravity/Tradewell/backend/.venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "app.lab.preview_api:app",
+        "--port",
+        "8001"
+      ],
+      "port": 8001,
+      "cwd": "backend"
+    },
+    {
+      "name": "lab-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001",
+        "NEXT_DIST_DIR=.next-lab",
+        "npx",
+        "next",
+        "dev",
+        "-p",
+        "3001"
+      ],
+      "port": 3001,
+      "cwd": "frontend"
     }
   ]
 }

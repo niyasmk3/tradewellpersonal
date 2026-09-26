@@ -2005,4 +2005,191 @@ export const api = {
     postJSON<AlgoStatus>("/algo/kill", { reason, by: "ui" }),
   algoClear: (token: string, reason = "") =>
     postJSON<AlgoStatus>("/algo/clear", { reason, by: "ui" }, { "X-Algo-Token": token }),
+
+  // ---- Strategy Lab (app/lab) ----
+  labOverview: () => getJSON<LabOverview>("/lab/overview"),
+  labLibrary: () => getJSON<LabStrategy[]>("/lab/library"),
+  labStrategy: (sid: string) => getJSON<LabStrategyDetail>(`/lab/strategy/${sid}`),
+  labSaveVersion: (sid: string, params: Record<string, unknown>, note = "") =>
+    postJSON<{ sid: string; version: number }>(`/lab/strategy/${sid}/version`, { params, note }),
+  labSetChampion: (sid: string, version: number) =>
+    postJSON<Record<string, unknown>>(`/lab/strategy/${sid}/champion`, { version }),
+  labPaperToggle: (sid: string, enabled: boolean) =>
+    postJSON<Record<string, unknown>>(`/lab/strategy/${sid}/paper`, { enabled }),
+  labBacktest: (req: LabBacktestRequest) => postJSON<LabBacktestResult>("/lab/backtest", req),
+  labRuns: (sid?: string, limit = 50) =>
+    getJSON<LabRun[]>(`/lab/runs?limit=${limit}${sid ? `&sid=${sid}` : ""}`),
+  labRun: (runId: number, trades = 200) =>
+    getJSON<LabRun>(`/lab/runs/${runId}?trades=${trades}`),
+  labPaper: () => getJSON<LabPaperStatus>("/lab/paper"),
+  labPaperDays: (sid?: string, limit = 120) =>
+    getJSON<LabPaperDay[]>(`/lab/paper/days?limit=${limit}${sid ? `&sid=${sid}` : ""}`),
+  labExperiments: (sid?: string) =>
+    getJSON<LabExperiment[]>(`/lab/experiments${sid ? `?sid=${sid}` : ""}`),
+  labReport: (day?: string) =>
+    getJSON<Record<string, unknown>>(day ? `/lab/report/${day}` : "/lab/report"),
+  labReports: (limit = 30) => getJSON<string[]>(`/lab/reports?limit=${limit}`),
+  labRisk: () => getJSON<LabRiskView>("/lab/risk"),
+  labRiskSet: (updates: Record<string, number>) =>
+    postJSON<{ limits: Record<string, number> }>("/lab/risk", { updates }),
+  labEmergency: (action: "trip" | "clear", flatten = false, reason = "") =>
+    postJSON<{ limits: Record<string, number> }>("/lab/emergency", { action, flatten, reason }),
+  labData: () => getJSON<LabDataStatus>("/lab/data"),
+  labSyncFutures: () => postJSON<Record<string, unknown>>("/lab/data/sync-futures", {}),
 };
+
+// ---- Strategy Lab types ----
+
+export interface LabParamSpec {
+  key: string; label: string; kind: string; default: unknown;
+  lo: number | null; hi: number | null; step: number | null;
+  choices: string[]; tunable: boolean; unit: string; help: string;
+}
+
+export interface LabReadiness {
+  status: string; from: string | null; to: string | null; notes: string[];
+}
+
+export interface LabRunBrief {
+  run_id: number; version: number; trades: number | null;
+  net_pnl: number | null; expectancy: number | null;
+  win_rate: number | null; profit_factor: number | null; warnings: string[];
+}
+
+export interface LabStrategy {
+  sid: string; name: string; category: string; category_label: string;
+  instrument: string; spine: string; timeframe: string; hypothesis: string;
+  logic: string; data_needs: string[]; overnight: boolean;
+  params: LabParamSpec[]; readiness: LabReadiness;
+  champion_version: number; paper_enabled: boolean;
+  experimental_version: number | null; suspended_reason: string;
+  latest_runs: Record<string, LabRunBrief>;
+  paper?: { days: number; net: number; trades: number } | null;
+}
+
+export interface LabStrategyDetail {
+  sid: string;
+  versions: { version: number; params: Record<string, unknown>; source: string; note: string; created_at: number }[];
+  state: Record<string, unknown>;
+  runs: LabRun[];
+  paper_days: LabPaperDay[];
+  readiness: LabReadiness;
+}
+
+export interface LabOverview {
+  strategies_total: number;
+  data_readiness: Record<string, number>;
+  paper_enabled_count: number; experimental_count: number; suspended_count: number;
+  paper_engine_on: boolean;
+  session: { day: string; status: string | null };
+  today_pnl: number; today_trades: number; open_positions: number;
+  cumulative_pnl: number; paper_day_count: number;
+  win_rate_days: number | null; profit_factor_days: number | null;
+  max_drawdown: number;
+  equity_curve: { day: string; cum: number }[];
+  exposure_rs: number; capital_rs: number; emergency_stop: boolean;
+  chain_era: { from: string | null; to: string | null };
+  evidence_note: string;
+}
+
+export interface LabBacktestRequest {
+  sid: string; version?: number | null; params?: Record<string, unknown> | null;
+  from_day?: string | null; to_day?: string | null;
+  capital_rs?: number; kind?: string;
+}
+
+export interface LabRunSummary {
+  kind: string; trades: number; wins: number; losses: number;
+  win_rate: number | null; expectancy: number | null;
+  avg_win: number | null; avg_loss: number | null;
+  gross_profit: number; gross_loss: number; net_pnl: number;
+  profit_factor: number | null; risk_reward: number | null;
+  max_drawdown: number; longest_loss_streak: number;
+  return_on_capital_pct: number | null; peak_margin_rs: number;
+  margin_utilization_pct: number | null; margin_note: string;
+  sharpe: number | null; time_in_market_pct: number | null;
+  daily_pnl: { day: string; net: number }[];
+  monthly_pnl: Record<string, number>;
+  by_session: Record<string, LabBucket>; by_expiry_day: Record<string, LabBucket>;
+  by_regime: Record<string, LabBucket>; by_exit_reason: Record<string, LabBucket>;
+  by_direction: Record<string, LabBucket>;
+  rejected_signals: Record<string, number>;
+  warnings: string[];
+}
+
+export interface LabBucket {
+  n: number; net: number; wins: number; win_rate: number | null;
+  expectancy: number | null; low_sample: boolean;
+}
+
+export interface LabBacktestResult {
+  run_id: number; status: string; version?: number; note?: string;
+  summary?: LabRunSummary;
+}
+
+export interface LabTrade {
+  run_id: number; seq: number; signal_ts: number; entry_ts: number;
+  exit_ts: number; direction: string; tag: string;
+  legs: { side: string; right: string; symbol: string; strike: number; expiry: string; lots: number; qty: number; entry: number; exit: number | null }[];
+  pnl_gross: number; costs: number; pnl_net: number; exit_reason: string;
+  mae: number; mfe: number; regime: string; session_bucket: string;
+  expiry_day: number; bars_held: number;
+}
+
+export interface LabRun {
+  run_id: number; sid: string; version: number; kind: string;
+  timeframe: string; from_ts: number; to_ts: number; capital_rs: number;
+  data_note: string; created_at: number; status: string;
+  summary: LabRunSummary | Record<string, never>;
+  trades?: LabTrade[];
+}
+
+export interface LabPaperDay {
+  day: string; sid: string; version: number; trades: number;
+  pnl_net: number; summary: Record<string, unknown>; created_at: number;
+}
+
+export interface LabPosition {
+  id: number; order_id: number; day: string; sid: string; version: number;
+  experimental: number; opened_ts: number; closed_ts: number | null;
+  direction: string; tag: string;
+  legs: { side: string; right: string; tradingsymbol: string; strike: number; expiry: string; lots: number; qty: number; price: number }[];
+  exit_policy: Record<string, unknown>; state: Record<string, unknown>;
+  exit_reason: string | null; pnl_gross: number | null;
+  costs: number | null; pnl_net: number | null;
+}
+
+export interface LabSignal {
+  id: number; ts: number; day: string; sid: string; version: number;
+  experimental: number; payload: Record<string, unknown>;
+  outcome: string; reason: string;
+}
+
+export interface LabPaperStatus {
+  day: string; session: Record<string, unknown> | null;
+  open_positions: LabPosition[]; pending_orders: Record<string, unknown>[];
+  signals: LabSignal[]; closed_today: LabPosition[];
+  risk: Record<string, number>;
+  risk_events: { ts: number; day: string; sid: string; code: string; detail: Record<string, unknown> }[];
+}
+
+export interface LabExperiment {
+  exp_id: number; sid: string; champion: number; challenger: number;
+  hypothesis: string; evidence: Record<string, unknown>; status: string;
+  dev_result: Record<string, unknown>; test_result: Record<string, unknown>;
+  paper_result: Record<string, unknown>; created_at: number;
+  decided_at: number | null; decision_reason: string;
+}
+
+export interface LabRiskView {
+  limits: Record<string, number>;
+  events: { ts: number; day: string; sid: string; code: string; detail: Record<string, unknown> }[];
+  bounds: Record<string, { default: number; lo: number; hi: number }>;
+  note: string;
+}
+
+export interface LabDataStatus {
+  readiness: Record<string, { status: string; from: string | null; to: string | null; rows: number; note: string }>;
+  quality: { generated_at: number; window_days: number; issue_count: number; issues: Record<string, unknown>[] };
+  events: { ts: number; kind: string; detail: Record<string, unknown> }[];
+}

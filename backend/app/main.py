@@ -26,6 +26,7 @@ from app.api import (
     routes_closing,
     routes_gold,
     routes_kite_basket,
+    routes_lab,
     routes_paper,
     routes_settings,
     routes_system,
@@ -122,6 +123,18 @@ async def lifespan(app: FastAPI):
 
     algo = asyncio.create_task(algo_loop())
 
+    # Strategy Lab (app/lab): seed the 40 catalog versions at boot (idempotent,
+    # never at import — same rule as the archives above), then start the paper
+    # loop. App-lifetime like gold_live; it idles per pass until
+    # LAB_PAPER_ENABLED arms it. Simulation only: no order path exists in the
+    # lab, and its options fills come from the same chain-snapshot archive the
+    # condor logger writes.
+    from app.lab.paper import lab_loop
+    from app.lab.service import ensure_seeded
+
+    ensure_seeded()
+    lab = asyncio.create_task(lab_loop())
+
     # If a valid access token was supplied via .env, start the feed immediately.
     if kite_service.is_authenticated:
         try:
@@ -140,6 +153,7 @@ async def lifespan(app: FastAPI):
     closing_snapshot.cancel()
     gold_live.cancel()
     algo.cancel()
+    lab.cancel()
     await feed.stop()
 
 
@@ -177,6 +191,7 @@ app.include_router(routes_rnd.router)
 app.include_router(routes_closing.router)
 app.include_router(routes_gold.router)
 app.include_router(routes_algo.router)
+app.include_router(routes_lab.router)
 
 
 @app.get("/health", tags=["meta"])

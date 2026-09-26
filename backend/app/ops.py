@@ -73,9 +73,11 @@ def backup_paths(src_dir: Path) -> list[Path]:
     out = []
     # .gold_candles.db holds MCX intraday Kite deletes as contracts roll —
     # irreplaceable; .gold_xau.db (1.3M refetchable Dukascopy bars) is
-    # deliberately NOT here.
+    # deliberately NOT here. .lab.db holds the Strategy Lab's immutable
+    # run/paper/experiment ledgers (irreplaceable); .lab_futures.db is a
+    # refetchable Kite sync and deliberately NOT here.
     for pat in (".env", ".*.json", ".*.jsonl", ".patterns_candles.db",
-                ".condor_chain.db", ".gold_candles.db"):
+                ".condor_chain.db", ".gold_candles.db", ".lab.db"):
         for p in sorted(src_dir.glob(pat)):
             if p.is_file() and p.name not in _BACKUP_EXCLUDE:
                 out.append(p)
