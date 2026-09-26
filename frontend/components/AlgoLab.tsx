@@ -346,6 +346,10 @@ export function AlgoLab() {
   useEffect(() => { if (ledger.data) setRows(ledger.data.rows); }, [ledger.data]);
 
   const phrase = `ARM ${strategy.toUpperCase()} ${mode.toUpperCase()}`;
+  // The typed phrase is about deliberateness, not about caps lock: case and
+  // stray spaces are forgiven, the words are not. The canonical phrase is
+  // what gets sent.
+  const phraseOk = confirm.trim().replace(/\s+/g, " ").toUpperCase() === phrase;
   // Only the two things the ARM ROUTE itself refuses on gate the button. The
   // rest (stale tick, skew, holiday) are per-intent guard concerns: arming at
   // 09:16 for the 09:50 exit is fine even though yesterday's ticks are stale.
@@ -353,6 +357,19 @@ export function AlgoLab() {
     () => (s ? s.preflight.filter((p) => p.ok === false && (p.key === "control_token" || p.key === "kill_switch")) : []),
     [s],
   );
+  // Everything the Arm button is still waiting for, in words. A disabled
+  // button with no stated reason cost a real evening (17-Sep): the phrase box
+  // showed the phrase itself as its placeholder, so an empty box looked filled.
+  const armWaitingOn: string[] = [
+    ...(s?.kill.tripped ? [`kill switch is tripped (${s.kill.code}) — clear it first`] : []),
+    ...preflightBlocks.filter((p) => p.key !== "kill_switch").map((p) => `${p.key} (${p.detail})`),
+    ...(!token ? ["the control token — paste it in its box"] : []),
+    ...(!phraseOk
+      ? [confirm
+          ? `the phrase — the box reads "${confirm}", it must read ${phrase}`
+          : `the phrase — type ${phrase} in its box`]
+      : []),
+  ];
   const preflightWarnings = useMemo(
     () => (s ? s.preflight.filter((p) => p.ok === false && !["control_token", "kill_switch", "live_caps", "static_ip"].includes(p.key)) : []),
     [s],
@@ -443,8 +460,10 @@ export function AlgoLab() {
                 <span className="text-[10px] text-muted">type exactly: <span className="font-mono text-white">{phrase}</span></span>
                 <input
                   value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                  placeholder={phrase}
+                  onChange={(e) => setConfirm(e.target.value.toUpperCase())}
+                  placeholder="type the phrase here"
+                  autoComplete="off"
+                  spellCheck={false}
                   disabled={!!s.arm || s.kill.tripped}
                   className="w-56 rounded border border-edge bg-panel2 px-2 py-1 font-mono"
                 />
@@ -460,9 +479,9 @@ export function AlgoLab() {
                 </button>
               ) : (
                 <button
-                  onClick={() => act("arm", () => api.algoArm(token, strategy, mode, confirm))}
-                  disabled={busy !== null || !token || confirm !== phrase || s.kill.tripped || preflightBlocks.length > 0}
-                  title={preflightBlocks.length > 0 ? `preflight blocks: ${preflightBlocks.map((p) => p.key).join(", ")}` : `arms ${strategy} in ${mode} for ${Math.round(s.contract.arm_ttl_s / 60)} minutes`}
+                  onClick={() => act("arm", () => api.algoArm(token, strategy, mode, phrase))}
+                  disabled={busy !== null || armWaitingOn.length > 0}
+                  title={armWaitingOn.length > 0 ? `waiting on: ${armWaitingOn.join(" · ")}` : `arms ${strategy} in ${mode} for ${Math.round(s.contract.arm_ttl_s / 60)} minutes`}
                   className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-40"
                 >
                   {busy === "arm" ? "Arming…" : `Arm ${mode}`}
@@ -479,9 +498,14 @@ export function AlgoLab() {
                 </button>
               )}
             </div>
-            {preflightBlocks.length > 0 && !s.arm && (
+            {!s.arm && armWaitingOn.length > 0 && (
               <div className="mt-2 text-[11px] text-bear">
-                Arming is blocked: {preflightBlocks.map((p) => `${p.key} (${p.detail})`).join(" · ")}
+                Arm {mode} is disabled until: {armWaitingOn.join(" · ")}
+              </div>
+            )}
+            {!s.arm && armWaitingOn.length === 0 && (
+              <div className="mt-2 text-[11px] text-bull">
+                Ready — press Arm {mode}. It arms {strategy} for {Math.round(s.contract.arm_ttl_s / 60)} minutes.
               </div>
             )}
             {preflightWarnings.length > 0 && (
