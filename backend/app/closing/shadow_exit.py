@@ -149,7 +149,11 @@ def summary(trades: list, split: date) -> dict:
 _lock = threading.Lock()
 
 
-def quotes(path: Path = QUOTES_PATH) -> list:
+def quotes(path: Path | None = None) -> list:
+    # QUOTES_PATH resolved at CALL time, not def time: a default bound at
+    # import defeats the tests' monkeypatch and silently reads the real
+    # ledger (bit 26-Sep, once the live file had rows).
+    path = path if path is not None else QUOTES_PATH
     if not path.exists():
         return []
     rows = []
@@ -197,9 +201,10 @@ def _tradingsymbol(kite, expiry: date, strike: float, kind: str) -> Optional[str
 
 
 def capture_quote(kite, now: Optional[datetime] = None,
-                  path: Path = QUOTES_PATH) -> Optional[str]:
+                  path: Path | None = None) -> Optional[str]:
     """Quote the relevant card's contract if `now` is inside a capture window
     and that (night, kind) is not logged yet. Returns the kind logged."""
+    path = path if path is not None else QUOTES_PATH
     if kite is None:
         return None
     now = now or datetime.now(IST)
@@ -255,9 +260,10 @@ def capture_quote(kite, now: Optional[datetime] = None,
     return kind
 
 
-def live_summary(trades: list, path: Path = QUOTES_PATH) -> dict:
+def live_summary(trades: list, path: Path | None = None) -> dict:
     """Real-mid comparison per night: needs entry + both exits. Modelled
     figures for the same nights sit alongside so drift is visible."""
+    path = path if path is not None else QUOTES_PATH
     by_night: dict = {}
     for r in quotes(path):
         if r.get("mid") is not None:

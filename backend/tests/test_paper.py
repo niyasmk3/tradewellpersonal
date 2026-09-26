@@ -24,12 +24,31 @@ from app.signals.risk_limits import RiskLimitStore
 from app.trades.models import TradeStatus
 from app.trades.store import TradeStore
 
+class _FrozenTime:
+    """time-module stand-in: everything delegates to the real module, only
+    time() is pinned. Assigning to the real module's .time attribute froze
+    the clock for the WHOLE process at import (pytest collects every test
+    module first), which made any OTHER test that mixes time.time with
+    datetime.now fail after 13:00 local — mornings green, afternoons red
+    (bit 26-Sep in test_algo_routes)."""
+
+    def __init__(self, frozen_epoch):
+        self._frozen = float(frozen_epoch)
+
+    def time(self):
+        return self._frozen
+
+    def __getattr__(self, name):
+        import time as _real
+        return getattr(_real, name)
+
+
 NOW = 1_700_000_000
 # Pin the clock to mid-session. After 15:10 IST the monitor emits TIME_EXIT for
 # intraday rows, which silently changes the exit reason these tests assert on —
 # so unpinned they pass all morning and fail after 15:10.
 _MIDDAY = (int(time.time()) + 19800) // 86400 * 86400 - 19800 + 12 * 3600
-paper_service.time.time = lambda: float(_MIDDAY)
+paper_service.time = _FrozenTime(_MIDDAY)  # module-local, see class note
 REAL_JOURNAL = pathlib.Path(__file__).resolve().parents[1] / ".trades.json"
 
 # The open-position cap now reads the runtime overlay, exactly as the live
@@ -426,7 +445,7 @@ def test_scan_reaches_the_real_signal_store():
         ),
         action=Action.BUY_CE, signal=card, no_trade_reason=None, score=None,
     )
-    sig.reconcile(resp, int(time.time()))
+    sig.reconcile(resp, int(_MIDDAY))
 
     store = _store()
     svc = PaperTradingService(_cfg(), _State(px=120.0), store)
@@ -450,14 +469,14 @@ def test_expired_or_inactive_cards_are_not_entered():
     svc = PaperTradingService(_cfg(), _State(px=120.0), s)
 
     stale = _card(cid="OLD")
-    stale.valid_until = int(time.time()) - 1
+    stale.valid_until = int(_MIDDAY) - 1
     svc.consider(stale)
     assert not s.all(), "entered an expired card"
     assert "OLD" not in svc._seen, "expired card was burned; it may be live next cycle"
 
     from app.signals.models import SignalState
     dead = _card(cid="DEAD")
-    dead.valid_until = int(time.time()) + 600
+    dead.valid_until = int(_MIDDAY) + 600
     dead.state = SignalState.CANCELLED
     svc.consider(dead)
     assert not s.all(), "entered a cancelled card"

@@ -33,8 +33,10 @@ from app.signals.models import (
 # clock — /basket for card expiry, /protect for the ~15:20 MIS square-off — so
 # unpinned these tests pass in the morning and fail after 15:20. Patching it
 # per-test instead leaked into later tests and made expiry order-dependent.
+from tests.test_paper import _FrozenTime
+
 NOW = (int(time.time()) + 19800) // 86400 * 86400 - 19800 + 12 * 3600
-kb.time.time = lambda: float(NOW)  # type: ignore
+kb.time = _FrozenTime(NOW)  # module-local, see class note in test_paper
 
 # Intraday entered paper audition on 31-Aug (INTRADAY_LIVE_ENABLED=false by
 # default). These tests exercise BASKET MECHANICS with intraday cards, so the
