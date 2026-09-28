@@ -208,6 +208,58 @@ async def emergency(req: EmergencyRequest) -> dict:
     return {"limits": risk.effective()}
 
 
+class Vwap3StudyRequest(BaseModel):
+    sigma_mult: float = Field(default=3.0, ge=2.0, le=4.0)
+    timeframe: str = Field(default="5m", pattern=r"^(5m|15m)$")
+    sl_ext: float = Field(default=0.50, ge=0.25, le=1.0)
+    sweeps: bool = False
+
+
+@router.post("/vwap3/study")
+async def vwap3_study(req: Vwap3StudyRequest) -> dict:
+    from app.lab import vwap3
+    if _lock.locked():
+        raise HTTPException(status_code=409,
+                            detail="A lab job is already running")
+    async with _lock:
+        try:
+            result = await asyncio.to_thread(
+                vwap3.run_study, req.sigma_mult, req.timeframe, req.sl_ext)
+            if req.sweeps:
+                result["sweeps"] = await asyncio.to_thread(
+                    vwap3.run_sweeps, req.sigma_mult)
+            study_id = await asyncio.to_thread(
+                lab_store.save_study, "vwap3", req.dict(), result)
+            return {"study_id": study_id, "result": result}
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception as exc:  # pragma: no cover - unexpected
+            log.exception("vwap3 study failed")
+            raise HTTPException(status_code=500,
+                                detail="Study error: %s" % exc)
+
+
+@router.get("/vwap3/study")
+async def vwap3_latest() -> dict:
+    row = await asyncio.to_thread(lab_store.latest_study, "vwap3")
+    if row is None:
+        raise HTTPException(status_code=404,
+                            detail="No study yet — POST /lab/vwap3/study")
+    return row
+
+
+@router.get("/vwap3/day/{day}")
+async def vwap3_day(day: str,
+                    mult: float = Query(default=3.0, ge=2.0, le=4.0),
+                    tf: str = Query(default="5m",
+                                    pattern=r"^(5m|15m)$")) -> dict:
+    from app.lab import vwap3
+    try:
+        return await asyncio.to_thread(vwap3.day_detail, day, mult, tf)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.get("/data")
 async def data_status() -> dict:
     return await asyncio.to_thread(service.data_status)

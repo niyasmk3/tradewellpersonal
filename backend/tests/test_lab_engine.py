@@ -137,7 +137,7 @@ def _bt(sid: str, df: pd.DataFrame, overrides=None, reader=None,
 
 
 def test_catalog_integrity():
-    assert len(catalog.CATALOG) == 40
+    assert len(catalog.CATALOG) == 41
     from app.lab.strategies import implemented_sids
     assert sorted(d.sid for d in catalog.CATALOG) == implemented_sids()
     for d in catalog.CATALOG:

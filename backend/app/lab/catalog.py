@@ -1,4 +1,4 @@
-"""The 40-strategy catalog.
+"""The 41-strategy catalog.
 
 Each entry documents the hypothesis, the exact signal logic the implementation
 follows (strategies/*.py must match this text — drift between the two is a
@@ -397,6 +397,97 @@ _OPT_BUY_DEFS = (
                         5, unit="IST min", tunable=True),
               _p_strike_off(1)),
        common=_COMMON_OPT),
+
+    _d("B09", "VWAP 3σ Mean Reversion – CE/PE", CAT_OPT_BUY, "OPT", "index",
+       "5m",
+       "Intraday NIFTY mean-reversion strategy that buys PE when price "
+       "reaches the upper 3-standard-deviation VWAP band and buys CE when "
+       "price reaches the lower 3-standard-deviation VWAP band, targeting "
+       "a return toward session VWAP. A hypothesis under test, not an "
+       "assumption: repeated touches can mean a trend day, and the study "
+       "measures exactly how often the reversion actually happens.",
+       "Bands = session VWAP ± sigma_mult × session volume-weighted σ "
+       "(volume = NIFTYBEES proxy), reset each session, causal. Touch: bar "
+       "HIGH >= upper band (bearish stretch -> buy PE) or bar LOW <= lower "
+       "band (bullish stretch -> buy CE); fills at the next observable "
+       "quote, never inside the touch bar. entry_mode A=touch (v1 "
+       "hypothesis), B=close back inside the band, C=confirmation "
+       "(confirm_rule within confirm_window bars). A touch episode re-arms "
+       "only after price returns to VWAP; touch_policy caps episodes/day. "
+       "Default exit: underlying tags VWAP. Stops per sl_mode; premium "
+       "brackets use the standard stop/target/trail params. min_dte rolls "
+       "the weekly to the monthly when too close to expiry. Timeframe "
+       "choice covers 5m/15m (1m/3m index history is not stored).",
+       (INDEX_5M, CHAIN_HIST, VIX_DAILY),
+       extra=(
+           ParamSpec("sigma_mult", "σ multiplier", "float", 3.0, 2.0, 4.0,
+                     0.5, tunable=True,
+                     help="3.0 is the OFFICIAL strategy; other values are "
+                          "research/challenger territory."),
+           ParamSpec("timeframe", "Timeframe", "choice", "5m",
+                     choices=("5m", "15m"),
+                     help="1m/3m need an index sync that does not exist "
+                          "yet — offering them would fabricate data."),
+           ParamSpec("entry_mode", "Entry mode", "choice", "touch",
+                     choices=("touch", "close_inside", "rejection"),
+                     tunable=True,
+                     help="A=direct touch (v1), B=close back inside, "
+                          "C=rejection confirmation"),
+           ParamSpec("confirm_rule", "C: confirmation", "choice",
+                     "reversal_candle",
+                     choices=("close_inside", "reversal_candle",
+                              "wick_ratio", "prev_break")),
+           ParamSpec("confirm_window", "C: confirm within", "int", 3, 1, 6,
+                     1, unit="bars"),
+           ParamSpec("wick_body_min", "C: wick/body min", "float", 1.5,
+                     0.5, 5.0, 0.1),
+           ParamSpec("strike_sel", "Strike selection", "choice", "offset",
+                     choices=("offset", "delta"), tunable=True),
+           _p_strike_off(0, -2, 2),
+           ParamSpec("delta_target", "Target |delta|", "float", 0.40, 0.10,
+                     0.60, 0.05, tunable=True),
+           ParamSpec("min_dte", "Min days to expiry", "int", 0, 0, 5, 1,
+                     tunable=True,
+                     help="Nearest expiry closer than this rolls to the "
+                          "monthly (the two universes the archive holds)."),
+           ParamSpec("min_volume", "Min volume", "int", 0, 0, 10000000,
+                     1000),
+           ParamSpec("min_premium", "Min premium", "float", 5.0, 0, 500, 1,
+                     unit="₹"),
+           ParamSpec("max_premium", "Max premium (0=off)", "float", 0.0, 0,
+                     2000, 5, unit="₹"),
+           ParamSpec("target_mode", "Target", "choice", "vwap",
+                     choices=("vwap", "vwap_partial", "premium_pct",
+                              "risk_reward", "trail_after"), tunable=True,
+                     help="vwap (default): exit when NIFTY tags session "
+                          "VWAP. vwap_partial books half at partial_pct "
+                          "premium gain (needs lots >= 2), rest to VWAP."),
+           ParamSpec("partial_pct", "Partial book at", "float", 40.0, 5,
+                     200, 5, unit="% prem", tunable=True),
+           ParamSpec("rr_ratio", "Risk:reward target", "float", 1.5, 0.5,
+                     5.0, 0.1, tunable=True),
+           ParamSpec("sl_mode", "Stop mode", "choice", "sigma_ext",
+                     choices=("sigma_ext", "premium_pct", "structure",
+                              "time"), tunable=True),
+           ParamSpec("sl_sigma_ext", "Stop: band + n·σ", "float", 0.50,
+                     0.25, 1.00, 0.25, tunable=True,
+                     help="Research grid 0.25/0.50/0.75/1.00 — backtest "
+                          "them, do not assume."),
+           ParamSpec("time_stop_bars", "Time stop", "int", 12, 2, 40, 1,
+                     unit="bars", tunable=True),
+           ParamSpec("progress_min_pct", "Time stop: min progress", "float",
+                     25.0, 0, 100, 5, unit="%"),
+           ParamSpec("avoid_first_min", "Avoid first", "int", 15, 0, 60, 5,
+                     unit="min", tunable=True),
+           ParamSpec("touch_policy", "Touches traded", "choice", "all",
+                     choices=("all", "first", "first_two"), tunable=True),
+           ParamSpec("slope_filter", "VWAP slope filter", "choice", "off",
+                     choices=("off", "flat_only", "exclude_strong_against"),
+                     tunable=True,
+                     help="OFF by default on purpose: measure first (the "
+                          "study buckets by slope), filter after."),
+       ),
+       common=_COMMON_OPT),
 )
 
 # ==========================================================================
@@ -738,8 +829,8 @@ CATALOG: tuple = (_FUT_DEFS + _OPT_BUY_DEFS + _OPT_SELL_DEFS + _CHAIN_DEFS
 
 BY_SID = {d.sid: d for d in CATALOG}
 
-assert len(CATALOG) == 40, "catalog must hold exactly 40 strategies"
-assert len(BY_SID) == 40, "duplicate strategy ids"
+assert len(CATALOG) == 41, "catalog must hold exactly 41 strategies"
+assert len(BY_SID) == 41, "duplicate strategy ids"
 
 
 def get(sid: str) -> StrategyDef:

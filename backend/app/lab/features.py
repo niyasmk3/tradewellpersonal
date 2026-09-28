@@ -52,6 +52,21 @@ def add_features(df: pd.DataFrame, ema_fast: int = 9, ema_slow: int = 21,
                     .reset_index(level=0, drop=True))
     d["vwap"] = vwap
 
+    # Session volume-weighted standard deviation about the running VWAP
+    # (B09's σ bands): sd = sqrt(E[tp²] − vwap²) with E[tp²] = Σv·tp²/Σv,
+    # cumulative within the session — causal like everything else here.
+    # Volume-less stretches fall back to the expanding population std of tp.
+    pv2 = tp * tp * d["volume"]
+    cum_pv2 = pv2.groupby(d["day"]).cumsum()
+    with np.errstate(invalid="ignore"):
+        vw_var = np.where(cum_v > 0,
+                          cum_pv2 / cum_v.replace(0, np.nan)
+                          - np.square(d["vwap"]),
+                          np.square(tp.groupby(d["day"]).expanding()
+                                    .std(ddof=0)
+                                    .reset_index(level=0, drop=True)))
+    d["vwap_sd"] = np.sqrt(np.clip(vw_var, 0.0, None))
+
     # Day context. Prev-day values must come from completed sessions only.
     grp = d.groupby("day")
     d["day_open"] = grp["open"].transform("first")
@@ -158,6 +173,33 @@ def regime_allows(regime: str, filter_name: str) -> bool:
     if filter_name == "exclude_highvol":
         return regime != HIGH_VOL
     return True
+
+
+SLOPE_STRONG_UP = "strong_up"
+SLOPE_MILD_UP = "mild_up"
+SLOPE_FLAT = "flat"
+SLOPE_MILD_DOWN = "mild_down"
+SLOPE_STRONG_DOWN = "strong_down"
+
+
+def vwap_slope_bucket(vwap_now: float, vwap_then: float, bars: int,
+                      atr: float) -> str:
+    """Five-way VWAP slope class, normalised by ATR so the buckets mean the
+    same thing in quiet and wild tapes: per-bar VWAP drift as a fraction of
+    ATR. Thresholds 0.02 / 0.06 chosen once here so the strategy filter and
+    the study bucket identically."""
+    if not atr or atr <= 0 or bars <= 0:
+        return SLOPE_FLAT
+    r = (vwap_now - vwap_then) / bars / atr
+    if r >= 0.06:
+        return SLOPE_STRONG_UP
+    if r >= 0.02:
+        return SLOPE_MILD_UP
+    if r <= -0.06:
+        return SLOPE_STRONG_DOWN
+    if r <= -0.02:
+        return SLOPE_MILD_DOWN
+    return SLOPE_FLAT
 
 
 def session_bucket(minute: int) -> str:

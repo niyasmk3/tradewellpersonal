@@ -77,7 +77,8 @@ class HistChainView(ChainView):
                      (row["expiry"], int(strike), right),
                      expiry=row["expiry"], strike=strike, right=right,
                      ltp=row["ltp"], bid=row["bid"], ask=row["ask"],
-                     oi=row["oi"], ts=self.ts, iv=row["iv"])
+                     oi=row["oi"], ts=self.ts, iv=row["iv"],
+                     volume=row.get("volume") or 0.0)
 
 
 class ChainFeatures:
@@ -395,7 +396,10 @@ class Backtester:
                 resolved.append((leg, None))
                 continue
             q, why = resolve_leg(view_dec, leg, self.p.get("min_oi", 0),
-                                 self.p.get("max_spread_pct", 99.0))
+                                 self.p.get("max_spread_pct", 99.0),
+                                 min_volume=self.p.get("min_volume", 0),
+                                 min_premium=self.p.get("min_premium", 0.0),
+                                 max_premium=self.p.get("max_premium", 0.0))
             if q is None:
                 return None, why
             resolved.append((leg, q))

@@ -2036,6 +2036,13 @@ export const api = {
     postJSON<{ limits: Record<string, number> }>("/lab/emergency", { action, flatten, reason }),
   labData: () => getJSON<LabDataStatus>("/lab/data"),
   labSyncFutures: () => postJSON<Record<string, unknown>>("/lab/data/sync-futures", {}),
+  labVwap3Study: (req: LabVwap3StudyRequest) =>
+    postJSON<{ study_id: number; result: LabVwap3Result }>("/lab/vwap3/study", req),
+  labVwap3Latest: () =>
+    getJSON<{ id: number; created_at: number; params: LabVwap3StudyRequest; result: LabVwap3Result }>(
+      "/lab/vwap3/study"),
+  labVwap3Day: (day: string, mult = 3.0, tf = "5m") =>
+    getJSON<LabVwap3Day>(`/lab/vwap3/day/${day}?mult=${mult}&tf=${tf}`),
 };
 
 // ---- Strategy Lab types ----
@@ -2186,6 +2193,83 @@ export interface LabRiskView {
   events: { ts: number; day: string; sid: string; code: string; detail: Record<string, unknown> }[];
   bounds: Record<string, { default: number; lo: number; hi: number }>;
   note: string;
+}
+
+// ---- B09 VWAP σ study ----
+
+export interface LabVwap3StudyRequest {
+  sigma_mult?: number; timeframe?: string; sl_ext?: number; sweeps?: boolean;
+}
+
+export interface LabVwap3Bucket {
+  n: number; returned?: number; rate: number | null; low_sample: boolean;
+}
+
+export interface LabVwap3Summary {
+  n: number; upper_n?: number; lower_n?: number;
+  return_rate?: number | null; return_rate_upper?: number | null;
+  return_rate_lower?: number | null;
+  median_minutes_to_vwap?: number | null; avg_minutes_to_vwap?: number | null;
+  median_mae_sigma?: number | null; avg_mae_sigma?: number | null;
+  pct_vwap_before_stop?: number | null; pct_stop_before_vwap?: number | null;
+  pct_open_at_squareoff?: number | null;
+  reliable?: boolean; reliability_note?: string | null;
+}
+
+export interface LabVwap3Touch {
+  ts: number; minute: number; day: string; side: string; ordinal: number;
+  price: number; vwap: number; sd: number; band: number; dist: number;
+  width: number; hour: string; dow: string; slope: string;
+  vol_regime?: string; width_q?: string; outcome: string; returned: boolean;
+  minutes_to_out: number | null; bars_to_out: number | null;
+  mfe_pts: number; mae_pts: number; mae_sigma: number | null;
+  option?: {
+    symbol: string; right: string; entry: number; exit: number;
+    prem_max: number; prem_min: number; gross: number; costs: number;
+    net: number; exit_approx?: boolean;
+  } | null;
+}
+
+export interface LabVwap3Result {
+  official_mult: number; timeframe: string; sl_ext: number;
+  span: { from: string | null; to: string | null };
+  summary: LabVwap3Summary;
+  heatmaps: Record<string, Record<string, LabVwap3Bucket>>;
+  research_mults: Record<string, LabVwap3Summary>;
+  option_layer: {
+    n: number; era: { from: string | null; to: string | null };
+    pe: { n: number; net: number; win_rate: number | null };
+    ce: { n: number; net: number; win_rate: number | null };
+    net: number; expectancy: number | null; profit_factor: number | null;
+    max_drawdown: number; note: string;
+  };
+  touches_recent: LabVwap3Touch[];
+  sweeps?: {
+    entry_mode_x_sl_ext: Record<string, LabVwap3Cell>;
+    strike: Record<string, LabVwap3Cell>;
+    expiry: Record<string, LabVwap3Cell>;
+    target_mode: Record<string, LabVwap3Cell>;
+    note: string;
+  };
+}
+
+export interface LabVwap3Cell {
+  n?: number; net?: number; win_rate?: number | null;
+  expectancy?: number | null; low_sample?: boolean; status?: string;
+}
+
+export interface LabVwap3Day {
+  day: string; sigma_mult: number; timeframe: string;
+  candles: { ts: number; open: number; high: number; low: number; close: number }[];
+  vwap: { ts: number; v: number }[];
+  upper: { ts: number; v: number }[];
+  lower: { ts: number; v: number }[];
+  touches: LabVwap3Touch[];
+  trades: {
+    run_id: number; tag: string; entry_ts: number; exit_ts: number;
+    exit_reason: string; pnl_net: number | null;
+    legs: { side: string; right: string; symbol: string; entry: number; exit: number | null }[];
+  }[];
 }
 
 export interface LabDataStatus {

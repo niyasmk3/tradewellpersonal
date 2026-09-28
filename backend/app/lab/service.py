@@ -215,10 +215,13 @@ def run_backtest(sid: str, version: Optional[int], params: Optional[dict],
     if from_day and lo_day != from_day:
         data_note = "span clamped to available data (%s..%s)" % (lo_day,
                                                                  hi_day)
-    run_id = lab_store.create_run(sid, version, kind, d.timeframe, from_ts,
+    # a strategy may expose "timeframe" as a param (B09); default stays the
+    # catalog's fixed timeframe for everything else
+    tf = run_params.get("timeframe") or d.timeframe
+    run_id = lab_store.create_run(sid, version, kind, tf, from_ts,
                                   to_ts, capital_rs,
                                   learning.costs_snapshot(lo_day), data_note)
-    bt = Backtester(d, run_params, d.timeframe, from_ts, to_ts, capital_rs)
+    bt = Backtester(d, run_params, tf, from_ts, to_ts, capital_rs)
     res = bt.run()
     if res.status != "done":
         lab_store.finish_run(run_id, res.status, {"note": res.note}, [])

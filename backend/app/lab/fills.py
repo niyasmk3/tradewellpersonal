@@ -62,6 +62,7 @@ class Quote:
     oi: float
     ts: int
     iv: Optional[float] = None
+    volume: float = 0.0
 
 
 class ChainView:
@@ -109,9 +110,11 @@ def _delta_for(q: Quote, spot: float, now_ts: int) -> Optional[float]:
 
 
 def resolve_leg(view: ChainView, leg: LegSpec, min_oi: float,
-                max_spread_pct: float) -> tuple:
+                max_spread_pct: float, min_volume: float = 0,
+                min_premium: float = 0.0, max_premium: float = 0.0) -> tuple:
     """-> (Quote | None, reason). Applies strike selection + liquidity
-    guards against what was actually listed and quoted."""
+    guards against what was actually listed and quoted. The volume/premium
+    guards default to off so pre-B09 strategies behave unchanged."""
     if leg.right == "FUT":
         return None, "resolve_leg is options-only"
     expiry = view.expiry(leg.expiry_rule)
@@ -173,6 +176,12 @@ def resolve_leg(view: ChainView, leg: LegSpec, min_oi: float,
         return None, "no_traded_price"
     if min_oi > 0 and q.oi < min_oi:
         return None, "min_oi"
+    if min_volume > 0 and getattr(q, "volume", 0) < min_volume:
+        return None, "min_volume"
+    if min_premium > 0 and q.ltp < min_premium:
+        return None, "premium_too_low"
+    if max_premium > 0 and q.ltp > max_premium:
+        return None, "premium_too_high"
     if q.bid and q.ask and q.ltp > 0:
         spread_pct = (q.ask - q.bid) / q.ltp * 100.0
         if spread_pct > max_spread_pct:

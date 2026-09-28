@@ -170,7 +170,9 @@ class _Runner:
         self.version = version
         self.experimental = experimental
         self.sdef = BY_SID[sid]
-        self.bt = Backtester(self.sdef, params, self.sdef.timeframe,
+        # a strategy may carry its timeframe as a param (B09)
+        self.tf = params.get("timeframe") or self.sdef.timeframe
+        self.bt = Backtester(self.sdef, params, self.tf,
                              0, 0, capital_rs=risk_mod.effective()
                              ["max_capital_rs"])
         self.last_bar_ts = 0
@@ -409,9 +411,9 @@ class PaperEngine:
         df = feed.frame()
         if df.empty or len(df) < 100:
             return
-        step = TF_SECONDS[runner.sdef.timeframe]
-        if runner.sdef.timeframe != "5m":
-            df = data_mod.resample(df, runner.sdef.timeframe)
+        step = TF_SECONDS[runner.tf]
+        if runner.tf != "5m":
+            df = data_mod.resample(df, runner.tf)
         p = runner.bt.p
         df = feat.add_features(
             df, ema_fast=int(p.get("ema_fast", 9)),
@@ -508,7 +510,7 @@ class PaperEngine:
     def _ctx(self, runner: "_Runner", df: pd.DataFrame, i: int, now_ts: int,
              day: str, flat: bool) -> BarContext:
         bar = df.iloc[i]
-        step = TF_SECONDS[runner.sdef.timeframe]
+        step = TF_SECONDS[runner.tf]
         decision_ts = int(bar["ts"]) + step
         vix_df = data_mod.load_vix_daily()
         vix = data_mod.vix_asof(vix_df, int(bar["ts"]))

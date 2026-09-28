@@ -21,9 +21,15 @@ import {
   LabRun,
   LabRunSummary,
   LabStrategy,
+  LabVwap3Bucket,
+  LabVwap3Cell,
+  LabVwap3Day,
+  LabVwap3Result,
+  LabVwap3Summary,
 } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { ModuleSwitcher } from "@/components/ModuleSwitcher";
+import { Vwap3Chart } from "@/components/Vwap3Chart";
 
 // ---- tiny helpers (GoldLab idioms) ----------------------------------------
 
@@ -162,11 +168,16 @@ function SummaryTiles({ s }: { s: LabRunSummary }) {
 
 function CommandCenter() {
   const o = usePolling<LabOverview>(() => api.labOverview(), 15000, []);
+  const [study, setStudy] = useState<LabVwap3Result | null>(null);
+  useEffect(() => {
+    api.labVwap3Latest().then((r) => setStudy(r.result)).catch(() => {});
+  }, []);
   if (o.error) return <div className="card border-bear/50 bg-bear/10 px-4 py-2 text-xs text-bear">{o.error}</div>;
   if (!o.data) return <div className="card px-4 py-6 text-center text-xs text-muted">Loading…</div>;
   const d = o.data;
   return (
     <>
+      {study && <Vwap3ProbCard r={study} compact />}
       <section className="card px-4 py-3">
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Paper portfolio — live simulation</h2>
         <div className="grid gap-2 md:grid-cols-4">
@@ -995,9 +1006,317 @@ function DataSettings() {
   );
 }
 
+// ---- B09 VWAP 3σ study -----------------------------------------------------
+
+function rateCls(rate: number | null | undefined): string {
+  if (rate === null || rate === undefined) return "text-muted";
+  if (rate >= 65) return "bg-bull/25 text-bull";
+  if (rate >= 55) return "bg-bull/10 text-bull";
+  if (rate >= 45) return "text-muted";
+  if (rate >= 35) return "bg-bear/10 text-bear";
+  return "bg-bear/25 text-bear";
+}
+
+function Vwap3Heatmap({ title, buckets, order }: {
+  title: string; buckets: Record<string, LabVwap3Bucket>; order?: string[];
+}) {
+  const keys = order ? order.filter((k) => buckets[k]) : Object.keys(buckets);
+  if (!keys.length) return null;
+  return (
+    <div className="rounded border border-edge/60 bg-panel2 px-3 py-2">
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{title}</div>
+      <table className="w-full text-[11px]">
+        <tbody className="font-mono">
+          {keys.map((k) => {
+            const b = buckets[k];
+            return (
+              <tr key={k} className="border-t border-edge/30">
+                <td className="py-0.5 pr-2">{k}{b.low_sample ? <span className="text-yellow-400" title="under 30 touches"> ⚠</span> : null}</td>
+                <td className="text-right text-muted">{b.n}</td>
+                <td className={`rounded px-1 text-right ${rateCls(b.rate)}`}>
+                  {b.rate === null ? "—" : `${num(b.rate, 1)}%`}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Vwap3ProbCard({ r, compact }: { r: LabVwap3Result; compact?: boolean }) {
+  const s = r.summary;
+  return (
+    <section className="card border-accent/40 px-4 py-3">
+      <div className="mb-2 flex flex-wrap items-baseline gap-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-accent">
+          3σ → VWAP reversion probability
+        </h2>
+        <span className="text-[10px] text-muted">
+          {r.official_mult}σ · {r.timeframe} · stop {r.sl_ext}σ · {r.span.from} → {r.span.to}
+        </span>
+        {!s.reliable && (
+          <span className="tag bg-yellow-500/15 text-yellow-400"
+            title={s.reliability_note ?? ""}>low sample</span>
+        )}
+      </div>
+      <div className={`grid gap-2 ${compact ? "md:grid-cols-4" : "md:grid-cols-4"}`}>
+        <Tile label="Overall" value={s.return_rate == null ? "—" : `${num(s.return_rate, 1)}%`}
+          cls="text-lg" hint={`${s.n} qualifying touch episodes`} />
+        <Tile label="Upper band" value={s.return_rate_upper == null ? "—" : `${num(s.return_rate_upper, 1)}%`}
+          hint={`${s.upper_n} touches`} />
+        <Tile label="Lower band" value={s.return_rate_lower == null ? "—" : `${num(s.return_rate_lower, 1)}%`}
+          hint={`${s.lower_n} touches`} />
+        <Tile label="Observations" value={String(s.n)}
+          cls={s.reliable ? "" : "text-yellow-400"}
+          hint={s.reliability_note ?? "sample size adequate"} />
+        <Tile label="Median time to VWAP" value={s.median_minutes_to_vwap == null ? "—" : `${s.median_minutes_to_vwap} min`} />
+        <Tile label="VWAP before stop" value={s.pct_vwap_before_stop == null ? "—" : `${num(s.pct_vwap_before_stop, 1)}%`} />
+        <Tile label="Stop before VWAP" value={s.pct_stop_before_vwap == null ? "—" : `${num(s.pct_stop_before_vwap, 1)}%`} />
+        <Tile label="Net option P&L / setup" value={r.option_layer.expectancy == null ? "—" : rs(r.option_layer.expectancy)}
+          cls={signCls(r.option_layer.expectancy)}
+          hint={`real premiums, chain era only (n=${r.option_layer.n})`} />
+      </div>
+    </section>
+  );
+}
+
+function Vwap3CellTable({ title, cells, keys }: {
+  title: string; cells: Record<string, LabVwap3Cell>; keys?: string[];
+}) {
+  const ks = keys ?? Object.keys(cells);
+  return (
+    <div className="rounded border border-edge/60 bg-panel2 px-3 py-2">
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{title}</div>
+      <table className="w-full text-[11px]">
+        <thead className="text-[10px] uppercase text-muted">
+          <tr><th className="text-left font-normal">cell</th>
+            <th className="text-right font-normal">n</th>
+            <th className="text-right font-normal">win%</th>
+            <th className="text-right font-normal">/trade</th>
+            <th className="text-right font-normal">net</th></tr>
+        </thead>
+        <tbody className="font-mono">
+          {ks.map((k) => {
+            const c = cells[k];
+            if (!c) return null;
+            return (
+              <tr key={k} className="border-t border-edge/30">
+                <td className="py-0.5">{k}{c.low_sample ? <span className="text-yellow-400"> ⚠</span> : null}</td>
+                <td className="text-right">{c.n ?? c.status ?? "—"}</td>
+                <td className="text-right">{c.win_rate == null ? "—" : num(c.win_rate, 1)}</td>
+                <td className={`text-right ${signCls(c.expectancy)}`}>{c.expectancy == null ? "—" : rs(c.expectancy)}</td>
+                <td className={`text-right ${signCls(c.net)}`}>{c.net == null ? "—" : rs(c.net)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Vwap3Study() {
+  const [latest, setLatest] = useState<LabVwap3Result | null>(null);
+  const [ranAt, setRanAt] = useState<number | null>(null);
+  const [mult, setMult] = useState("3.0");
+  const [tf, setTf] = useState("5m");
+  const [slExt, setSlExt] = useState("0.5");
+  const [sweeps, setSweeps] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [chartDay, setChartDay] = useState<string | null>(null);
+  const [chart, setChart] = useState<LabVwap3Day | null>(null);
+
+  useEffect(() => {
+    api.labVwap3Latest()
+      .then((r) => { setLatest(r.result); setRanAt(r.created_at); })
+      .catch(() => { /* no study yet */ });
+  }, []);
+
+  const run = async () => {
+    setBusy(true); setError(null);
+    try {
+      const r = await api.labVwap3Study({
+        sigma_mult: Number(mult), timeframe: tf, sl_ext: Number(slExt),
+        sweeps,
+      });
+      setLatest(r.result);
+      setRanAt(Math.floor(Date.now() / 1000));
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+
+  const openChart = async (day: string) => {
+    setChartDay(day); setChart(null);
+    try {
+      setChart(await api.labVwap3Day(day, Number(mult), tf));
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+  };
+
+  const r = latest;
+  return (
+    <>
+      <section className="card px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+            B09 · VWAP σ-band study
+          </h2>
+          <label className="text-muted">σ <select value={mult} onChange={(e) => setMult(e.target.value)}
+            className="rounded border border-edge bg-panel2 px-2 py-1">
+            {["2.0", "2.5", "3.0", "3.5", "4.0"].map((m) => <option key={m}>{m}</option>)}
+          </select></label>
+          <label className="text-muted">tf <select value={tf} onChange={(e) => setTf(e.target.value)}
+            className="rounded border border-edge bg-panel2 px-2 py-1">
+            <option>5m</option><option>15m</option>
+          </select></label>
+          <label className="text-muted">stop ext <select value={slExt} onChange={(e) => setSlExt(e.target.value)}
+            className="rounded border border-edge bg-panel2 px-2 py-1">
+            {["0.25", "0.5", "0.75", "1.0"].map((m) => <option key={m}>{m}</option>)}
+          </select>σ</label>
+          <label className="flex items-center gap-1 text-muted">
+            <input type="checkbox" checked={sweeps} onChange={(e) => setSweeps(e.target.checked)} />
+            engine sweeps (~30s)
+          </label>
+          <button onClick={run} disabled={busy}
+            className="rounded bg-accent/20 px-3 py-1 font-medium text-accent hover:bg-accent/30 disabled:opacity-50">
+            {busy ? "Running…" : "Run study"}
+          </button>
+          {ranAt && <span className="text-[10px] text-muted">last run {new Date(ranAt * 1000).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</span>}
+        </div>
+        {error && <div className="mt-2 rounded border border-bear/50 bg-bear/10 px-3 py-1.5 text-xs text-bear">{error}</div>}
+        <p className="mt-1 text-[10px] text-muted">
+          Underlying layer answers the reversion question over the FULL index history; the option layer prices the
+          same touches with REAL premiums inside the chain era only. 3.0σ stays the official strategy — other
+          multipliers are research, promoted only as challengers.
+        </p>
+      </section>
+      {!r && <div className="card px-4 py-6 text-center text-xs text-muted">No study yet — run one above.</div>}
+      {r && (
+        <>
+          <Vwap3ProbCard r={r} />
+          <section className="card grid gap-2 px-4 py-3 md:grid-cols-3">
+            <Vwap3Heatmap title="Time of day × return rate" buckets={r.heatmaps.hour}
+              order={["09:15-10:00", "10:00-11:30", "11:30-13:30", "13:30-14:30", "14:30-15:15"]} />
+            <Vwap3Heatmap title="Day of week" buckets={r.heatmaps.dow}
+              order={["Mon", "Tue", "Wed", "Thu", "Fri"]} />
+            <Vwap3Heatmap title="VWAP slope at touch" buckets={r.heatmaps.slope}
+              order={["strong_up", "mild_up", "flat", "mild_down", "strong_down"]} />
+            <Vwap3Heatmap title="Volatility regime (VIX pctile)" buckets={r.heatmaps.vol_regime}
+              order={["low", "normal", "high", "extreme", "unknown"]} />
+            <Vwap3Heatmap title="Band width quintile" buckets={r.heatmaps.width_q}
+              order={["Q1", "Q2", "Q3", "Q4", "Q5"]} />
+            <Vwap3Heatmap title="Touch of the day" buckets={r.heatmaps.ordinal}
+              order={["1", "2", "3+"]} />
+            <Vwap3Heatmap title="Entry mode (A touch / B close-inside / C rejection)"
+              buckets={r.heatmaps.entry_mode} order={["A", "B", "C"]} />
+            <div className="rounded border border-edge/60 bg-panel2 px-3 py-2">
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">σ multiplier (research)</div>
+              <table className="w-full text-[11px]"><tbody className="font-mono">
+                {Object.entries(r.research_mults).map(([m, s2]: [string, LabVwap3Summary]) => (
+                  <tr key={m} className="border-t border-edge/30">
+                    <td className="py-0.5">{m}σ</td>
+                    <td className="text-right text-muted">{s2.n}</td>
+                    <td className={`rounded px-1 text-right ${rateCls(s2.return_rate)}`}>
+                      {s2.return_rate == null ? "—" : `${num(s2.return_rate, 1)}%`}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-t border-edge/30 text-accent">
+                  <td className="py-0.5">{r.official_mult}σ (official)</td>
+                  <td className="text-right">{r.summary.n}</td>
+                  <td className={`rounded px-1 text-right ${rateCls(r.summary.return_rate)}`}>
+                    {r.summary.return_rate == null ? "—" : `${num(r.summary.return_rate, 1)}%`}
+                  </td>
+                </tr>
+              </tbody></table>
+            </div>
+            <div className="rounded border border-edge/60 bg-panel2 px-3 py-2">
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">Option layer (real premiums, chain era)</div>
+              <div className="grid grid-cols-2 gap-x-3 font-mono text-[11px]">
+                <span className="text-muted">PE trades</span>
+                <span className="text-right">{r.option_layer.pe.n} · wr {num(r.option_layer.pe.win_rate, 1)}% · <span className={signCls(r.option_layer.pe.net)}>{rs(r.option_layer.pe.net)}</span></span>
+                <span className="text-muted">CE trades</span>
+                <span className="text-right">{r.option_layer.ce.n} · wr {num(r.option_layer.ce.win_rate, 1)}% · <span className={signCls(r.option_layer.ce.net)}>{rs(r.option_layer.ce.net)}</span></span>
+                <span className="text-muted">Profit factor</span>
+                <span className="text-right">{num(r.option_layer.profit_factor)}</span>
+                <span className="text-muted">Max drawdown</span>
+                <span className={`text-right ${signCls(r.option_layer.max_drawdown)}`}>{rs(r.option_layer.max_drawdown)}</span>
+              </div>
+              <p className="mt-1 text-[10px] text-muted">{r.option_layer.note}</p>
+            </div>
+          </section>
+          {r.sweeps && (
+            <section className="card grid gap-2 px-4 py-3 md:grid-cols-2">
+              <Vwap3CellTable title="Entry mode × stop extension (engine, chain era)"
+                cells={r.sweeps.entry_mode_x_sl_ext} />
+              <Vwap3CellTable title="Strike selection" cells={r.sweeps.strike}
+                keys={["-2", "-1", "0", "1", "2", "delta"]} />
+              <Vwap3CellTable title="Expiry" cells={r.sweeps.expiry} keys={["weekly", "monthly"]} />
+              <Vwap3CellTable title="Target mode" cells={r.sweeps.target_mode}
+                keys={["vwap", "premium_pct", "risk_reward", "trail_after"]} />
+              <p className="text-[10px] text-muted md:col-span-2">{r.sweeps.note}</p>
+            </section>
+          )}
+          <section className="card px-4 py-3">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+              Touch ledger (latest {r.touches_recent.length}) — click a row to open its chart
+            </h2>
+            <div className="max-h-80 overflow-auto scroll-thin">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 bg-panel text-[10px] uppercase text-muted">
+                  <tr className="border-b border-edge/60">
+                    <th className="py-1 text-left font-normal">day</th>
+                    <th className="text-left font-normal">time</th>
+                    <th className="text-left font-normal">side</th>
+                    <th className="text-right font-normal">#</th>
+                    <th className="text-left font-normal">slope</th>
+                    <th className="text-left font-normal">outcome</th>
+                    <th className="text-right font-normal">mins</th>
+                    <th className="text-right font-normal">MAE σ</th>
+                    <th className="text-right font-normal">opt net</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono">
+                  {[...r.touches_recent].reverse().map((t, i) => (
+                    <tr key={i} onClick={() => openChart(t.day)}
+                      className={`cursor-pointer border-b border-edge/30 hover:bg-panel2/50 ${chartDay === t.day ? "bg-accent/10" : ""}`}>
+                      <td className="py-0.5">{t.day}</td>
+                      <td>{istTime(t.ts)}</td>
+                      <td className={t.side === "upper" ? "text-bear" : "text-bull"}>{t.side}</td>
+                      <td className="text-right">{t.ordinal}</td>
+                      <td className="text-muted">{t.slope}</td>
+                      <td className={t.returned ? "text-bull" : "text-muted"}>{t.outcome}</td>
+                      <td className="text-right">{t.minutes_to_out ?? "—"}</td>
+                      <td className="text-right">{t.mae_sigma ?? "—"}</td>
+                      <td className={`text-right ${signCls(t.option?.net)}`}>
+                        {t.option ? rs(t.option.net) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {chartDay && (
+              <div className="mt-3">
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
+                  {chartDay} — candles · VWAP (blue) · ±{mult}σ bands (dashed) · touches · trades
+                </div>
+                {chart ? <Vwap3Chart data={chart} /> :
+                  <div className="py-6 text-center text-xs text-muted">Loading chart…</div>}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </>
+  );
+}
+
 // ---- root ------------------------------------------------------------------
 
-const SECTIONS = ["Command", "Library", "Backtest", "Paper", "Analytics", "Learning", "Risk", "Data"] as const;
+const SECTIONS = ["Command", "Library", "Backtest", "Paper", "Analytics", "Learning", "Risk", "Data", "3σ Study"] as const;
 type Section = typeof SECTIONS[number];
 
 export function StrategyLab() {
@@ -1014,7 +1333,7 @@ export function StrategyLab() {
         <span className="tag bg-accent/15 text-[10px] text-accent">SIMULATION ONLY</span>
         {overview.data?.emergency_stop && <span className="tag bg-bear/15 text-[10px] text-bear">EMERGENCY STOP</span>}
         <span className="text-[11px] text-muted">
-          40 NIFTY F&O strategies · backtests, walk-forward and paper are separate evidence · no orders, ever
+          41 NIFTY F&O strategies · backtests, walk-forward and paper are separate evidence · no orders, ever
         </span>
       </header>
       <nav className="inline-flex flex-wrap gap-1">
@@ -1034,6 +1353,7 @@ export function StrategyLab() {
       {section === "Learning" && <LearningLab />}
       {section === "Risk" && <RiskControl />}
       {section === "Data" && <DataSettings />}
+      {section === "3σ Study" && <Vwap3Study />}
       <footer className="pb-2 text-center text-[10px] text-muted">
         Backtested results are hypothetical and assume the stated fills and costs. Paper results are simulations against live data.
         Nothing here places orders or promises profitability.

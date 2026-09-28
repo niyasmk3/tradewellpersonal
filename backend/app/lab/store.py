@@ -185,6 +185,13 @@ CREATE TABLE IF NOT EXISTS risk_config (
     value       REAL NOT NULL,
     updated_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS study_result (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,             -- e.g. 'vwap3'
+    created_at  INTEGER NOT NULL,
+    params      TEXT NOT NULL,             -- json of the study inputs
+    result      TEXT NOT NULL              -- json; append-only like runs
+);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -645,6 +652,28 @@ class LabStore:
             row = c.execute("SELECT value FROM meta WHERE key=?",
                             (key,)).fetchone()
         return row["value"] if row else None
+
+    # -- study results (append-only, like runs) -----------------------------
+
+    def save_study(self, name: str, params: dict, result: dict) -> int:
+        with _lock, self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO study_result (name, created_at, params, result)"
+                " VALUES (?,?,?,?)",
+                (name, int(time.time()), json.dumps(params),
+                 json.dumps(result)))
+            return int(cur.lastrowid)
+
+    def latest_study(self, name: str) -> Optional[dict]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id, created_at, params, result FROM study_result "
+                "WHERE name=? ORDER BY id DESC LIMIT 1", (name,)).fetchone()
+        if not row:
+            return None
+        return {"id": row["id"], "created_at": row["created_at"],
+                "params": json.loads(row["params"]),
+                "result": json.loads(row["result"])}
 
     def set_meta(self, key: str, value: str) -> None:
         with _lock, self._conn() as c:
