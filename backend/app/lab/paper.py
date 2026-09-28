@@ -217,8 +217,24 @@ class PaperEngine:
 
     # ---- session jobs -----------------------------------------------------
 
+    @staticmethod
+    def clear_feed_suspensions(store=lab_store) -> list:
+        """Feed suspensions are per-session verdicts: each premarket wipes
+        them so yesterday's outage cannot silently bench a strategy
+        forever. Returns the sids cleared."""
+        cleared = []
+        for sid, st in store.all_states().items():
+            if (st.get("suspended_reason") or "").startswith("feed:"):
+                store.set_state(sid, suspended_reason="")
+                cleared.append(sid)
+        return cleared
+
     def premarket(self, now: datetime) -> None:
         day = now.date().isoformat()
+        cleared = self.clear_feed_suspensions()
+        if cleared:
+            log.info("Lab premarket: cleared feed suspensions for %s",
+                     cleared)
         checks = {"day": day, "trading_day": is_trading_day(now.date()),
                   "kite_authenticated": kite_service.is_authenticated}
         ready = data_mod.readiness()
@@ -369,6 +385,13 @@ class PaperEngine:
                 log.exception("runner %s failed", runner.sid)
 
     def _suspend_if_persistent(self, runner: "_Runner", err: str) -> None:
+        # Pre-login mornings are the NORMAL state of this stack (the token
+        # expires daily; the user logs in around the open) — suspending on
+        # them killed the whole first session (28-Sep, five strategies
+        # benched by 09:18). Only a feed that fails WHILE authenticated is
+        # a real breakage worth suspending over.
+        if err == "kite_unauthenticated":
+            return
         # after 10 consecutive failed polls, suspend with the reason
         n = getattr(runner, "_feed_fails", 0) + 1
         runner._feed_fails = n
