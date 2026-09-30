@@ -195,6 +195,9 @@ def card_features(card: dict) -> dict:
             f[k] = card[k]
     if isinstance(card.get("tape_aligned"), bool):
         f["tape_aligned"] = int(card["tape_aligned"])
+    # macd_aligned (upstream 30-Sep): the one MACD variant that survived sizing.
+    if isinstance(card.get("macd_aligned"), bool):
+        f["macd_aligned"] = int(card["macd_aligned"])
     return f
 
 

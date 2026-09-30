@@ -33,6 +33,7 @@ FEATURES = [
     "tape_aligned",
     "tape_state",
     "premium_mom_pct",
+    "macd_aligned",
     "mode",
     "direction",
 ]
