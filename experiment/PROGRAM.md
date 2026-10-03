@@ -126,6 +126,14 @@ week — confounded experiments teach nothing, twice.
       the verdict queue is full. Revisit only if gold's forward book proves
       window-rules pay after charges. Climatology (knowledge only) shipped
       27-Aug instead: gaps ≥0.5% fill just 19% — NIFTY gaps run.
+- [ ] GOLD H3 entry-timing fragility (03-Oct cross-check with the owner's
+      independent implementation): the same rule reads −₹27k / +₹6k / +₹11k
+      forward depending on a ONE-BAR entry convention at 18:00, because the
+      entry sits on the US-release minute. Rule stays frozen; any fix is a
+      pre-registered H4 ("enter at the first close ≥ 18:06, i.e. after the
+      release candle" or "skip FOMC/CPI/NFP evenings"). Lesson for every
+      future rule: never pin an entry to a scheduled-news minute, and write
+      bar-time conventions (open- vs close-stamped) into the spec itself.
 - [ ] tape-state instability (744-session climatology, 19-Aug): base rates at
       11:00 are two-way 35.8% / stretched 35.1% / developing 29.2%, but only
       47% of days keep their 11:00 state at 14:00 — and of days developing at

@@ -74,3 +74,32 @@ NIFTY cards.
 Holdout periods are radioactive. Every attempt is logged, never deleted.
 One idea per experiment. A 30-sample verdict is an early KILL checkpoint,
 never proof. Nothing promotes automatically.
+
+## Two-lab cross-check (03-Oct-2026) — the owner's implementation vs ours
+
+The owner implemented this charter natively (backend/app/gold, "spec:
+gold-lab-spec 27-Aug-2026"). His XAUUSD store got throttled by Dukascopy on
+first sync (63/782 days), so on this deployment it was SEEDED from our
+recorder archive (1,344,960 bars, 934 days; meta key `seeded_from`), then
+his analyze ran. Day-by-day join of forward trades on the same GOLDM bars:
+
+- **43/43 trades qualified identically with identical direction.** The two
+  code paths implement the same rules. Fills agree within a few points on
+  ~35 of 43 trades.
+- **The divergence is a one-bar entry convention on H3.** His entry = first
+  bar whose CLOSE time ≥ 18:00 (the 17:57 bar); ours = first bar OPENING at
+  18:00 (closing 18:03). On US-release evenings that bar IS the release:
+  04-Sep (NFP) the 18:00 bar fell 3,150 pts (−2%) in three minutes — his
+  LONG at 155,368 stopped out, ours at 152,239 hit target. Same on 10-Sep
+  (CPI). Net: H3 forward reads −₹27,415 (his), +₹6,497 (our code on GOLDM),
+  +₹10,979 (our code on GOLD) — the SAME rule, three honest readings,
+  opposite signs.
+
+**Verdict recorded:** H3's forward edge is not robust to a 3-minute timing
+convention, because its entry is pinned to the loudest minute of gold's day.
+That is a kill-level warning, not a tuning opportunity. Per the freeze rule,
+H3 is NOT edited; any "enter after the release candle" or "skip event
+evenings" variant is a NEW rule (H4) requiring its own pre-registration and
+its own forward clock. H1/H2 agree across both labs (H2 negative in both;
+H1 flips sign with the contract chosen — gap-threshold borderline cases —
+another fragility note). Nothing here is near promotion.
