@@ -371,11 +371,18 @@ export function SignalPanel({
     : ce ? "border-bull/40" : "border-bear/40";
 
   return (
-    // Pinned shell: header, contract, key numbers and the action row never
-    // scroll away — only the rationale (invalidation / reasons / score) does.
-    // That guarantees entry zone, SL, targets and the Enter button are on
-    // screen whatever the engine emits.
-    <div className={`card flex flex-col overflow-hidden border ${border} ${className}`}>
+    // The card's height contract, in priority order: (1) the rupees-at-stake
+    // warning and the action row are PINNED at the bottom — a risk warning
+    // that can scroll away is not a warning, and the Enter button must never
+    // be unreachable; (2) the header stays pinned as the card's identity;
+    // (3) everything between — contract, entry/SL/targets, rationale — is ONE
+    // scroll region (min-h-24: it must never collapse to an unreachable 0)
+    // that engages when the rail is too short for the whole card (the old
+    // clipped card hid the targets and the action row outright; seen live at
+    // ~730px window height). Root overflow-y-auto is the LAST resort: it only
+    // engages on pathological rails where even header + risk + action exceed
+    // the card — reachable-by-scroll beats invisible.
+    <div className={`card flex flex-col overflow-y-auto scroll-thin border ${border} ${className}`}>
       {/* header */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pt-3">
         {signal.golden && (
@@ -401,6 +408,8 @@ export function SignalPanel({
         </div>
       </div>
 
+      {/* ---- single scroll region: contract row through rationale ---- */}
+      <div className="flex min-h-24 flex-1 flex-col overflow-y-auto scroll-thin">
       <div className="mt-2 flex shrink-0 items-center gap-2 px-3 text-sm">
         <span className="font-mono font-medium">{signal.contract}</span>
         {signal.expiry && <span className="text-[11px] text-muted">exp {signal.expiry}</span>}
@@ -513,7 +522,7 @@ export function SignalPanel({
         );
       })()}
 
-      {/* key numbers — pinned */}
+      {/* key numbers — top of the scroll region: visible at rest, scrollable only when squeezed */}
       <div className="mt-2 grid shrink-0 grid-cols-3 gap-1.5 px-3">
         <Stat label="Entry zone" value={`₹${fmt(signal.entry_low)}–₹${fmt(signal.entry_high)}`} />
         <Stat
@@ -551,34 +560,8 @@ export function SignalPanel({
             the tile is spent here on rupee outcomes instead. */}
       </div>
 
-      {/* Rupees at stake, pinned. A risk warning that can scroll away is not a
-          warning, so this sits in the shrink-0 shell with the action row. */}
-      <div className="mt-2 shrink-0 px-3">
-        <RiskVisualizer
-          signal={signal}
-          lots={Math.max(1, Math.floor(parseNum(lots) ?? 1))}
-          onLots={(n) => setLots(String(n))}
-          entryOverride={parseNum(entryPx)}
-        />
-        {/* Affordability line: what today's fund buys at the live premium.
-            Clickable when the form has drifted from it, so getting back to the
-            prefilled quantity is one tap, not mental division. */}
-        {signal.fund_note && (
-          <button
-            type="button"
-            onClick={() =>
-              signal.fund_lots && signal.fund_lots > 0 && setLots(String(signal.fund_lots))
-            }
-            className="mt-1 block w-full truncate text-left font-mono text-[10px] text-muted hover:text-white"
-            title="Fund-affordable size — click to use it as the lots"
-          >
-            ⛁ {signal.fund_note}
-          </button>
-        )}
-      </div>
-
-      {/* ---- everything below scrolls ---- */}
-      <div className="mt-2 min-h-0 flex-1 overflow-y-auto scroll-thin px-3">
+      {/* rationale — part of the scroll region above */}
+      <div className="mt-2 px-3 pb-2">
       {/* invalidation */}
       <div className="rounded-md border border-edge bg-panel2 px-3 py-2">
         <div className="text-[10px] uppercase tracking-wide text-muted">Underlying confirmation</div>
@@ -605,7 +588,35 @@ export function SignalPanel({
         <ScoreBars score={signal.score} history={scoreHist.data?.points ?? null} />
       </div>
       </div>
+      </div>
       {/* ---- end scroll region ---- */}
+
+      {/* Rupees at stake, pinned BELOW the scroll region: a risk warning that
+          can scroll away is not a warning — it stays co-visible with the
+          action row at the moment of commitment. */}
+      <div className="mt-2 shrink-0 px-3">
+        <RiskVisualizer
+          signal={signal}
+          lots={Math.max(1, Math.floor(parseNum(lots) ?? 1))}
+          onLots={(n) => setLots(String(n))}
+          entryOverride={parseNum(entryPx)}
+        />
+        {/* Affordability line: what today's fund buys at the live premium.
+            Clickable when the form has drifted from it, so getting back to the
+            prefilled quantity is one tap, not mental division. */}
+        {signal.fund_note && (
+          <button
+            type="button"
+            onClick={() =>
+              signal.fund_lots && signal.fund_lots > 0 && setLots(String(signal.fund_lots))
+            }
+            className="mt-1 block w-full truncate text-left font-mono text-[10px] text-muted hover:text-white"
+            title="Fund-affordable size — click to use it as the lots"
+          >
+            ⛁ {signal.fund_note}
+          </button>
+        )}
+      </div>
 
       {/* manual tracking — pinned to the bottom */}
       <div className="shrink-0 border-t border-edge px-3 py-2">

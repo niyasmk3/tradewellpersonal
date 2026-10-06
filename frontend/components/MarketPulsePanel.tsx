@@ -132,7 +132,10 @@ export function MarketPulsePanel({ data, error }: { data: MarketPulse | null; er
     v === undefined || v === null ? "—" : `${v.toFixed(dp)}${suffix}`;
 
   return (
-    <div className="card px-3 py-2">
+    // Capped on lg+ (the fixed-height rails): the pulse is context, and its
+    // natural height — prose included — must never starve the decision card
+    // above it. <lg the page scrolls and the % cap resolves to none.
+    <div className="card px-3 py-2 scroll-thin lg:min-h-0 lg:max-h-[30%] lg:overflow-y-auto">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-wide text-muted">Market pulse · futures</span>
         {pos !== undefined && (

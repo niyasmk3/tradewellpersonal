@@ -286,7 +286,10 @@ export function Dashboard() {
             onEntered={refreshTrades}
             onIgnore={(id) => setDismissed(id)}
             onReprice={() => setSigTick((n) => n + 1)}
-            className="min-h-0 flex-1"
+            // lg floor: the decision card must out-rank the context panels in
+            // the height budget — without it, capped siblings squeezed the
+            // card to a scroll peephole on short windows (review catch).
+            className="min-h-0 flex-1 lg:min-h-[45%]"
           />
           {/* What the market is DOING while you read the score above. */}
           <MarketPulsePanel data={marketPulse.data} error={marketPulse.error} />
