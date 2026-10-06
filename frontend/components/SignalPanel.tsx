@@ -412,14 +412,6 @@ export function SignalPanel({
             0DTE
           </span>
         )}
-        {signal.event_note && (
-          <span
-            className="tag bg-yellow-500/15 text-yellow-400"
-            title={`Scheduled event nearby: ${signal.event_note}. The size suggestion is halved — event windows gap through stops.`}
-          >
-            ⚠ {signal.event_note}
-          </span>
-        )}
         {signal.tape_state && (
           <span
             className={`tag ${
@@ -471,6 +463,20 @@ export function SignalPanel({
             );
           })()}
       </div>
+
+      {/* Advisory caution on its own full-width line, never a chip: the
+          event/gap note can be a whole sentence, and a sentence inside a
+          flex-row chip collapses into a tall one-word-per-line column that
+          eats the pinned shell's height and clips the entry/stop/target
+          grid below it (seen live on a phone-width card). */}
+      {signal.event_note && (
+        <p
+          className="mt-1 shrink-0 px-3 text-[10px] leading-snug text-yellow-400"
+          title="Advisory only — a scheduled-event window halves the size suggestion, and an overnight hold's first test is tomorrow's open, where a gap settles before any stop can act."
+        >
+          ⚠ {signal.event_note}
+        </p>
+      )}
 
       {/* LIVE price of this contract, against the entry zone — the "is it
           buyable at this price right now" read. Ticks with each 3s poll. */}
