@@ -47,3 +47,9 @@ ln -sf "$OUT_DIR/$STAMP.txt" "$OUT_DIR/latest.txt"
 ICLOUD="$HOME/Library/Mobile Documents/com~apple~CloudDocs/TradewellBackups/recorder-data"
 mkdir -p "$ICLOUD" && rsync -a --delete "$ROOT/recorder/data/" "$ICLOUD/" 2>/dev/null \
   && echo "recorder/data mirrored to iCloud" >> "$OUT_DIR/$STAMP.txt"
+
+# Safety net: anything committed in the research repo but not yet pushed
+# goes to the personal GitHub mirror (niyasmk3/tradewellpersonal). Fail-soft:
+# no network / no key = silent skip, the local repo is still the truth.
+( cd "$ROOT/recorder" && git push -q origin main 2>/dev/null \
+  && echo "research repo pushed to github" >> "$OUT_DIR/$STAMP.txt" ) || true
