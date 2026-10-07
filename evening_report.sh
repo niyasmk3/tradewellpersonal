@@ -40,3 +40,10 @@ mkdir -p "$OUT_DIR"
 "$PY" "$ROOT/recorder/research_report.py" >> "$OUT_DIR/$STAMP.txt" 2>&1
 
 ln -sf "$OUT_DIR/$STAMP.txt" "$OUT_DIR/latest.txt"
+
+# Mirror recorder/data (candle DBs, ledgers, reconciled P&L — backed up
+# nowhere else; the app's own nightly backup covers backend/ only) into the
+# same iCloud folder the app uses. rsync = only changed files travel.
+ICLOUD="$HOME/Library/Mobile Documents/com~apple~CloudDocs/TradewellBackups/recorder-data"
+mkdir -p "$ICLOUD" && rsync -a --delete "$ROOT/recorder/data/" "$ICLOUD/" 2>/dev/null \
+  && echo "recorder/data mirrored to iCloud" >> "$OUT_DIR/$STAMP.txt"
