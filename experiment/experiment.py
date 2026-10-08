@@ -34,11 +34,12 @@ FEATURES = [
     "tape_state",
     "premium_mom_pct",
     "macd_aligned",
+    "symbol",
     "mode",
     "direction",
 ]
 
-CATEGORICALS = ["mode", "direction", "tape_state"]
+CATEGORICALS = ["symbol", "mode", "direction", "tape_state"]
 
 THRESHOLD = 0.55
 
