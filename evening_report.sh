@@ -11,6 +11,17 @@ STAMP="$(TZ=Asia/Kolkata date +%d-%m-%Y)"
 DOW="$(TZ=Asia/Kolkata date +%u)"   # 1=Mon … 7=Sun
 
 [ "$DOW" -gt 5 ] && exit 0          # weekends: nothing traded, nothing to say
+
+# TZ-proof scheduling (08-Oct-2026, see morning_reset.sh): launchd runs this
+# every 5 min with SCHEDULED=1; the script decides IN IST whether it is
+# 16:00–16:14 and not yet done today. Manual runs (no SCHEDULED) always go.
+if [ "${SCHEDULED:-}" = "1" ]; then
+  NOW=$(TZ=Asia/Kolkata date +%H%M); TODAY=$(TZ=Asia/Kolkata date +%F)
+  MARK="$ROOT/recorder/data/.report_done"
+  [ "$(cat "$MARK" 2>/dev/null)" = "$TODAY" ] && exit 0
+  { [ $((10#$NOW)) -ge 1600 ] && [ $((10#$NOW)) -lt 1615 ]; } || exit 0
+  echo "$TODAY" > "$MARK"
+fi
 mkdir -p "$OUT_DIR"
 
 {

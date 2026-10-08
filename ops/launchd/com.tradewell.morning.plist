@@ -9,14 +9,13 @@
         <string>/bin/bash</string>
         <string>/Users/niyas/Developer/Tradewell/recorder/morning_reset.sh</string>
     </array>
-    <key>StartCalendarInterval</key>
-    <array>
-        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>40</integer></dict>
-        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>40</integer></dict>
-        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>40</integer></dict>
-        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>40</integer></dict>
-        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>40</integer></dict>
-    </array>
+    <!-- TZ-proof: fire every 5 min; morning_reset.sh gates itself to
+         08:40-08:59 IST once per weekday (SCHEDULED=1). Calendar triggers
+         followed the Mac's local clock and drifted to 10:10 IST on Dubai time. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>EnvironmentVariables</key>
+    <dict><key>SCHEDULED</key><string>1</string></dict>
     <key>StandardOutPath</key>
     <string>/Users/niyas/Developer/Tradewell/recorder/data/morning_reset.log</string>
     <key>StandardErrorPath</key>

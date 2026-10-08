@@ -9,14 +9,12 @@
         <string>/bin/bash</string>
         <string>/Users/niyas/Developer/Tradewell/recorder/evening_report.sh</string>
     </array>
-    <key>StartCalendarInterval</key>
-    <array>
-        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
-        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
-    </array>
+    <!-- TZ-proof: fire every 5 min; evening_report.sh gates itself to
+         16:00-16:14 IST once per weekday (SCHEDULED=1). -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>EnvironmentVariables</key>
+    <dict><key>SCHEDULED</key><string>1</string></dict>
     <key>StandardOutPath</key>
     <string>/Users/niyas/Developer/Tradewell/recorder/data/report-job.log</string>
     <key>StandardErrorPath</key>

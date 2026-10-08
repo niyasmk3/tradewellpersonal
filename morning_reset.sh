@@ -13,6 +13,19 @@ say() { printf '%s %s\n' "$(TZ=Asia/Kolkata date '+%d-%m %H:%M:%S')" "$*" >> "$L
 DOW=$(TZ=Asia/Kolkata date +%u)
 [ "$DOW" -gt 5 ] && exit 0
 
+# TZ-proof scheduling (08-Oct-2026): launchd calendar triggers follow the
+# Mac's LOCAL clock — with the Mac left on Asia/Dubai this fired at 10:10
+# IST for days, killing the live session mid-market. Now launchd runs this
+# every 5 min with SCHEDULED=1 and the script decides IN IST whether it is
+# 08:40–08:59 and not yet done today. Manual runs (no SCHEDULED) always go.
+if [ "${SCHEDULED:-}" = "1" ]; then
+  NOW=$(TZ=Asia/Kolkata date +%H%M); TODAY=$(TZ=Asia/Kolkata date +%F)
+  MARK="$ROOT/recorder/data/.morning_done"
+  [ "$(cat "$MARK" 2>/dev/null)" = "$TODAY" ] && exit 0
+  { [ $((10#$NOW)) -ge 840 ] && [ $((10#$NOW)) -lt 900 ]; } || exit 0
+  echo "$TODAY" > "$MARK"
+fi
+
 say "morning reset: clearing stale token cache and bouncing stack"
 launchctl unload "$HOME/Library/LaunchAgents/com.tradewell.stack.plist" 2>>"$LOG"
 sleep 2
