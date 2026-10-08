@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Tradewell login auto-start (template).
+
+  Installed by `./start.sh install-launchd`, which bakes the checkout path in
+  and copies this to ~/Library/LaunchAgents/com.tradewell.stack.plist WITHOUT
+  loading it — enabling auto-start is your call, made once:
+
+      launchctl load ~/Library/LaunchAgents/com.tradewell.stack.plist
+
+  CAVEAT: RunAtLoad means that command starts the stack IMMEDIATELY (killing
+  whatever holds the ports), not just at the next login — run it after 15:30
+  IST like any other deploy.
+
+  It runs start.sh with -\-live-override on purpose: at login nothing is
+  running, so bringing the stack up is crash recovery, exactly what the
+  override exists for. The market-hours guard still protects every MANUAL
+  restart. No KeepAlive — if you stop the stack, launchd must not fight you.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradewell.stack</string>
+  <!-- Port-remapped launcher (backend :8777, frontend :3777) — patches a copy
+       of start.sh at launch; see local-start.sh in the checkout. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/niyas/Developer/Tradewell/local-start.sh</string>
+    <string>--live-override</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/niyas/Developer/Tradewell</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/niyas/Developer/Tradewell/logs/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/niyas/Developer/Tradewell/logs/launchd.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd's PATH lacks Homebrew; node/npm live there on this machine. -->
+    <key>PATH</key>
+    <string>/Users/niyas/.nvm/versions/node/v24.14.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

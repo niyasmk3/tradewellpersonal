@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.tradewell.gold</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/niyas/Developer/Tradewell/backend/.venv/bin/python</string>
+    <string>/Users/niyas/Developer/Tradewell/recorder/mcx/gold_live.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/niyas/Developer/Tradewell</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/niyas/Developer/Tradewell/logs/gold_live.log</string>
+  <key>StandardErrorPath</key><string>/Users/niyas/Developer/Tradewell/logs/gold_live.log</string>
+</dict>
+</plist>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradewell.recorder</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/niyas/Developer/Tradewell/backend/.venv/bin/python</string>
+        <string>/Users/niyas/Developer/Tradewell/recorder/record.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/niyas/Developer/Tradewell/recorder/data/recorder.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/niyas/Developer/Tradewell/recorder/data/recorder.log</string>
+</dict>
+</plist>
