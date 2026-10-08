@@ -4,3 +4,4 @@ data/
 __pycache__/
 *.pyc
 experiment/results*.tsv
+.DS_Store
