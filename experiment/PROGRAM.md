@@ -141,6 +141,28 @@ week — confounded experiments teach nothing, twice.
       day-type: model it as birth-time context (interaction with hour_ist),
       and never extrapolate a morning label across the afternoon.
 
+## Ignition status (08-Oct-2026)
+
+The data gates (40 train rows, 2 months) passed on 01-Oct and nightly_learn
+has launched the baseline run every evening since — and every run ABORTED.
+Two causes, one fixed:
+
+1. **net_R was missing on half the rows (fixed 08-Oct).** The paper row's
+   `stop_loss` is the FINAL stop; early-derisk and quick-target ratchet it to
+   entry or above, so `(entry - stop) <= 0` and the R denominator vanished on
+   66/126 fills. The harness saw 36 "usable" rows out of 70. dataset.py now
+   recovers the stop the trade was BORN with (the fill-repriced SL in the
+   `repriced` event, else the card's `premium_sl`). 70/70 rows carry net_R.
+2. **Only 1 walk-forward fold exists; the harness requires 2 (unchanged).**
+   The 28-day sealed holdout means the train set always lags a month: train
+   = Aug (50) + early Sep (20) → one fold (train Aug, test Sep). The second
+   fold arrives when October rows age into the train set, ~end of October /
+   early November. This is the design working, not a bug — the fold rule is
+   NOT loosened (rule 5). First legitimate 2-fold baseline run: ~early Nov.
+
+Before that run, in a calm session: land the 1-day fold-boundary embargo
+(queued below) and re-run --selftest. Nothing else changes.
+
 ## Promotion-to-LIVE bar (added 21-Aug after an external Codex review)
 
 The harness KEEP rule promotes ideas between RESEARCH branches only. For any

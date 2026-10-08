@@ -133,7 +133,30 @@ def outcome_by_signal(trades: list[dict]) -> dict[str, dict]:
     return out
 
 
-def label_fields(trade: dict) -> dict:
+_SL_RE = re.compile(r"SL\s*₹\s*([0-9]+(?:\.[0-9]+)?)")
+
+
+def initial_stop(trade: dict, card: dict | None) -> float | None:
+    """The stop the trade was BORN with. `stop_loss` on the row is the FINAL
+    stop — the early-derisk and quick-target rules ratchet it to entry or
+    above, which zeroed the R denominator on 66/126 fills (found 08-Oct: the
+    harness saw 36 'usable' rows out of 70). Order: the fill-repriced SL in
+    the `repriced` event, then the card's planned premium_sl, then the row's
+    stop only if it still sits below entry."""
+    for e in trade.get("events") or []:
+        if isinstance(e, dict) and e.get("kind") == "repriced":
+            m = _SL_RE.search(str(e.get("note", "")))
+            if m:
+                return float(m.group(1))
+    if card and isinstance(card.get("premium_sl"), (int, float)):
+        return float(card["premium_sl"])
+    s, entry = trade.get("stop_loss"), trade.get("entry_premium")
+    if isinstance(s, (int, float)) and isinstance(entry, (int, float)) and s < entry:
+        return float(s)
+    return None
+
+
+def label_fields(trade: dict, card: dict | None = None) -> dict:
     pnl = trade.get("realized_pnl")
     if not isinstance(pnl, (int, float)):
         return {}
@@ -147,7 +170,7 @@ def label_fields(trade: dict) -> dict:
     if isinstance(entry_p, (int, float)) and isinstance(mfe, (int, float)) and entry_p:
         out["label_win_bankcut"] = int((mfe - entry_p) / entry_p >= 0.05)
     entry = trade.get("entry_premium")
-    stop = trade.get("stop_loss")
+    stop = initial_stop(trade, card)
     qty = trade.get("initial_quantity") or trade.get("quantity")
     if (
         isinstance(entry, (int, float)) and isinstance(stop, (int, float))
@@ -418,7 +441,7 @@ def main() -> int:
         if trade is None:
             skipped_no_outcome += 1
             continue
-        labels = label_fields(trade)
+        labels = label_fields(trade, card)
         if "label_win" not in labels:
             skipped_no_label += 1
             continue
