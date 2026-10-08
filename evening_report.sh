@@ -53,3 +53,8 @@ mkdir -p "$ICLOUD" && rsync -a --delete "$ROOT/recorder/data/" "$ICLOUD/" 2>/dev
 # no network / no key = silent skip, the local repo is still the truth.
 ( cd "$ROOT/recorder" && git push -q origin main 2>/dev/null \
   && echo "research repo pushed to github" >> "$OUT_DIR/$STAMP.txt" ) || true
+
+# Keep the app mirror current: after every pull from upstream, the app's main
+# goes to the personal repo's app-mirror branch. Fail-soft like the above.
+( git -C "$ROOT" push -q personal main:app-mirror 2>/dev/null \
+  && echo "app mirror refreshed on github" >> "$OUT_DIR/$STAMP.txt" ) || true
