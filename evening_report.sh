@@ -16,6 +16,16 @@ mkdir -p "$OUT_DIR"
 {
   echo "Tradewell evening report — $STAMP"
   echo "======================================================"
+  # The launchd calendar jobs (morning 08:40, report 16:00) fire on the Mac's
+  # LOCAL clock; everything else here computes IST itself. A Mac left on a
+  # foreign timezone silently shifts those two jobs — found 08-Oct-2026 with
+  # the Mac on Asia/Dubai (morning reset firing at 10:10 IST, mid-session).
+  MACTZ="$(readlink /etc/localtime | sed 's#.*/zoneinfo/##')"
+  if [ "$MACTZ" != "Asia/Kolkata" ]; then
+    echo "!! WARNING: Mac timezone is $MACTZ, not Asia/Kolkata — the 08:40 morning"
+    echo "!! reset and 16:00 report fire at the wrong IST time. Fix: System Settings"
+    echo "!! -> General -> Date & Time -> Time Zone -> Kolkata."
+  fi
   "$PY" "$ROOT/recorder/dataset.py" 2>&1
   echo
   "$PY" "$ROOT/recorder/analyze.py" 2>&1
