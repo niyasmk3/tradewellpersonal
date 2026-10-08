@@ -33,9 +33,9 @@ mkdir -p "$OUT_DIR"
   # the Mac on Asia/Dubai (morning reset firing at 10:10 IST, mid-session).
   MACTZ="$(readlink /etc/localtime | sed 's#.*/zoneinfo/##')"
   if [ "$MACTZ" != "Asia/Kolkata" ]; then
-    echo "!! WARNING: Mac timezone is $MACTZ, not Asia/Kolkata — the 08:40 morning"
-    echo "!! reset and 16:00 report fire at the wrong IST time. Fix: System Settings"
-    echo "!! -> General -> Date & Time -> Time Zone -> Kolkata."
+    echo "!! NOTE: Mac timezone is $MACTZ, not Asia/Kolkata. Tradewell's own jobs"
+    echo "!! are timezone-proof since 08-Oct, but file dates and anything else on"
+    echo "!! this Mac read wrong. Fix: System Settings -> General -> Date & Time."
   fi
   "$PY" "$ROOT/recorder/dataset.py" 2>&1
   echo
