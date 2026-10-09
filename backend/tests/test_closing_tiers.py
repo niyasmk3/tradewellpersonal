@@ -31,18 +31,45 @@ def test_unknown_never_promotes_or_demotes():
     assert tiers.tier(None, "ROAD", True) is None
 
 
+def test_crash_day_gold_sub_label_is_frozen():
+    """Crash-day Gold (registered 2026-10-09): a GOLD card on a 300+ pt day
+    body. Gold-specific, unknown never labels, both signs count — editing any
+    of this resets the live count."""
+    assert tiers.STRETCH_PTS == 300.0
+    assert tiers.STRETCH_REGISTERED_ON == "2026-10-09"
+    assert tiers.stretched("GOLD", -396.0) is True     # 08-Oct itself
+    assert tiers.stretched("GOLD", 310.0) is True      # surge side counts too
+    assert tiers.stretched("GOLD", -299.9) is False
+    # The boundary is INCLUSIVE at exactly 300.0 — flipping >= to > is a
+    # definition edit and must fail here (it resets the live count).
+    assert tiers.stretched("GOLD", 300.0) is True
+    assert tiers.stretched("GOLD", -300.0) is True
+    assert tiers.stretched("SILVER", -400.0) is None   # Gold-specific label
+    assert tiers.stretched("GOLD", None) is None       # unknown never labels
+    assert tiers.stretched(None, -400.0) is None
+
+
 def test_annotate_and_summary():
-    tr = [{"date": "2025-06-01", "card_verdict": "CLEAN", "f_oi_state": "ROAD", "f_cpr_narrow": True, "net_pct": 30.0, "net_rs": 300},
+    # tier_stretched must read the DAY BODY (signal_price - day_open), never
+    # gap_pts: row 1 carries a misleading gap_pts (prev_close-mode style) to
+    # pin that the stamp ignores it.
+    tr = [{"date": "2025-06-01", "card_verdict": "CLEAN", "f_oi_state": "ROAD", "f_cpr_narrow": True, "net_pct": 30.0, "net_rs": 300, "gap_pts": -10.0, "signal_price": 22200.0, "day_open": 22550.0},
           {"date": "2025-06-02", "card_verdict": "CLEAN", "f_oi_state": "BEHIND", "f_cpr_narrow": False, "net_pct": 5.0, "net_rs": 50},
           {"date": "2025-06-03", "card_verdict": "CLEAN", "f_oi_state": "CAPPED", "f_cpr_narrow": True, "net_pct": -20.0, "net_rs": -200},
           {"date": "2025-06-04", "card_verdict": "CLEAN", "f_oi_state": None, "f_cpr_narrow": True, "net_pct": 1.0, "net_rs": 10},
           {"date": "2025-06-05", "card_verdict": "FLAGGED", "f_oi_state": "ROAD", "f_cpr_narrow": True, "net_pct": -10.0, "net_rs": -100}]
     tiers.annotate(tr)
     assert [t["tier"] for t in tr] == ["GOLD", "SILVER", "BRONZE", None, None]
+    # The crash-day sub-label rides only the Gold row, reads the day body
+    # (-350 here) and IGNORES the row's gap_pts (-10, prev_close-mode style);
+    # rows without an open stay None, and non-Gold rows always do.
+    assert [t["tier_stretched"] for t in tr] == [True, None, None, None, None]
     s = tiers.summary(tr, date(2026, 1, 1))
     w = s["windows"]["in_sample_2y"]
     assert w["gold"]["n"] == 1 and w["silver"]["n"] == 1 and w["bronze"]["n"] == 1 and w["clean_untiered"]["n"] == 1
+    assert w["gold_stretched"]["n"] == 1 and w["gold_calm"]["n"] == 0
     assert s["labels"]["GOLD"] == "Clean Gold"
+    assert s["stretch"]["registered_on"] == "2026-10-09" and s["stretch"]["pts"] == 300.0
 
 
 def test_card_carries_tier_without_touching_verdict():
@@ -60,3 +87,10 @@ def test_card_carries_tier_without_touching_verdict():
     road = {EXPIRY.isoformat(): {(24900.0, "CE"): 9e5, (23900.0, "PE"): 8e5}}
     r3 = tonight.evaluate(_tape(), _vix(), TODAY, NOW, NEXT, EXPIRY, road)
     assert r3["values"]["oi_state"] == "ROAD" and r3["tier"] == "GOLD" and r3["verdict"] == "CLEAN"
+    # Calm Gold (+100 body): not crash-day; its note stays Gold's own.
+    assert r3["tier_stretched"] is False and "Crash-day" not in (r3["tier_note"] or "")
+    # Same Gold with a 400-pt body: the live card must show lottery-tail odds.
+    r4 = tonight.evaluate(_tape(p0915=24000.0, lo=23990.0), _vix(), TODAY, NOW,
+                          NEXT, EXPIRY, road)
+    assert r4["tier"] == "GOLD" and r4["tier_stretched"] is True
+    assert "Crash-day" in r4["tier_note"]

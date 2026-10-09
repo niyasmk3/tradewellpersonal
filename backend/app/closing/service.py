@@ -218,6 +218,15 @@ def run_analysis(lots: int = 1, signal_mode: Optional[str] = None, kite=None) ->
             "events": (row.get("values") or {}).get("events"),
             "tier": tiers.tier(row.get("verdict"), (row.get("values") or {}).get("oi_state"),
                                (row.get("values") or {}).get("cpr_narrow")),
+            # Body recomputed from the logged prints (p1500 - day_open), not
+            # the logged gap_pts: the registered crash-day quantity is the
+            # day body in EVERY signal mode (review catch).
+            "tier_stretched": tiers.stretched(
+                tiers.tier(row.get("verdict"), (row.get("values") or {}).get("oi_state"),
+                           (row.get("values") or {}).get("cpr_narrow")),
+                ((row.get("values") or {}).get("p1500") - (row.get("values") or {}).get("day_open")
+                 if (row.get("values") or {}).get("p1500") is not None
+                 and (row.get("values") or {}).get("day_open") is not None else None)),
             "x1045_net_pct": graded.get("x1045_net_pct") if graded else None,
         })
     card_backfill = attribution.card_summary(check.get("trades") or [],

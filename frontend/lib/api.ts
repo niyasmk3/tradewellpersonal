@@ -1258,6 +1258,7 @@ export interface ClosingTrade {
   tags?: string[];
   card_verdict?: string;
   tier?: string | null;
+  tier_stretched?: boolean | null;
   card_red?: string[];
 }
 
@@ -1331,6 +1332,8 @@ export interface ClosingTonight {
   /** A = CLEAN + narrow CPR, B = CLEAN + wide CPR, C = FLAGGED; null when unresolvable. */
   // Clean Gold / Silver / Bronze (app/closing/tiers.py) — a label over the OI-wall and CPR shadows.
   tier?: "GOLD" | "SILVER" | "BRONZE" | null;
+  // Crash-day Gold sub-label (registered 2026-10-09): Gold on a 300+ pt day body.
+  tier_stretched?: boolean | null;
   tier_note?: string | null;
   values?: {
     day_open: number;
@@ -1402,6 +1405,7 @@ export interface ClosingCardBackfill {
       backfill_verdict: string | null;
       cpr_narrow?: boolean | null;
       tier?: string | null;
+      tier_stretched?: boolean | null;
       x1045_net_pct?: number | null;
       oi_state?: "ROAD" | "CAPPED" | "BEHIND" | null;
       events?: string[] | null;
@@ -1433,7 +1437,8 @@ export interface ClosingCardBackfill {
     definition: string;
     labels: Record<string, string>;
     notes: Record<string, string>;
-    windows: Record<string, Record<"gold" | "silver" | "bronze" | "clean_untiered", ClosingCardCell>>;
+    windows: Record<string, Record<"gold" | "silver" | "bronze" | "clean_untiered" | "gold_stretched" | "gold_calm", ClosingCardCell>>;
+    stretch?: { registered_on: string; pts: number; note: string };
     note: string;
   };
   // The OI-wall shadow signal against the ledger (app/closing/oiwall.py summary).

@@ -47,6 +47,41 @@ NOTES = {
 }
 
 
+# --- Crash-day Gold: a sub-label on GOLD, registered separately ---------------
+# REGISTERED 2026-10-09, out of the 08-Oct post-mortem (a Gold PE issued at the
+# dead low of a -396-pt day; index bounced +252, -64% real). Gold's 61%
+# headline is two populations: calm Gold (day body inside +/-300 pts) won 68%
+# with median +25% and held in BOTH windows (67%/71%, n=38); stretched Gold
+# (body at/beyond 300 pts) won 25% with median -25%, the index continued only
+# 38% of the time, all eight were crash-side PEs, and the cell's positive mean
+# (+56%) hangs on ONE +633% continuation night. Same bet, different odds: the
+# lottery-tail variety.
+#
+# HONESTY BOX. n=8 over three years, found by inspecting a losing night — this
+# is an expectations label, pre-registered to be graded on live Gold nights,
+# and at Gold's ~1.2 nights/month it will take YEARS to reach the 30-night
+# house bar. It never gates: skipping stretched Golds in the backtest forfeits
+# the +633% night and is value-destroying in expectation. Editing the
+# threshold or the definition resets the live count.
+STRETCH_PTS = 300.0
+STRETCH_REGISTERED_ON = "2026-10-09"
+STRETCH_NOTE = (
+    "Crash-day Gold — a Gold card issued after a day body of 300+ pts. "
+    "Backtest: 25% win, median -25%, index continues 38% (n=8, all crash-side "
+    "PEs); the +56% mean hangs on one +633% night. Calm Gold: 68% win, median "
+    "+25% (n=38, 67%/71% by window). Same bet, lottery-tail odds — an "
+    "expectations label, never a gate.")
+
+
+def stretched(tier_label: Optional[str], gap_pts: Optional[float]) -> Optional[bool]:
+    """True only for a GOLD card on a 300+ pt day body. None when the night
+    carries no Gold tier or the body is unknown — the sub-label is
+    Gold-specific by registration, and unknown never labels."""
+    if tier_label != "GOLD" or gap_pts is None:
+        return None
+    return abs(gap_pts) >= STRETCH_PTS
+
+
 def tier(verdict: Optional[str], oi_state: Optional[str],
          cpr_narrow: Optional[bool]) -> Optional[str]:
     if verdict != "CLEAN":
@@ -66,6 +101,15 @@ def annotate(trades: list) -> None:
     (card_verdict, f_oi_state, f_cpr_narrow). Run after both annotators."""
     for t in trades:
         t["tier"] = tier(t.get("card_verdict"), t.get("f_oi_state"), t.get("f_cpr_narrow"))
+        # The registered quantity is the DAY BODY (15:00 print vs day open) —
+        # never gap_pts, which equals the body only under the day_open signal
+        # mode; in prev_close mode it is the gap vs yesterday's close and
+        # would stamp a different population than was registered (review
+        # catch). Missing open -> unknown -> never labels.
+        body = (t["signal_price"] - t["day_open"]
+                if t.get("signal_price") is not None and t.get("day_open") is not None
+                else None)
+        t["tier_stretched"] = stretched(t["tier"], body)
 
 
 def summary(trades: list, split: date) -> dict:
@@ -75,6 +119,9 @@ def summary(trades: list, split: date) -> dict:
         out = {k.lower(): _compact([t for t in sub if t.get("tier") == k]) for k in TIERS}
         out["clean_untiered"] = _compact([t for t in sub if t.get("card_verdict") == "CLEAN"
                                           and not t.get("tier")])
+        # Crash-day sub-label: the same Gold rows split by the day's body.
+        out["gold_stretched"] = _compact([t for t in sub if t.get("tier_stretched") is True])
+        out["gold_calm"] = _compact([t for t in sub if t.get("tier_stretched") is False])
         return out
 
     windows = {}
@@ -86,6 +133,8 @@ def summary(trades: list, split: date) -> dict:
     return {
         "registered_on": REGISTERED_ON,
         "definition": DEFINITION,
+        "stretch": {"registered_on": STRETCH_REGISTERED_ON, "pts": STRETCH_PTS,
+                    "note": STRETCH_NOTE},
         "labels": LABELS,
         "notes": NOTES,
         "windows": windows,

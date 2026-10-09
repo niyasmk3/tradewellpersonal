@@ -444,9 +444,9 @@ function TonightPanel() {
           {banner && (
             <p className={`mb-2 rounded border px-2 py-1.5 text-[11px] ${banner.cls}`}>
               {t.tier && TIER_STYLE[t.tier] && (
-                <span className={`mr-2 rounded border px-1.5 py-0.5 font-mono text-[10px] ${TIER_STYLE[t.tier].cls}`}
-                      title={t.tier_note ?? TIER_STYLE[t.tier].title}>
-                  {TIER_STYLE[t.tier].label}
+                <span className={`mr-2 rounded border px-1.5 py-0.5 font-mono text-[10px] ${t.tier_stretched ? GOLD_STRETCH.cls : TIER_STYLE[t.tier].cls}`}
+                      title={t.tier_note ?? (t.tier_stretched ? GOLD_STRETCH.title : TIER_STYLE[t.tier].title)}>
+                  {TIER_STYLE[t.tier].label}{t.tier_stretched ? " · crash-day" : ""}
                 </span>
               )}
               {banner.text}
@@ -544,17 +544,26 @@ const TIER_STYLE: Record<string, { cls: string; label: string; short: string; ti
             title: "Clean Bronze: five checks clear but a max-OI strike within 150 pts ahead — 3y 37% win (35% / 44%), n=65. FLAGGED-level odds." },
 };
 
+// Crash-day Gold (registered 2026-10-09): the same Gold cell on a 300+ pt day
+// body — the lottery-tail variety. An expectations label, never a gate.
+const GOLD_STRETCH = {
+  cls: "border-red-400/60 bg-red-400/15 text-red-300",
+  title: "Crash-day Gold: a Gold card after a 300+ pt day body — 25% win, median −25%, index continues 38% (n=8, all crash-side PEs); the +56% mean hangs on one +633% night. Calm Gold: 68% win, median +25% (n=38). Expectations label, never a gate.",
+};
+
 /** Ledger chip: what the live card would have said at that night's 15:00. */
 function CardChip({ t }: { t: ClosingTrade }) {
   if (!t.card_verdict) return null;
   const tier = t.tier ? TIER_STYLE[t.tier] : undefined;
-  const short = t.card_verdict === "CLEAN" ? (tier ? `CLEAN·${tier.short}` : "CLEAN")
+  const stretched = t.tier === "GOLD" && t.tier_stretched === true;
+  const short = t.card_verdict === "CLEAN" ? (tier ? `CLEAN·${tier.short}${stretched ? "!" : ""}` : "CLEAN")
     : t.card_verdict === "FLAGGED" ? `FLAG${t.card_red?.length ? "·" + t.card_red.length : ""}`
     : "INC";
   const title = t.card_verdict === "FLAGGED"
     ? `red: ${(t.card_red ?? []).join(", ")}`
     : t.card_verdict === "INCOMPLETE"
       ? "some check inputs unavailable for this night"
+      : stretched ? GOLD_STRETCH.title
       : tier ? tier.title : "all five checks clear at 15:00 (tier unknown — a shadow input was unavailable)";
   return (
     <span title={title}
@@ -640,6 +649,30 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
                   ))}
                 </tr>
               ))}
+              {/* Crash-day sub-label (registered 2026-10-09): the same Gold
+                  rows split by the day's body — expectations, never a gate. */}
+              <tr className="border-b border-edge/30">
+                <td className="py-1 pl-4 text-left font-sans text-muted">
+                  ↳ calm Gold <span className="text-muted/60">(body &lt; {cb.tiers?.stretch?.pts ?? 300} pts)</span>
+                </td>
+                {WINDOWS.map(([w]) => (
+                  <td key={w} className="py-1 text-right">{cell(cb.tiers?.windows?.[w]?.gold_calm)}</td>
+                ))}
+              </tr>
+              <tr className="border-b border-edge/30">
+                <td className="py-1 pl-4 text-left font-sans">
+                  <span className={`rounded border px-1 py-0.5 font-mono text-[9px] ${GOLD_STRETCH.cls}`}
+                        title={cb.tiers?.stretch?.note ?? GOLD_STRETCH.title}>
+                    ↳ crash-day Gold
+                  </span>
+                  <span className="ml-1 text-[9px] text-muted/60">
+                    registered {cb.tiers?.stretch?.registered_on ?? "2026-10-09"}
+                  </span>
+                </td>
+                {WINDOWS.map(([w]) => (
+                  <td key={w} className="py-1 text-right">{cell(cb.tiers?.windows?.[w]?.gold_stretched)}</td>
+                ))}
+              </tr>
               <tr className="border-b border-edge/30">
                 <td className="py-1 text-left font-sans text-muted">CLEAN · untiered (an input unknown)</td>
                 {WINDOWS.map(([w]) => (
@@ -820,9 +853,9 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
                       {row.verdict}
                     </span>
                     {row.tier && TIER_STYLE[row.tier] && (
-                      <span className={`ml-1 rounded border px-1 font-mono text-[9px] ${TIER_STYLE[row.tier].cls}`}
-                            title={TIER_STYLE[row.tier].title}>
-                        {TIER_STYLE[row.tier].label.replace("Clean ", "")}
+                      <span className={`ml-1 rounded border px-1 font-mono text-[9px] ${row.tier_stretched ? GOLD_STRETCH.cls : TIER_STYLE[row.tier].cls}`}
+                            title={row.tier_stretched ? GOLD_STRETCH.title : TIER_STYLE[row.tier].title}>
+                        {TIER_STYLE[row.tier].label.replace("Clean ", "")}{row.tier_stretched ? "!" : ""}
                       </span>
                     )}
                     {row.oi_state && (
