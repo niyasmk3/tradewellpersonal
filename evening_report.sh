@@ -60,6 +60,12 @@ mkdir -p "$OUT_DIR"
 # One-page visual dashboard of everything above — bookmarkable.
 "$PY" "$ROOT/recorder/research_report.py" >> "$OUT_DIR/$STAMP.txt" 2>&1
 
+# Deploy our static pages (canonical copies live in recorder/pages/) onto the
+# app's public folder — git-excluded there, versioned here.
+for f in "$ROOT"/recorder/pages/*.html; do
+  [ -f "$f" ] && cp "$f" "$ROOT/frontend/public/$(basename "$f" | sed 's/_page//')"
+done
+
 ln -sf "$OUT_DIR/$STAMP.txt" "$OUT_DIR/latest.txt"
 
 # Mirror recorder/data (candle DBs, ledgers, reconciled P&L — backed up
