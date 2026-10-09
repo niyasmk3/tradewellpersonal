@@ -1437,8 +1437,9 @@ export interface ClosingCardBackfill {
     definition: string;
     labels: Record<string, string>;
     notes: Record<string, string>;
-    windows: Record<string, Record<"gold" | "silver" | "bronze" | "clean_untiered" | "gold_stretched" | "gold_calm", ClosingCardCell>>;
-    stretch?: { registered_on: string; pts: number; note: string };
+    windows: Record<string, Record<"gold" | "silver" | "bronze" | "clean_untiered" | "gold_stretched" | "gold_calm" | "silver_stretched" | "silver_calm", ClosingCardCell>>;
+    stretch?: { registered_on: string; pts: number; note: string;
+                silver_registered_on?: string; silver_note?: string };
     note: string;
   };
   // The OI-wall shadow signal against the ledger (app/closing/oiwall.py summary).

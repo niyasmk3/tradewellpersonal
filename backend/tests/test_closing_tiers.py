@@ -44,7 +44,13 @@ def test_crash_day_gold_sub_label_is_frozen():
     # definition edit and must fail here (it resets the live count).
     assert tiers.stretched("GOLD", 300.0) is True
     assert tiers.stretched("GOLD", -300.0) is True
-    assert tiers.stretched("SILVER", -400.0) is None   # Gold-specific label
+    # Silver carries its own crash-day registration (2026-10-09, neutral
+    # evidence); Bronze and untiered nights never label.
+    assert tiers.stretched("SILVER", -400.0) is True
+    assert tiers.stretched("SILVER", -299.9) is False
+    assert tiers.stretched("BRONZE", -400.0) is None
+    assert tiers.SILVER_STRETCH_REGISTERED_ON == "2026-10-09"
+    assert set(tiers.STRETCH_NOTES) == {"GOLD", "SILVER"}
     assert tiers.stretched("GOLD", None) is None       # unknown never labels
     assert tiers.stretched(None, -400.0) is None
 
@@ -54,7 +60,7 @@ def test_annotate_and_summary():
     # gap_pts: row 1 carries a misleading gap_pts (prev_close-mode style) to
     # pin that the stamp ignores it.
     tr = [{"date": "2025-06-01", "card_verdict": "CLEAN", "f_oi_state": "ROAD", "f_cpr_narrow": True, "net_pct": 30.0, "net_rs": 300, "gap_pts": -10.0, "signal_price": 22200.0, "day_open": 22550.0},
-          {"date": "2025-06-02", "card_verdict": "CLEAN", "f_oi_state": "BEHIND", "f_cpr_narrow": False, "net_pct": 5.0, "net_rs": 50},
+          {"date": "2025-06-02", "card_verdict": "CLEAN", "f_oi_state": "BEHIND", "f_cpr_narrow": False, "net_pct": 5.0, "net_rs": 50, "signal_price": 22400.0, "day_open": 22720.0},
           {"date": "2025-06-03", "card_verdict": "CLEAN", "f_oi_state": "CAPPED", "f_cpr_narrow": True, "net_pct": -20.0, "net_rs": -200},
           {"date": "2025-06-04", "card_verdict": "CLEAN", "f_oi_state": None, "f_cpr_narrow": True, "net_pct": 1.0, "net_rs": 10},
           {"date": "2025-06-05", "card_verdict": "FLAGGED", "f_oi_state": "ROAD", "f_cpr_narrow": True, "net_pct": -10.0, "net_rs": -100}]
@@ -63,11 +69,16 @@ def test_annotate_and_summary():
     # The crash-day sub-label rides only the Gold row, reads the day body
     # (-350 here) and IGNORES the row's gap_pts (-10, prev_close-mode style);
     # rows without an open stay None, and non-Gold rows always do.
-    assert [t["tier_stretched"] for t in tr] == [True, None, None, None, None]
+    # BOTH a stretched Gold and a stretched Silver in one fixture: the gold_*
+    # and silver_* cells must each hold ONLY their own tier — a stretched
+    # Silver bleeding into gold_stretched would corrupt Gold's registered
+    # live count (review catch: the guard was unpinned by mutation testing).
+    assert [t["tier_stretched"] for t in tr] == [True, True, None, None, None]
     s = tiers.summary(tr, date(2026, 1, 1))
     w = s["windows"]["in_sample_2y"]
     assert w["gold"]["n"] == 1 and w["silver"]["n"] == 1 and w["bronze"]["n"] == 1 and w["clean_untiered"]["n"] == 1
     assert w["gold_stretched"]["n"] == 1 and w["gold_calm"]["n"] == 0
+    assert w["silver_stretched"]["n"] == 1 and w["silver_calm"]["n"] == 0
     assert s["labels"]["GOLD"] == "Clean Gold"
     assert s["stretch"]["registered_on"] == "2026-10-09" and s["stretch"]["pts"] == 300.0
 

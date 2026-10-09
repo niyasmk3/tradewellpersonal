@@ -72,12 +72,33 @@ STRETCH_NOTE = (
     "+25% (n=38, 67%/71% by window). Same bet, lottery-tail odds — an "
     "expectations label, never a gate.")
 
+# Crash-day SILVER — REGISTERED 2026-10-09, same day, separate standing. The
+# trigger is the same frozen body (|15:00 - open| >= 300) but the EVIDENCE is
+# deliberately neutral: the backtest does NOT replicate Gold's degradation on
+# Silver (stretched Silver n=9, 56% win, and the windows FLIP — 25% in-sample
+# / 80% holdout — which is what noise looks like), and the second-most-
+# stretched live Silver (28-Sep, body -268) was the biggest winner (+180%
+# real). Registered at the user's instruction after 15-Sep (body -401, the
+# one live crash-Silver, -7% real) so the live ledger can decide. A tracking
+# label with NO expectation attached — never a warning, never a gate.
+SILVER_STRETCH_REGISTERED_ON = "2026-10-09"
+SILVER_STRETCH_NOTE = (
+    "Crash-day Silver — a Silver card issued after a day body of 300+ pts. "
+    "Unlike Gold, the backtest shows NO consistent degradation here "
+    "(stretched Silver n=9, 56% win, windows flip 25%/80% — noise-shaped), "
+    "and one near-miss live night (-268 body) was the biggest Silver winner. "
+    "A tracking label with no expectation attached: the live ledger decides. "
+    "Never a gate.")
+STRETCH_NOTES = {"GOLD": STRETCH_NOTE, "SILVER": SILVER_STRETCH_NOTE}
+
 
 def stretched(tier_label: Optional[str], gap_pts: Optional[float]) -> Optional[bool]:
-    """True only for a GOLD card on a 300+ pt day body. None when the night
-    carries no Gold tier or the body is unknown — the sub-label is
-    Gold-specific by registration, and unknown never labels."""
-    if tier_label != "GOLD" or gap_pts is None:
+    """True for a GOLD or SILVER card on a 300+ pt day body. None when the
+    night carries neither tier or the body is unknown — Bronze already has
+    FLAGGED-level odds and carries no sub-label, and unknown never labels.
+    Gold's cell semantics are untouched by the Silver extension (its live
+    count is preserved; Silver counts from its own registration date)."""
+    if tier_label not in ("GOLD", "SILVER") or gap_pts is None:
         return None
     return abs(gap_pts) >= STRETCH_PTS
 
@@ -119,9 +140,15 @@ def summary(trades: list, split: date) -> dict:
         out = {k.lower(): _compact([t for t in sub if t.get("tier") == k]) for k in TIERS}
         out["clean_untiered"] = _compact([t for t in sub if t.get("card_verdict") == "CLEAN"
                                           and not t.get("tier")])
-        # Crash-day sub-label: the same Gold rows split by the day's body.
-        out["gold_stretched"] = _compact([t for t in sub if t.get("tier_stretched") is True])
-        out["gold_calm"] = _compact([t for t in sub if t.get("tier_stretched") is False])
+        # Crash-day sub-labels: the same Gold/Silver rows split by the body.
+        out["gold_stretched"] = _compact([t for t in sub if t.get("tier") == "GOLD"
+                                          and t.get("tier_stretched") is True])
+        out["gold_calm"] = _compact([t for t in sub if t.get("tier") == "GOLD"
+                                     and t.get("tier_stretched") is False])
+        out["silver_stretched"] = _compact([t for t in sub if t.get("tier") == "SILVER"
+                                            and t.get("tier_stretched") is True])
+        out["silver_calm"] = _compact([t for t in sub if t.get("tier") == "SILVER"
+                                       and t.get("tier_stretched") is False])
         return out
 
     windows = {}
@@ -134,7 +161,9 @@ def summary(trades: list, split: date) -> dict:
         "registered_on": REGISTERED_ON,
         "definition": DEFINITION,
         "stretch": {"registered_on": STRETCH_REGISTERED_ON, "pts": STRETCH_PTS,
-                    "note": STRETCH_NOTE},
+                    "note": STRETCH_NOTE,
+                    "silver_registered_on": SILVER_STRETCH_REGISTERED_ON,
+                    "silver_note": SILVER_STRETCH_NOTE},
         "labels": LABELS,
         "notes": NOTES,
         "windows": windows,

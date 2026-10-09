@@ -338,12 +338,14 @@ def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
         # Clean Gold / Silver / Bronze (closing/tiers.py): the verdict graded
         # by the OI-wall and CPR shadows. A label over the chips, never a
         # check; None when an input is unknown or the card is not CLEAN.
-        # A Gold on a 300+ pt day body additionally carries the crash-day
-        # sub-label (registered 2026-10-09) and its note replaces Gold's —
-        # the 15:00 reader must see the lottery-tail odds, not the headline.
+        # A Gold OR Silver on a 300+ pt day body carries its crash-day
+        # sub-label (both registered 2026-10-09) and that note replaces the
+        # tier's headline — Gold's warns of lottery-tail odds; Silver's is
+        # deliberately neutral (its backtest shows no consistent effect).
         "tier": card_tier,
         "tier_stretched": card_stretched,
-        "tier_note": tiers.STRETCH_NOTE if card_stretched else tiers.NOTES.get(card_tier),
+        "tier_note": (tiers.STRETCH_NOTES[card_tier] if card_stretched
+                      else tiers.NOTES.get(card_tier)),
         "note": (
             "Five pre-registered checks read live — no new rules. The clean cell "
             "made money in both backtest windows, but the composite was assembled "

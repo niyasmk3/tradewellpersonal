@@ -444,8 +444,8 @@ function TonightPanel() {
           {banner && (
             <p className={`mb-2 rounded border px-2 py-1.5 text-[11px] ${banner.cls}`}>
               {t.tier && TIER_STYLE[t.tier] && (
-                <span className={`mr-2 rounded border px-1.5 py-0.5 font-mono text-[10px] ${t.tier_stretched ? GOLD_STRETCH.cls : TIER_STYLE[t.tier].cls}`}
-                      title={t.tier_note ?? (t.tier_stretched ? GOLD_STRETCH.title : TIER_STYLE[t.tier].title)}>
+                <span className={`mr-2 rounded border px-1.5 py-0.5 font-mono text-[10px] ${t.tier_stretched ? stretchStyle(t.tier).cls : TIER_STYLE[t.tier].cls}`}
+                      title={t.tier_note ?? (t.tier_stretched ? stretchStyle(t.tier).title : TIER_STYLE[t.tier].title)}>
                   {TIER_STYLE[t.tier].label}{t.tier_stretched ? " · crash-day" : ""}
                 </span>
               )}
@@ -550,12 +550,23 @@ const GOLD_STRETCH = {
   cls: "border-red-400/60 bg-red-400/15 text-red-300",
   title: "Crash-day Gold: a Gold card after a 300+ pt day body — 25% win, median −25%, index continues 38% (n=8, all crash-side PEs); the +56% mean hangs on one +633% night. Calm Gold: 68% win, median +25% (n=38). Expectations label, never a gate.",
 };
+// Crash-day Silver (registered 2026-10-09): same 300-pt trigger, NEUTRAL
+// evidence — the backtest shows no consistent degradation on Silver
+// (n=9, 56% win, windows flip); a tracking label the live ledger will judge.
+const SILVER_STRETCH = {
+  // Deliberately NEUTRAL styling (not Gold's warning red): the registration
+  // attaches no expectation to crash-day Silver — the chip must not imply
+  // degraded odds the evidence does not show (review catch).
+  cls: "border-sky-400/50 bg-sky-400/10 text-sky-200",
+  title: "Crash-day Silver: a Silver card after a 300+ pt day body. Unlike Gold, the backtest shows NO consistent degradation (n=9, 56% win, windows flip 25%/80% — noise-shaped). Tracking label with no expectation attached; the live ledger decides. Never a gate.",
+};
+const stretchStyle = (tier?: string | null) => (tier === "SILVER" ? SILVER_STRETCH : GOLD_STRETCH);
 
 /** Ledger chip: what the live card would have said at that night's 15:00. */
 function CardChip({ t }: { t: ClosingTrade }) {
   if (!t.card_verdict) return null;
   const tier = t.tier ? TIER_STYLE[t.tier] : undefined;
-  const stretched = t.tier === "GOLD" && t.tier_stretched === true;
+  const stretched = t.tier_stretched === true;
   const short = t.card_verdict === "CLEAN" ? (tier ? `CLEAN·${tier.short}${stretched ? "!" : ""}` : "CLEAN")
     : t.card_verdict === "FLAGGED" ? `FLAG${t.card_red?.length ? "·" + t.card_red.length : ""}`
     : "INC";
@@ -563,7 +574,7 @@ function CardChip({ t }: { t: ClosingTrade }) {
     ? `red: ${(t.card_red ?? []).join(", ")}`
     : t.card_verdict === "INCOMPLETE"
       ? "some check inputs unavailable for this night"
-      : stretched ? GOLD_STRETCH.title
+      : stretched ? stretchStyle(t.tier).title
       : tier ? tier.title : "all five checks clear at 15:00 (tier unknown — a shadow input was unavailable)";
   return (
     <span title={title}
@@ -649,11 +660,13 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
                   ))}
                 </tr>
               ))}
-              {/* Crash-day sub-label (registered 2026-10-09): the same Gold
-                  rows split by the day's body — expectations, never a gate. */}
+              {/* Crash-day sub-labels (both registered 2026-10-09): the same
+                  Gold and Silver rows split by the day's body. Gold's carries
+                  degraded-odds evidence; Silver's is neutral tracking.
+                  Expectations, never a gate. */}
               <tr className="border-b border-edge/30">
                 <td className="py-1 pl-4 text-left font-sans text-muted">
-                  ↳ calm Gold <span className="text-muted/60">(body &lt; {cb.tiers?.stretch?.pts ?? 300} pts)</span>
+                  ↳ calm Gold <span className="text-muted/60">(|body| &lt; {cb.tiers?.stretch?.pts ?? 300} pts)</span>
                 </td>
                 {WINDOWS.map(([w]) => (
                   <td key={w} className="py-1 text-right">{cell(cb.tiers?.windows?.[w]?.gold_calm)}</td>
@@ -671,6 +684,28 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
                 </td>
                 {WINDOWS.map(([w]) => (
                   <td key={w} className="py-1 text-right">{cell(cb.tiers?.windows?.[w]?.gold_stretched)}</td>
+                ))}
+              </tr>
+              <tr className="border-b border-edge/30">
+                <td className="py-1 pl-4 text-left font-sans text-muted">
+                  ↳ calm Silver <span className="text-muted/60">(|body| &lt; {cb.tiers?.stretch?.pts ?? 300} pts)</span>
+                </td>
+                {WINDOWS.map(([w]) => (
+                  <td key={w} className="py-1 text-right">{cell(cb.tiers?.windows?.[w]?.silver_calm)}</td>
+                ))}
+              </tr>
+              <tr className="border-b border-edge/30">
+                <td className="py-1 pl-4 text-left font-sans">
+                  <span className={`rounded border px-1 py-0.5 font-mono text-[9px] ${SILVER_STRETCH.cls}`}
+                        title={cb.tiers?.stretch?.silver_note ?? SILVER_STRETCH.title}>
+                    ↳ crash-day Silver
+                  </span>
+                  <span className="ml-1 text-[9px] text-muted/60">
+                    registered {cb.tiers?.stretch?.silver_registered_on ?? "2026-10-09"} · neutral evidence
+                  </span>
+                </td>
+                {WINDOWS.map(([w]) => (
+                  <td key={w} className="py-1 text-right">{cell(cb.tiers?.windows?.[w]?.silver_stretched)}</td>
                 ))}
               </tr>
               <tr className="border-b border-edge/30">
@@ -853,8 +888,8 @@ function CardBackfillPanel({ cb }: { cb: ClosingCardBackfill }) {
                       {row.verdict}
                     </span>
                     {row.tier && TIER_STYLE[row.tier] && (
-                      <span className={`ml-1 rounded border px-1 font-mono text-[9px] ${row.tier_stretched ? GOLD_STRETCH.cls : TIER_STYLE[row.tier].cls}`}
-                            title={row.tier_stretched ? GOLD_STRETCH.title : TIER_STYLE[row.tier].title}>
+                      <span className={`ml-1 rounded border px-1 font-mono text-[9px] ${row.tier_stretched ? stretchStyle(row.tier).cls : TIER_STYLE[row.tier].cls}`}
+                            title={row.tier_stretched ? stretchStyle(row.tier).title : TIER_STYLE[row.tier].title}>
                         {TIER_STYLE[row.tier].label.replace("Clean ", "")}{row.tier_stretched ? "!" : ""}
                       </span>
                     )}
