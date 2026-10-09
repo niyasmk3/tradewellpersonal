@@ -90,6 +90,42 @@ def test_cache_round_trip_and_fetch_failure_is_unknown(tmp_path, monkeypatch):
     oiwall._failed_at.clear()
 
 
+def test_backfill_merges_live_cache_and_gz_wins(tmp_path, monkeypatch):
+    """The gz is frozen history; sessions the live card cached since must
+    merge on EVERY load (even the memoised path), gz entries win on overlap,
+    and a torn cache file is skipped — the seven-weeks-stale gz silently
+    un-tiered every ledger night until this merge existed."""
+    import gzip, json
+
+    monkeypatch.setattr(oiwall, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(oiwall, "_backfill_cache", None)
+    gz = tmp_path / "backfill.json.gz"
+    with gzip.open(gz, "wt") as fh:
+        json.dump({"2026-08-20": {"2026-08-25": [[24500.0, "CE", 1e5], [24000.0, "PE", 2e5]]},
+                   "2026-08-21": {"2026-08-25": [[24500.0, "CE", 7e5], [24000.0, "PE", 8e5]]}}, fh)
+    monkeypatch.setattr(oiwall, "BACKFILL_PATH", gz)
+
+    cached = oiwall.parse_udiff(UDIFF)
+    oiwall._to_cache(date(2026, 8, 24), cached)      # newer than the gz: merges
+    oiwall._to_cache(date(2026, 8, 21), {"2026-08-25": {(1.0, "CE"): 1.0}})  # overlap: gz wins
+    (tmp_path / "cache" / "2026-08-26.json").write_text("{torn")             # skipped
+    (tmp_path / "cache" / "notes.json").write_text("{}")                     # not a session file
+    (tmp_path / "cache" / "back-up-01.json").write_text("{}")                # date-SHAPED, not a date
+    (tmp_path / "cache" / "9999-99-99.json").write_text("{}")                # invalid date
+
+    out = oiwall.load_backfill(gz)
+    assert out["2026-08-24"] == cached
+    assert out["2026-08-21"]["2026-08-25"][(24500.0, "CE")] == 7e5
+    assert "2026-08-26" not in out and "notes" not in out
+    assert "back-up-01" not in out and "9999-99-99" not in out
+
+    # The memoised second call still sees a session cached AFTER the first
+    # load — the daily auto-grade must not need a restart to tier last night.
+    oiwall._to_cache(date(2026, 8, 25), cached)
+    assert "2026-08-25" in oiwall.load_backfill(gz)
+    monkeypatch.setattr(oiwall, "_backfill_cache", None)
+
+
 def _day(d: date, bars: dict) -> Day:
     day = Day(d)
     ts0 = int(datetime(d.year, d.month, d.day, tzinfo=IST).timestamp())

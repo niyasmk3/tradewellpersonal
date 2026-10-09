@@ -151,10 +151,16 @@ def _from_cache(session: date) -> Optional[dict]:
 
 
 def _to_cache(session: date, chains: dict) -> None:
+    # tmp + rename: load_backfill now globs this directory from the analyze
+    # thread while the live card writes here — a reader must see a complete
+    # file or none, and a crash mid-write must not leave a torn file that
+    # silently un-tiers that night forever (review catch).
     try:
         CACHE_DIR.mkdir(exist_ok=True)
-        _cache_path(session).write_text(json.dumps(
+        tmp = _cache_path(session).with_suffix(".tmp")
+        tmp.write_text(json.dumps(
             {e: [[s, k, oi] for (s, k), oi in ch.items()] for e, ch in chains.items()}))
+        tmp.replace(_cache_path(session))
     except OSError:
         log.warning("OI wall cache unwritable at %s", CACHE_DIR)
 
@@ -209,21 +215,52 @@ _backfill_cache: Optional[dict] = None
 
 def load_backfill(path: Path = BACKFILL_PATH) -> dict:
     """{session_iso: {expiry_iso: {(strike, right): oi}}} — the previous-close
-    OI per night, as built by scripts/build_oi_backfill.py. Empty when absent."""
+    OI per night. The gz is the frozen history; sessions the live card has
+    cached since (CACHE_DIR, one file per session) are merged on every call,
+    so the ledger's tier stamping stays current without manual rebuilds.
+    The gz once went seven weeks stale and silently un-tiered every night
+    after it — the Gold scoreboard could not grade (08-Oct post-mortem catch).
+    Only the gz decode is memoised; the cache-dir merge re-reads each call
+    (a handful of small files, once per analyze). Gz entries win on overlap."""
     global _backfill_cache
     if _backfill_cache is not None and path == BACKFILL_PATH:
-        return _backfill_cache
+        return _merge_live_cache(_backfill_cache)
     if not path.exists():
-        return {}
-    try:
-        with gzip.open(path, "rt") as fh:
-            raw = json.load(fh)
-    except (OSError, ValueError):
-        return {}
-    out = {d: {e: {(float(s), k): float(oi) for s, k, oi in rows} for e, rows in ex.items()}
-           for d, ex in raw.items()}
+        base = {}
+    else:
+        try:
+            with gzip.open(path, "rt") as fh:
+                raw = json.load(fh)
+            base = {d: {e: {(float(s), k): float(oi) for s, k, oi in rows}
+                        for e, rows in ex.items()}
+                    for d, ex in raw.items()}
+        except (OSError, ValueError):
+            base = {}
     if path == BACKFILL_PATH:
-        _backfill_cache = out
+        _backfill_cache = base
+        return _merge_live_cache(base)
+    return base
+
+
+def _merge_live_cache(base: dict) -> dict:
+    """A copy of `base` plus every CACHE_DIR session it lacks. Shallow copy on
+    purpose: inner chains are shared read-only, never mutated. A torn or
+    malformed cache file is skipped — unknown, never a crash."""
+    if not CACHE_DIR.is_dir():
+        return base
+    out = dict(base)
+    for p in CACHE_DIR.glob("????-??-??.json"):
+        if p.stem in out:
+            continue
+        # glob matches SHAPE, not date validity — a stray back-up-01.json
+        # must be one skipped file, never a crashed analyze (review catch).
+        try:
+            session = date.fromisoformat(p.stem)
+        except ValueError:
+            continue
+        chains = _from_cache(session)
+        if chains:
+            out[p.stem] = chains
     return out
 
 
