@@ -163,6 +163,52 @@ Two causes, one fixed:
 Before that run, in a calm session: land the 1-day fold-boundary embargo
 (queued below) and re-run --selftest. Nothing else changes.
 
+## Hypotheses from the pro-trader interview (10-Oct-2026)
+
+Transcript: recorder/notes/pro-trader-interview-2026-10-10.md. Measured
+first, adopted as FEATURES or queued as pre-registered studies — never as
+rule changes.
+
+MEASURED (5y NIFTY, 1,234 sessions, bucketed by prev-close India VIX):
+  <13: avg range 0.74%, big days (>1.5%) 3.0%  |  13-15: 0.98% / 11.6%
+  15-18: 1.05% / 13.2%                        |  >18: 1.37% / 32.7%
+  => the trader's "right market" claim is real on our tape: big-move days
+  are ~11x more frequent above VIX 18 than below 13.
+  CRITICAL CONTEXT: every graded card so far (Aug-Oct 2026) was born at
+  VIX 11.3-12.2 — the trader's "don't buy at all" zone. The paper book's
+  negative verdict is a LOW-VIX verdict; the engine above VIX 15 is
+  unmeasured. Any September/November model conclusion must be labelled
+  "low-VIX regime only" and re-validated when a high-VIX period arrives.
+  Expiry day (Tue) on our 121 cards: 42.9% win (best weekday) but net
+  -Rs3.5k; Thu worst (20%, -Rs17.5k) — n=21-34 per day, hints only.
+
+ADDED AS FEATURES (10-Oct): dte_at_entry, is_expiry_day, event_flag
+(scheduled-event warning on the card), holds_overnight (late-day
+positional gap warning), htf_ret_20d_pct (daily-structure bias).
+vix_close was already present. NOTE: event_flag has fired on 0 of 136
+cards so far — no scheduled event fell inside a card window Aug-Oct — so
+the trader's event rule stays unmeasured until one does.
+
+- [ ] VIX x card interaction: does score quality differ by vix_close band?
+      (only testable once >13 cards exist — note the date it first happens)
+- [ ] "blast exit" counterfactual: exit on the first 60s chain snapshot
+      where the premium gains >=X% in one step after entry, vs the ratchet;
+      pre-register X from the climatology (needs the premium path, which the
+      60s snapshots provide). Trader's claim: the spike IS the exit.
+- [ ] time-stop at resistance: positions consolidating 90-120 min without a
+      new high -> exit; needs the Patterns module's S/R levels joined to
+      fills. Queue until levels are in the dataset.
+- [ ] scale-out at HTF resistance / add-back on sustained breakout: a
+      PAIRED-twin study (needs multi-lot twins — out of scope until R3
+      policy ledgers mature).
+- [ ] sizing policy comparison for the HUMAN book: "full premium at risk"
+      (TRADING_FUND = daily risk budget, lots = fund / premium) vs the
+      current risk-vs-disaster-stop sizing. A user decision, pre-register
+      the comparison on the live book before changing .env.
+- [ ] overtrading early-warning (orders/day, charges/day above trailing
+      median) -> a line on the research page from the tradebook import; a
+      Telegram nudge only if the live book shows it predicts bad days.
+
 ## Promotion-to-LIVE bar (added 21-Aug after an external Codex review)
 
 The harness KEEP rule promotes ideas between RESEARCH branches only. For any

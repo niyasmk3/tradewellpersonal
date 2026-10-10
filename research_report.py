@@ -307,6 +307,26 @@ def build() -> str:
             f"moves without going anywhere. Chop, not sleep.</li>"
             f"<li><b>No magic weekday:</b> average ranges nearly identical "
             f"({wk}).</li></ul>")
+        vr = nc.get("vix_regime") or {}
+        if vr:
+            order = [b for b in ("<13", "13-15", "15-18", ">18") if b in vr]
+            label = {"<13": "below 13", "13-15": "13 to 15",
+                     "15-18": "15 to 18", ">18": "above 18"}
+            rows_v = [[label[b], str(vr[b]["days"]), f'{vr[b]["avg_range_pct"]}%',
+                       f'{vr[b]["avg_gap_pct"]}%', f'{vr[b]["big_day_pct"]}%']
+                      for b in order]
+            nifty_clim_html += (
+                "<p><b>The pro-trader's VIX rule, measured</b> (\"buy options "
+                "above VIX 15, not below 13\"): each session bucketed by the "
+                "previous close's India VIX — the number you know before the "
+                "open.</p>"
+                + table(["Prev-close VIX", "Sessions", "Avg day range",
+                         "Avg gap", "Big days (range >1.5%)"], rows_v)
+                + '<p class="note">Big-move days — the only days a bought '
+                  "option pays properly — are roughly 11x more frequent above "
+                  "VIX 18 than below 13. Every card in our paper book so far "
+                  "was born at VIX 11-12: the engine has only ever been graded "
+                  "in buyer's winter. Its behaviour above 15 is unmeasured.</p>")
 
     def book_tag(t: dict) -> str:
         if not is_shadow(t):

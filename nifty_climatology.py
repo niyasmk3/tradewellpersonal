@@ -65,6 +65,32 @@ def main() -> int:
                 cont.append(m1 * m2 > 0)
         prev_close = c
 
+    # The pro-trader VIX rule ("buy options above 15, not below 13"), measured:
+    # each session's range/gap bucketed by the PREVIOUS close's India VIX —
+    # the number a trader actually knows before the open. Added 10-Oct-2026.
+    vix = {(r[0] + 19800) // 86400: r[1] for r in db.execute(
+        "SELECT bar_ts, close FROM candles WHERE symbol='INDIAVIX' AND tf='day'")}
+    buckets: dict[str, dict] = {}
+    prev_v = prev_c = None
+    for ts, o, h, lo, c in db.execute(
+            "SELECT bar_ts, open, high, low, close FROM candles "
+            "WHERE symbol='NIFTY_SPOT' AND tf='day' ORDER BY bar_ts"):
+        d = (ts + 19800) // 86400
+        if prev_v is not None and c:
+            b = ("<13" if prev_v < 13 else "13-15" if prev_v < 15
+                 else "15-18" if prev_v < 18 else ">18")
+            rng = 100 * (h - lo) / c
+            gap = abs(100 * (o - prev_c) / prev_c) if prev_c else 0.0
+            B = buckets.setdefault(b, {"days": 0, "rng": 0.0, "gap": 0.0, "big": 0})
+            B["days"] += 1; B["rng"] += rng; B["gap"] += gap; B["big"] += rng > 1.5
+        prev_v = vix.get(d, prev_v)
+        prev_c = c
+    vix_regime = {b: {"days": B["days"],
+                      "avg_range_pct": round(B["rng"] / B["days"], 2),
+                      "avg_gap_pct": round(B["gap"] / B["days"], 2),
+                      "big_day_pct": round(100 * B["big"] / B["days"], 1)}
+                  for b, B in buckets.items() if B["days"]}
+
     total_mv = sum(by_hr.values()) or 1.0
     toxic = sum(v for h, v in by_hr.items() if 10 <= h < 12)
     dows = "Mon Tue Wed Thu Fri Sat Sun".split()   # Sat: Budget-day sessions
@@ -83,6 +109,7 @@ def main() -> int:
         "toxic_window_share_pct": round(100 * toxic / total_mv, 1),
         "avg_range_by_dow": {dows[k]: round(sum(v) / len(v), 2)
                              for k, v in sorted(by_dow.items()) if v},
+        "vix_regime": vix_regime,
     }
     OUT.write_text(json.dumps(out, indent=1))
     print(f"nifty climatology → {OUT.name} ({len(keys)} sessions)")

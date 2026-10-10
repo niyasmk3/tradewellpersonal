@@ -201,6 +201,27 @@ def card_features(card: dict) -> dict:
         f["toxic_window"] = int(10.5 <= f["hour_ist"] < 12.0)
         f["dow"] = dt.weekday()
         f["month"] = dt.strftime("%Y-%m")
+        # Days to expiry at birth + expiry-day flag (pro-trader interview,
+        # 10-Oct: "expiry-day buying is a double-edged sword"). Pre-registered
+        # as features; the model decides if they matter.
+        exp = card.get("expiry")
+        if isinstance(exp, str) and len(exp) >= 10:
+            try:
+                ed = datetime.strptime(exp[:10], "%Y-%m-%d").date()
+                f["dte_at_entry"] = max(0, (ed - dt.date()).days)
+                f["is_expiry_day"] = int(ed == dt.date())
+            except ValueError:
+                pass
+    # card.event_note carries two different things joined by " · ": the
+    # engine's scheduled-event warning (RBI/budget/US releases — the trader's
+    # "wait for the IV collapse, then decide") and the late-day positional
+    # overnight-gap warning. Split them: conflating the two would make
+    # event_flag fire on every evening positional (all 13 notes so far).
+    segs = [x.strip() for x in str(card.get("event_note") or "").split("·")]
+    segs = [x for x in segs if x]
+    overnight = [x for x in segs if x.lower().startswith("late-day positional")]
+    f["holds_overnight"] = int(bool(overnight))
+    f["event_flag"] = int(len(segs) > len(overnight))
     score = card.get("score") or {}
     if isinstance(score, dict):
         f["score_total"] = score.get("total")
@@ -326,6 +347,21 @@ def nearest_periodic(db: sqlite3.Connection, endpoint: str, symbol: str,
     if age > tolerance_s:
         return None
     return decompress(payload)
+
+
+def htf_trend(db: sqlite3.Connection, created: int) -> dict:
+    """Higher-timeframe bias the pro trader builds from daily/weekly
+    structure: NIFTY's 20-session return as of the session BEFORE the card
+    (today's daily bar is excluded — it closes after the card, leakage)."""
+    if not _table_exists(db, "candles"):
+        return {}
+    day_start = ((int(created) + 19800) // 86400) * 86400 - 19800
+    rows = db.execute(
+        "SELECT close FROM candles WHERE symbol='NIFTY_SPOT' AND tf='day' "
+        "AND bar_ts < ? ORDER BY bar_ts DESC LIMIT 21", (day_start,)).fetchall()
+    if len(rows) < 21 or not rows[20][0]:
+        return {}
+    return {"htf_ret_20d_pct": round(100 * (rows[0][0] - rows[20][0]) / rows[20][0], 3)}
 
 
 def vix_close_before(db: sqlite3.Connection, ts: int) -> float | None:
@@ -477,6 +513,7 @@ def main() -> int:
         vix = vix_close_before(db, created)
         if vix is not None:
             f["vix_close"] = vix
+        f.update(htf_trend(db, created))
         f["had_birth_snapshot"] = int(birth is not None)
         f.update(labels)
         rows.append(f)
