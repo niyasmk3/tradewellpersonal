@@ -65,6 +65,26 @@ def section(title: str, body: str, note: str = "") -> str:
     return f"<section><h2>{esc(title)}</h2>{n}{body}</section>"
 
 
+def _vix_birth_counts() -> dict[str, int]:
+    """Graded cards bucketed by the previous session's India VIX (vix_close in
+    the dataset CSVs). Stdlib only — this page must never need pandas."""
+    import csv
+    out = {"<13": 0, "13-15": 0, "15-18": 0, ">18": 0}
+    for fn in ("dataset.csv", "dataset_holdout.csv"):
+        p = DATA / fn
+        if not p.exists():
+            continue
+        with p.open() as fh:
+            for row in csv.DictReader(fh):
+                try:
+                    v = float(row.get("vix_close") or "")
+                except ValueError:
+                    continue
+                out["<13" if v < 13 else "13-15" if v < 15
+                    else "15-18" if v < 18 else ">18"] += 1
+    return out
+
+
 def table(headers: list[str], rows: list[list[str]]) -> str:
     if not rows:
         return '<p class="empty">nothing yet</p>'
@@ -315,6 +335,10 @@ def build() -> str:
             rows_v = [[label[b], str(vr[b]["days"]), f'{vr[b]["avg_range_pct"]}%',
                        f'{vr[b]["avg_gap_pct"]}%', f'{vr[b]["big_day_pct"]}%']
                       for b in order]
+            vb = _vix_birth_counts()
+            born = ((" Our graded paper cards by the VIX they were born into: "
+                     + ", ".join(f"{label[k]} <b>{v}</b>" for k, v in vb.items() if v)
+                     + f" (n={sum(vb.values())}).") if sum(vb.values()) else "")
             nifty_clim_html += (
                 "<p><b>The pro-trader's VIX rule, measured</b> (\"buy options "
                 "above VIX 15, not below 13\"): each session bucketed by the "
@@ -324,9 +348,10 @@ def build() -> str:
                          "Avg gap", "Big days (range >1.5%)"], rows_v)
                 + '<p class="note">Big-move days — the only days a bought '
                   "option pays properly — are roughly 11x more frequent above "
-                  "VIX 18 than below 13. Every card in our paper book so far "
-                  "was born at VIX 11-12: the engine has only ever been graded "
-                  "in buyer's winter. Its behaviour above 15 is unmeasured.</p>")
+                  "VIX 18 than below 13." + born + " Below 13 is buyer's "
+                  "winter; the engine's behaviour above 15 is barely measured "
+                  "yet, so every model verdict carries the VIX mix of its "
+                  "sample.</p>")
 
     def book_tag(t: dict) -> str:
         if not is_shadow(t):

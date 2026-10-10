@@ -28,6 +28,7 @@ FEATURES = [
     "pcr",
     "oi_change_skew",
     "vix_close",
+    "vix_at_birth",
     "advocate_counter",
     "tape_resolved_pct",
     "tape_aligned",

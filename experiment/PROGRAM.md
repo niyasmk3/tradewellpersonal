@@ -169,23 +169,37 @@ Transcript: recorder/notes/pro-trader-interview-2026-10-10.md. Measured
 first, adopted as FEATURES or queued as pre-registered studies — never as
 rule changes.
 
-MEASURED (5y NIFTY, 1,234 sessions, bucketed by prev-close India VIX):
-  <13: avg range 0.74%, big days (>1.5%) 3.0%  |  13-15: 0.98% / 11.6%
+MEASURED (5y NIFTY, 1,267 sessions, bucketed by prev-close India VIX):
+  <13: avg range 0.74%, big days (>1.5%) 3.0%  |  13-15: 0.98% / 11.9%
   15-18: 1.05% / 13.2%                        |  >18: 1.37% / 32.7%
   => the trader's "right market" claim is real on our tape: big-move days
   are ~11x more frequent above VIX 18 than below 13.
-  CRITICAL CONTEXT: every graded card so far (Aug-Oct 2026) was born at
-  VIX 11.3-12.2 — the trader's "don't buy at all" zone. The paper book's
-  negative verdict is a LOW-VIX verdict; the engine above VIX 15 is
-  unmeasured. Any September/November model conclusion must be labelled
-  "low-VIX regime only" and re-validated when a high-VIX period arrives.
+  CONTEXT (corrected the same evening — see DATA INTEGRITY below): of the
+  130 graded cards, 95 were born below VIX 13 (the trader's "don't buy"
+  zone), 28 at 13-15 and 7 above 15 (all in October, when VIX climbed to
+  15.2). The paper book's verdict is mostly a low-VIX verdict; the engine
+  above 15 is barely measured. Model conclusions must carry the VIX mix of
+  their sample, and the vix_close x score interaction stays queued until
+  the >15 bucket reaches 30 cards.
+  DATA INTEGRITY (10-Oct): the deep-backfilled dailies (spot, futures,
+  INDIAVIX) had stopped on 19-Aug because backfill.py needs a login-day
+  Kite token, so vix_close and htf_ret_20d_pct were silently stale for
+  every later card (the first draft of this note wrongly said "every card
+  at VIX 11-12"). Fixes: daily_extend.py (nightly, before dataset.py:
+  derives dailies from the live 3m feed and the Closing lab's 5-minute VIX
+  store, provenance in derived_daily; an official backfill.py run on a
+  login day overwrites them); vix_close is now strictly the PREVIOUS
+  session's close (the old lookup matched the same day's midnight-stamped
+  bar = look-ahead for morning cards); new vix_at_birth feature (exact
+  5-minute value at the card's birth).
   Expiry day (Tue) on our 121 cards: 42.9% win (best weekday) but net
   -Rs3.5k; Thu worst (20%, -Rs17.5k) — n=21-34 per day, hints only.
 
 ADDED AS FEATURES (10-Oct): dte_at_entry, is_expiry_day, event_flag
 (scheduled-event warning on the card), holds_overnight (late-day
 positional gap warning), htf_ret_20d_pct (daily-structure bias).
-vix_close was already present. NOTE: event_flag has fired on 0 of 136
+vix_close was already present (definition fixed, see DATA INTEGRITY);
+vix_at_birth added. NOTE: event_flag has fired on 0 of 136
 cards so far — no scheduled event fell inside a card window Aug-Oct — so
 the trader's event rule stays unmeasured until one does.
 

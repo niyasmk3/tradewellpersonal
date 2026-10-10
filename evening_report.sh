@@ -37,6 +37,9 @@ mkdir -p "$OUT_DIR"
     echo "!! are timezone-proof since 08-Oct, but file dates and anything else on"
     echo "!! this Mac read wrong. Fix: System Settings -> General -> Date & Time."
   fi
+  echo "=== Daily series extend (VIX + index dailies from local data) ===="
+  "$PY" "$ROOT/recorder/daily_extend.py" 2>&1
+  echo
   "$PY" "$ROOT/recorder/dataset.py" 2>&1
   echo
   "$PY" "$ROOT/recorder/analyze.py" 2>&1

@@ -41,13 +41,16 @@ rule change.
 
 ## What our data says (10-Oct-2026)
 
-- **Rule 1 is real on NIFTY.** 1,234 sessions by prev-close VIX: big-move
+- **Rule 1 is real on NIFTY.** 1,267 sessions by prev-close VIX: big-move
   days (range >1.5%) are 3.0% below VIX 13 vs 32.7% above 18 (~11x); avg
   range 0.74% vs 1.37%. Now a permanent table on the research page.
-- **Our entire paper era is VIX 11.3–12.2.** Every graded card, every
-  lesson, every negative number was produced in the trader's "don't buy"
-  zone. The engine above VIX 15 has never been observed. Recorded in
-  PROGRAM.md as a standing caveat on all model verdicts.
+- **Most of our paper era is buyer's winter.** Of 130 graded cards, 95 were
+  born below VIX 13 (the trader's "don't buy" zone), 28 at 13–15 and 7
+  above 15 — all seven in October, when VIX climbed to 15.2. (First draft
+  of this note said "every card at VIX 11–12": that came from a daily VIX
+  table that had silently stopped updating on 19-Aug. Fixed the same
+  evening — see PROGRAM.md "DATA INTEGRITY (10-Oct)".) Recorded as a
+  standing caveat: every model verdict carries the VIX mix of its sample.
 - **Rule 8 (expiry day) is NOT supported by our 121 cards:** Tuesday wins
   42.9% (best weekday), Thursday 20% (worst). n=21–34 per weekday — hints.
 - **Rules 2, 3, 4, 6** describe the human book, where our evidence already
@@ -62,7 +65,9 @@ rule change.
 
 - Features: `dte_at_entry`, `is_expiry_day`, `event_flag` (scheduled-event
   warning; 0 of 136 cards so far), `holds_overnight` (late-day gap warning;
-  13 cards), `htf_ret_20d_pct`.
+  13 cards), `htf_ret_20d_pct`, `vix_at_birth` (exact 5-minute VIX at birth).
+- Data fix: daily VIX/index series now extend nightly from local data; the
+  VIX feature's same-day look-ahead removed.
 - Research page: VIX-regime table + the "buyer's winter" caveat.
 - PROGRAM.md: six queued hypotheses + the low-VIX caveat on every verdict.
 - Not changed: any live rule, any .env sizing knob (the "full premium at

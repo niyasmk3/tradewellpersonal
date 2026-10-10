@@ -364,14 +364,45 @@ def htf_trend(db: sqlite3.Connection, created: int) -> dict:
     return {"htf_ret_20d_pct": round(100 * (rows[0][0] - rows[20][0]) / rows[20][0], 3)}
 
 
+def _day_start(ts: int) -> int:
+    """IST midnight of the session containing ts (daily bar_ts convention)."""
+    return ((int(ts) + 19800) // 86400) * 86400 - 19800
+
+
 def vix_close_before(db: sqlite3.Connection, ts: int) -> float | None:
+    """India VIX close of the PREVIOUS session — the number a trader knows
+    before the open. Fixed 10-Oct: the old bar_ts<=ts matched the same day's
+    daily bar (stamped at midnight), i.e. a morning card saw that evening's
+    close. Pairs with the climatology table's prev-close convention."""
     if not _table_exists(db, "candles"):
         return None
     row = db.execute(
         "SELECT close FROM candles WHERE symbol='INDIAVIX' AND tf='day' "
-        "AND bar_ts<=? ORDER BY bar_ts DESC LIMIT 1", (ts,),
+        "AND bar_ts<? ORDER BY bar_ts DESC LIMIT 1", (_day_start(ts),),
     ).fetchone()
     return row[0] if row else None
+
+
+_VIX_DB = BACKEND / ".closing_vix.db"
+_vix_store: sqlite3.Connection | bool | None = None
+
+
+def vix_at_birth(created: int) -> float | None:
+    """India VIX at the card's birth minute, from the Closing lab's 5-minute
+    store (read-only, fail-soft). Same-session bars only, never a stale day."""
+    global _vix_store
+    if _vix_store is None:
+        try:
+            _vix_store = sqlite3.connect(f"file:{_VIX_DB}?mode=ro", uri=True)
+            _vix_store.execute("SELECT 1 FROM vix LIMIT 1")
+        except sqlite3.Error:
+            _vix_store = False
+    if not _vix_store:
+        return None
+    row = _vix_store.execute(
+        "SELECT close FROM vix WHERE ts<=? AND ts>=? ORDER BY ts DESC LIMIT 1",
+        (int(created), _day_start(created))).fetchone()
+    return float(row[0]) if row else None
 
 
 def premium_momentum(db: sqlite3.Connection, symbol: str, strike,
@@ -513,6 +544,9 @@ def main() -> int:
         vix = vix_close_before(db, created)
         if vix is not None:
             f["vix_close"] = vix
+        vb = vix_at_birth(created)
+        if vb is not None:
+            f["vix_at_birth"] = vb
         f.update(htf_trend(db, created))
         f["had_birth_snapshot"] = int(birth is not None)
         f.update(labels)
