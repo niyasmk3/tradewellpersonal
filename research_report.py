@@ -56,6 +56,14 @@ def fmt_ts(ts) -> str:
         return "—"
 
 
+def fmt_day(iso: str) -> str:
+    """'2026-10-10' -> '10-Oct-2026' (the page's date style)."""
+    try:
+        return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d-%b-%Y")
+    except ValueError:
+        return str(iso)
+
+
 def esc(x) -> str:
     return html.escape(str(x))
 
@@ -121,6 +129,9 @@ GLOSSARY: list[tuple[str, str]] = [
     ("Shadow ledger", "A what-if ledger that grades a rule's counterfactual (blocked trades, alternate stops) without touching real behavior. Evidence first, changes later."),
     ("Exit A/B", "Two exit policies graded side by side on every fill (trail vs bank-at-quick-target). The ledger decides at 30+ diverged fills, not opinion."),
     ("Stop calibrator (shadow twin)", "Each fill gets an invisible twin with only the stop repositioned (fitted from winners' MAE). Twin vs actual are paired; the live stop changes only after 30+ diverged pairs prove the twin wins."),
+    ("Exit twins (interview)", "Two exit rules from the pro-trader interview, each run as an invisible twin of every real paper fill: same entry, same contract, same size and charges — only the exit differs. The twin's exit is replayed from the recorder's 60-second premium snapshots and compared with the book's real exit on the same trade; verdict only at 30 diverged pairs per policy and mode."),
+    ("Blast exit", "The trader's 'the spike IS the exit': sell the moment the premium jumps X% or more in one minute in your favour — stops get hit, latecomers pile in, the reversal follows. X (5%) was frozen from the tape's own move distribution before any result was looked at."),
+    ("Time-stop", "A trade that has not made a new premium high for 90 session-minutes is consolidating, not working — and theta is the rent. Exit on time, not price. Intraday and positional only; a scalp lives four minutes."),
     ("Participant OI (NSE)", "Daily official file of FII / DII / Pro / Client long-short positions — 'what the smart money holds', now collected nightly."),
     ("Bhavcopy (NSE)", "The exchange's end-of-day file of every contract's close, OI, volume. Our nightly download builds option history that outlives expiry — Kite can't provide this."),
     ("Labeled row / training sample", "One graded card joined to (a) its own score breakdown, (b) the market snapshot at its birth, (c) the honest outcome. The unit ML learns from."),
@@ -424,6 +435,92 @@ def build() -> str:
               money(cf.get("gross_bank5_cut5", 0))]])
     else:
         exit_cf_html = '<p class="empty">appears after the next nightly learning pass</p>'
+    # Exit twins (ours, 10-Oct): the two interview exit rules as paired
+    # counterfactuals on every clean fill — recorder/exit_twins.py, nightly.
+    et = load_json(DATA / "exit_twins.json", {})
+    exit_twins_html = ('<p class="empty">appears after the next nightly run '
+                       '(recorder/exit_twins.py)</p>')
+    if et.get("policies"):
+        fr = et.get("frozen", {})
+        x_pct = fr.get("blast_pct", "?")
+        if isinstance(x_pct, (int, float)):
+            x_pct = f"{x_pct:g}"
+        labels = {"blast": "A · Blast exit", "time_stop": "B · Time-stop"}
+
+        def _rs(v) -> str:
+            return money(v) if isinstance(v, (int, float)) else "—"
+
+        def _r(v) -> str:
+            return f"{v:+.2f}R" if isinstance(v, (int, float)) else "—"
+
+        rows_et = []
+        for key, label in labels.items():
+            pol = et["policies"].get(key) or {}
+            for mode in ("scalp", "intraday", "positional", "all"):
+                m = (pol.get("modes") or {}).get(mode)
+                if not m:
+                    continue
+                verdict = esc(m.get("verdict", ""))
+                if str(m.get("verdict", "")).startswith("pending"):
+                    verdict = f'<span class="note">{verdict}</span>'
+                rows_et.append([
+                    esc(label), f"<b>{esc(mode)}</b>" if mode == "all" else esc(mode),
+                    str(m.get("pairs", 0)), str(m.get("diverged", 0)),
+                    f'{m["twin_better"]}/{m["diverged"]}' if m.get("diverged") else "—",
+                    _rs(m.get("mean_delta_rs")), _rs(m.get("median_delta_rs")),
+                    _r(m.get("mean_delta_R")), verdict])
+        twins_table = table(["Policy", "Mode", "Pairs", "Diverged", "Twin better",
+                             "Mean Δ (₹)", "Median Δ (₹)", "Mean Δ (R)", "Verdict"], rows_et)
+        paths = et.get("paths", {})
+        ng = paths.get("not_gradeable") or {}
+        ng_txt = "; ".join(
+            f'{esc(r)}: {sum(by.values())} (' + ", ".join(f"{esc(mo)} {n}" for mo, n in by.items()) + ")"
+            for r, by in sorted(ng.items(), key=lambda kv: -sum(kv[1].values()))) or "none"
+        recent = sorted(
+            [dict(pr, policy=labels[k]) for k, pol in et["policies"].items()
+             for pr in pol.get("diverged_pairs") or []],
+            key=lambda pr: pr.get("entered_at") or 0, reverse=True)[:10]
+        recent_rows = [[
+            esc(pr["policy"]), fmt_ts(pr.get("entered_at")), esc(pr.get("contract", "")),
+            esc(pr.get("mode", "")),
+            f'{esc(pr.get("real_exit_reason") or "exit")} @ {pr.get("real_fill", 0):.2f} '
+            f'after {pr.get("hold_min_real", 0):.0f} min',
+            f'{pr.get("twin_fill", 0):.2f} after {pr.get("hold_min_twin", 0):.0f} min',
+            money(pr.get("delta_rs", 0))] for pr in recent]
+        recent_html = ("<h3>Most recent diverged pairs (both policies)</h3>"
+                       + table(["Policy", "Entered", "Contract", "Mode", "Book exit",
+                                "Twin exit", "Δ net"], recent_rows)) if recent_rows else ""
+        dist = paths.get("abs_one_minute_move_pct") or {}
+        exit_twins_html = (
+            "<p><b>Two of the pro-trader's exit rules, each run as an invisible twin of "
+            "every clean paper fill</b> — same entry, same contract, same size, same "
+            "charges; only the exit differs. The twin's exit is replayed from the "
+            "recorder's 60-second premium snapshots and judged against the book's real "
+            "exit on the SAME trade, so every pair is apples to apples.</p>"
+            "<ul style='margin-left:18px'>"
+            f"<li><b>A · Blast exit</b> — \"the spike IS the exit\": sell the moment the "
+            f"premium jumps <b>{esc(x_pct)}%</b> or more in one minute in your favour "
+            "(stops get hit, latecomers pile in, the reversal follows). The threshold was frozen "
+            f"on {esc(fmt_day(fr.get('frozen_on', '')))} as the 95th percentile of the tape's own "
+            f"one-minute moves ({dist.get('unique_one_minute_steps', '?')} steps, p95 "
+            f"{dist.get('p95', '?')}%) — chosen before any result was looked at.</li>"
+            "<li><b>B · Time-stop</b> — a trade that has not made a new premium high for "
+            f"<b>{fr.get('time_stop_minutes', 90)} session-minutes</b> is consolidating, not "
+            "working, and theta is the rent: exit on time, not price. Intraday and positional "
+            "only — a scalp lives four minutes.</li></ul>"
+            + twins_table
+            + '<p class="note">Δ = twin net − real net on the same trade, both arms netted '
+              "with the book's Zerodha charge schedule on slippage-adjusted fills; mean and "
+              "median are over DIVERGED pairs (the pairs where the two exits actually "
+              "differed); R uses the trade's initial stop. \"Diverged\" = the twin exited on "
+              "its own trigger before the book did. The verdict stays "
+              "\"pending\" until 30 diverged pairs exist for that policy and mode — the same "
+              "bar as the upstream R&D policy twins.</p>"
+            + f'<p class="note">Gradeable paths {paths.get("gradeable", 0)} of '
+              f'{paths.get("clean_fills", 0)} clean fills. Not gradeable — {ng_txt}. '
+              "Frozen specs: recorder/experiment/PROGRAM.md (\"FROZEN SPECS — exit twins\").</p>"
+            + recent_html)
+
     n_train = last.get("train_rows", 0)
     pct = min(100, int(100 * n_train / IGNITION_ROWS))
     countdown = (
@@ -451,6 +548,7 @@ def build() -> str:
         ["Nightly learning ledger (ours)", "Runs every close — feature separation + score calibration, logged forever"],
         ["Karpathy harness (ours)", "Armed, auto-ignites at 40 rows / 2 months — see countdown"],
         ["Devil's advocate (ours, 11-Aug)", "One Claude call argues AGAINST each new card; its counter-score is stamped into the birth snapshot as a dataset feature — decides nothing, on probation like everything else"],
+        ["Exit twins (ours, 10-Oct)", "Blast exit (5% one-minute jump) and 90-min time-stop replayed on every clean fill from the 60-second chain snapshots, paired with the book's real exit — specs frozen in PROGRAM.md, verdict at 30 diverged pairs per mode"],
     ])
 
     nse = cap = '<p class="empty">db missing</p>'
@@ -563,6 +661,10 @@ def build() -> str:
          "Same fills, three exit policies. Bank@+5% = sell at the first +5% touch. "
          "Bank+cut = also exit the moment a trade goes −5% against you. Tiny sample — "
          "treat as a hypothesis being graded, not a verdict.")}
+{section("Exit twins (interview hypotheses, pre-registered 10-Oct)", exit_twins_html,
+         "Sits beside the upstream R&D policy twins and uses their bar: paired with the "
+         "book's REAL exit on the SAME trade, specs frozen before the first result, no "
+         "winner printed before 30 diverged pairs per policy and mode.")}
 {section("Seller shadows — would the umbrella shop have won?", seller_html,
          "Zero-risk studies of option SELLING on our own tape, refreshed nightly. "
          "No margin costs modelled; charges approximated. A decision needs 30+ samples "

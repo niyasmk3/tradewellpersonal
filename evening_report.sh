@@ -42,6 +42,9 @@ mkdir -p "$OUT_DIR"
   echo
   "$PY" "$ROOT/recorder/dataset.py" 2>&1
   echo
+  echo "=== Exit twins (interview hypotheses, pre-registered 10-Oct) ======"
+  "$PY" "$ROOT/recorder/exit_twins.py" 2>&1
+  echo
   "$PY" "$ROOT/recorder/analyze.py" 2>&1
   echo
   echo "=== NSE archives (participant OI + option EOD) ==================="

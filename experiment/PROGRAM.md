@@ -205,13 +205,19 @@ the trader's event rule stays unmeasured until one does.
 
 - [ ] VIX x card interaction: does score quality differ by vix_close band?
       (only testable once >13 cards exist — note the date it first happens)
-- [ ] "blast exit" counterfactual: exit on the first 60s chain snapshot
+- [x] "blast exit" counterfactual: exit on the first 60s chain snapshot
       where the premium gains >=X% in one step after entry, vs the ratchet;
       pre-register X from the climatology (needs the premium path, which the
       60s snapshots provide). Trader's claim: the spike IS the exit.
-- [ ] time-stop at resistance: positions consolidating 90-120 min without a
+      -> RUNNING AS TWINS since 10-Oct-2026 (recorder/exit_twins.py, nightly;
+      X frozen at 5% — spec block "FROZEN SPECS — exit twins" below).
+- [x] time-stop at resistance: positions consolidating 90-120 min without a
       new high -> exit; needs the Patterns module's S/R levels joined to
       fills. Queue until levels are in the dataset.
+      -> RUNNING AS TWINS since 10-Oct-2026 in its premium-path form (90 min
+      without a new premium high, intraday + positional; spec block below).
+      The S/R-conditioned variant stays queued until Patterns levels are
+      joined to fills.
 - [ ] scale-out at HTF resistance / add-back on sustained breakout: a
       PAIRED-twin study (needs multi-lot twins — out of scope until R3
       policy ledgers mature).
@@ -222,6 +228,67 @@ the trader's event rule stays unmeasured until one does.
 - [ ] overtrading early-warning (orders/day, charges/day above trailing
       median) -> a line on the research page from the tradebook import; a
       Telegram nudge only if the live book shows it predicts bad days.
+
+### FROZEN SPECS — exit twins (frozen 10-Oct-2026)
+
+Code: recorder/exit_twins.py, nightly right after dataset.py in
+evening_report.sh. Output: recorder/data/exit_twins.json + the research-page
+section "Exit twins (interview hypotheses, pre-registered 10-Oct)".
+
+Paired 1:1 with every clean paper fill: same entry, contract, size and
+charges; only the exit differs. The twin's exit is replayed on the
+recorder's 60-second chain snapshots (contract matched by instrument
+token) and the book's REAL exit caps the twin's life — whichever comes
+first. Verdict text is literally "pending — N/30 diverged pairs" until 30
+diverged pairs exist for that policy AND mode; a human reads the result,
+nothing is applied. Changing any parameter below resets the verdict clock.
+
+- Policy A "blast exit" — X = 5%, frozen 10-Oct-2026. Exit at the first
+  snapshot after entry whose premium is >= 5% above the PREVIOUS sample
+  (one-minute step, same session day), else the book's exit. The FIRST
+  step is measured from the entry fill — the premium the buyer actually
+  holds — later steps snapshot-to-snapshot, so a spike that happened before
+  the fill is never credited to the twin. X is the 95th percentile of
+  |one-minute premium moves| (snapshot-to-snapshot) over all gradeable paths
+  on 10-Oct-2026 (p95 = 5.412% over 836 unique steps; p50 1.6%, p90 4.2%,
+  p99 9.4%), rounded to a whole percent — printed by `exit_twins.py
+  --calibrate`, which refuses to compute a twin outcome. All three modes.
+  AUDIT TRAIL (10-Oct): the first pass anchored each path at the last
+  snapshot BEFORE entry and read p95 = 5.924% -> 6%; its first run showed a
+  twin "blasting" seconds after entry at a price BELOW its own fill — the
+  jump had happened before the entry (cards fire after spikes). The path
+  definition was corrected the same day (coverage from entry, first step
+  from the fill), the rule re-applied mechanically gave 5%, and the clock
+  restarted at zero — no verdict had been reached and nothing was adopted.
+- Policy B "time-stop" — 90 minutes, frozen 10-Oct-2026 (the lower edge of
+  the trader's 1.5-2h); intraday and positional only (scalps hold ~4 min,
+  the rule is vacuous there). The premium's high-water mark is seeded at
+  the entry fill; a new high is a snapshot strictly above the mark. Exit at
+  the first snapshot >= 90 IN-SESSION minutes after the last new high, else
+  the book's exit. A trade that never exceeds its entry therefore exits at
+  entry + 90 session-minutes.
+- Gradeable path: the contract present in the recorded chain and no
+  in-session gap > 3 minutes anywhere from entry to the book's exit (entry
+  -> first snapshot, consecutive snapshots, last snapshot -> exit; session
+  = 09:15-15:30 IST on days the recorder saw candles or snapshots). Not
+  gradeable, reason counted: contract not in the recorded chain (the
+  recorder stores the FRONT-WEEK chain, so monthly-expiry positional
+  contracts have no path — 31 of 135 fills on 10-Oct; the condor module's
+  chain store has the monthlies but only at 5-minute cadence, a possible
+  pre-registered variant, not this study), quarantined fills (off-session
+  exit / journal override), gaps.
+- Charges: BOTH arms netted identically — (fill - entry) x qty minus the
+  paper book's Zerodha round-trip schedule (backend/app/paper/charges.py,
+  imported read-only; the function the upstream R&D policy twins use in
+  rnd/policies.py::_net). Twin fill = snapshot LTP x (1 - 0.4%), 2dp, min
+  Rs0.05 — the book's own simulated exit-fill rule. Paired delta = twin
+  net - real net per trade; R = delta / ((entry - initial stop) x qty) via
+  dataset.initial_stop(). NOTE (found 10-Oct): the book's stored
+  realized_pnl — dataset.py's net_pnl label — equals (exit - entry) x qty
+  on every clean fill: slippage-adjusted but GROSS of charges. The twins
+  re-net both arms, so their delta is charge-consistent.
+- Divergence = the twin exited on its own trigger before the book's exit.
+  The JSON also carries the upstream economic count (|delta| > Rs1).
 
 ## Promotion-to-LIVE bar (added 21-Aug after an external Codex review)
 
