@@ -30,6 +30,18 @@ that happened before the fill is never credited to the twin (the first run on
 10-Oct showed a twin "blasting" seconds after entry at a price below its own
 fill when the pre-entry anchor was used as the first baseline).
 
+Second path source (pre-registered 11-Oct-2026, PROGRAM.md "Second path
+source"): when the 60-second chain holds NO row for the contract's token in
+the holding window — the monthly-expiry positionals — the path is rebuilt
+from the condor module's 5-minute chain store (backend/.condor_chain.db,
+table chain_snap, opened READ-ONLY), matched by token, with the same
+in-session gap logic at a 10-minute threshold. Only Policy B runs on a
+5-minute path: the one-minute blast rule cannot be evaluated at 5-minute
+cadence, so those fills are reported under Policy A as not gradeable
+("5-minute cadence (time-stop only)") and the --calibrate distribution uses
+60-second paths only. Every pair records "path_source": "chain_60s" |
+"condor_5m"; the per-mode summaries carry the split by source.
+
 Charges: BOTH arms are netted identically with the paper book's own Zerodha
 schedule (backend/app/paper/charges.py, 2 legs — the function the upstream
 R&D policy twins use in rnd/policies.py::_net) on the slippage-adjusted fill.
@@ -80,7 +92,16 @@ BLAST_PCT: float | None = 5.0    # frozen 10-Oct-2026 by --calibrate: p95 of |1-
                                  # -> 6%; those entry-straddling steps were the flaw fixed the same day, see PROGRAM.md)
 TIME_STOP_MIN = 90               # the lower edge of the trader's "1.5-2h"
 TIME_STOP_MODES = ("intraday", "positional")
-GAP_S = 180                      # max in-session gap between path samples
+GAP_S = 180                      # max in-session gap between path samples (60-second source)
+# Second path source, pre-registered 11-Oct-2026 (PROGRAM.md "Second path source"):
+# the condor module's 5-minute chain store, opened read-only, time-stop only.
+CONDOR_DB = BACKEND / ".condor_chain.db"
+GAP_S_5M = 600                   # the 10-minute gap rule for the 5-minute source
+FALLBACK_ADDED = "2026-10-11"
+CONDOR_STORE_STARTS = "2026-08-20"
+SRC_60S, SRC_5M = "chain_60s", "condor_5m"
+FALLBACK_POLICIES = ("time_stop",)   # the only policy evaluated on a 5-minute path
+BLAST_5M_REASON = "5-minute cadence (time-stop only)"
 SLIPPAGE_PCT = 0.004             # the book's PAPER_SLIPPAGE_PCT default; fills verified against it
 MIN_DIVERGED = 30                # house rule, per policy per mode
 SESSION_OPEN_MIN, SESSION_CLOSE_MIN = 9 * 60 + 15, 15 * 60 + 30   # NSE F&O, IST
@@ -205,12 +226,28 @@ def contract_ltp(chain: dict | None, token, strike, direction: str, expiry) -> f
     return float(v) if isinstance(v, (int, float)) and v > 0 else None
 
 
+def first_gap(ent: int, ex: int, samples: list[tuple[int, float]], days: set[date],
+              gap_s: int) -> tuple[int, int, int] | None:
+    """The in-session gap rule shared by both path sources: entry -> first
+    sample, consecutive samples, last sample -> the book's exit. Returns
+    (gap_seconds, t0, t1) for the first gap above gap_s, else None."""
+    checkpoints = [(ent, None)] + samples + [(ex, None)]
+    for (t0, _), (t1, _) in zip(checkpoints, checkpoints[1:]):
+        gap = in_session_seconds(t0, t1, days)
+        if gap > gap_s:
+            return gap, t0, t1
+    return None
+
+
 def build_path(db: sqlite3.Connection, trade: dict, days: set[date]) -> dict:
-    """Returns {"ok": True, "samples": [(ts, ltp), ...]} — the contract's
-    premium at every chain snapshot strictly after entry and up to the book's
-    exit — or {"ok": False, "reason": ..., "detail": ...}. The query window
-    starts GAP_S before entry only so the contract's presence in the chain can
-    be established for very short holds."""
+    """Returns {"ok": True, "samples": [(ts, ltp), ...], "source": "chain_60s"}
+    — the contract's premium at every chain snapshot strictly after entry and
+    up to the book's exit — or {"ok": False, "reason": ..., "detail": ...}.
+    "token_absent": True marks the two outcomes in which the 60-second chain
+    holds no row for the contract's token in the window — the only trigger
+    for the 5-minute fallback (build_path_condor). The query window starts
+    GAP_S before entry only so the contract's presence in the chain can be
+    established for very short holds."""
     ent, ex = int(trade["entered_at"]), int(trade["exited_at"])
     rows = db.execute(
         "SELECT ts_utc, payload FROM snapshots WHERE endpoint='chain' AND symbol=? "
@@ -218,7 +255,7 @@ def build_path(db: sqlite3.Connection, trade: dict, days: set[date]) -> dict:
         (trade.get("symbol"), _iso_utc(ent - GAP_S), _iso_utc(ex)),
     ).fetchall()
     if not rows:
-        return {"ok": False, "reason": "no chain snapshots in holding window"}
+        return {"ok": False, "reason": "no chain snapshots in holding window", "token_absent": True}
     raw: list[tuple[int, float | None]] = []
     for ts_utc, blob in rows:
         try:
@@ -232,22 +269,80 @@ def build_path(db: sqlite3.Connection, trade: dict, days: set[date]) -> dict:
     if not present:
         return {"ok": False,
                 "reason": "contract not in recorded chain (front-week chain only)",
-                "detail": f"trade expiry {trade.get('expiry')}"}
+                "detail": f"trade expiry {trade.get('expiry')}", "token_absent": True}
     samples = [(ts, p) for ts, p in present if ts > ent]
     # Gap rule — in-session seconds from entry to the first sample, between
     # consecutive samples, and from the last sample to the book's exit.
     # Snapshots that exist but lack the contract row mean the strike drifted
     # out of the recorded window.
-    checkpoints = [(ent, None)] + samples + [(ex, None)]
-    for (t0, _), (t1, _) in zip(checkpoints, checkpoints[1:]):
-        gap = in_session_seconds(t0, t1, days)
-        if gap > GAP_S:
-            missing_rows = any(t0 < ts < t1 and p is None for ts, p in raw)
-            reason = ("contract left the recorded strike window" if missing_rows
-                      else "gap > 3 min inside holding window")
-            return {"ok": False, "reason": reason,
-                    "detail": f"{gap // 60} min gap from {datetime.fromtimestamp(t0, IST):%d-%b %H:%M}"}
-    return {"ok": True, "samples": samples}
+    hit = first_gap(ent, ex, samples, days, GAP_S)
+    if hit:
+        gap, t0, t1 = hit
+        missing_rows = any(t0 < ts < t1 and p is None for ts, p in raw)
+        reason = ("contract left the recorded strike window" if missing_rows
+                  else "gap > 3 min inside holding window")
+        return {"ok": False, "reason": reason,
+                "detail": f"{gap // 60} min gap from {datetime.fromtimestamp(t0, IST):%d-%b %H:%M}"}
+    return {"ok": True, "samples": samples, "source": SRC_60S}
+
+
+# ---------------------------------------------------------------------------
+# Second path source: the condor module's 5-minute chain store (read-only)
+# ---------------------------------------------------------------------------
+
+def open_condor_store() -> sqlite3.Connection | None:
+    """backend/.condor_chain.db opened with mode=ro — never written from here."""
+    if not CONDOR_DB.exists():
+        return None
+    try:
+        cdb = sqlite3.connect(f"file:{CONDOR_DB}?mode=ro", uri=True)
+        if not ds._table_exists(cdb, "chain_snap"):
+            cdb.close()
+            return None
+        return cdb
+    except sqlite3.Error as exc:
+        log(f"WARN exit_twins: condor store unreadable ({exc!r}) — 5-minute fallback off")
+        return None
+
+
+def build_path_condor(cdb: sqlite3.Connection, trade: dict, days: set[date]) -> dict:
+    """Second source (pre-registered 11-Oct-2026): the contract's LTP at every
+    5-minute condor snapshot strictly after entry and up to the book's exit,
+    matched by INSTRUMENT TOKEN. Same gap logic as build_path at the
+    10-minute threshold (GAP_S_5M). Sample time = the snapshot wall time
+    `ts` (the 60-second path's convention); LTP <= 0 is missing; bid/ask are
+    ignored — the twin fill stays LTP-based. Tried only when build_path
+    reported token_absent; the reasons below keep that provenance."""
+    ent, ex = int(trade["entered_at"]), int(trade["exited_at"])
+    try:
+        token = int(trade.get("token"))
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "not in 60s chain; fill carries no instrument token"}
+    lo, hi = ent - GAP_S_5M, ex
+    rows = cdb.execute(
+        "SELECT ts, ltp FROM chain_snap WHERE token=? AND ts>=? AND ts<=? ORDER BY ts",
+        (token, lo, hi)).fetchall()
+    if not rows:
+        n_snaps = cdb.execute("SELECT COUNT(DISTINCT ts) FROM chain_snap WHERE ts>=? AND ts<=?",
+                              (lo, hi)).fetchone()[0]
+        if not n_snaps:
+            return {"ok": False,
+                    "reason": "not in 60s chain; 5-min store has no snapshots in holding window",
+                    "detail": f"condor store starts {CONDOR_STORE_STARTS}; trade expiry {trade.get('expiry')}"}
+        return {"ok": False, "reason": "not in 60s chain; contract not in 5-min store either",
+                "detail": f"trade expiry {trade.get('expiry')}"}
+    raw = [(int(ts), float(p) if isinstance(p, (int, float)) and p > 0 else None) for ts, p in rows]
+    present = [(ts, p) for ts, p in raw if p is not None]
+    if not present:
+        return {"ok": False, "reason": "not in 60s chain; no traded premium in 5-min store",
+                "detail": f"trade expiry {trade.get('expiry')}"}
+    samples = [(ts, p) for ts, p in present if ts > ent]
+    hit = first_gap(ent, ex, samples, days, GAP_S_5M)
+    if hit:
+        gap, t0, _ = hit
+        return {"ok": False, "reason": "not in 60s chain; gap > 10 min in 5-min path",
+                "detail": f"{gap // 60} min gap from {datetime.fromtimestamp(t0, IST):%d-%b %H:%M}"}
+    return {"ok": True, "samples": samples, "source": SRC_5M}
 
 
 def one_minute_steps(samples: list[tuple[int, float]]) -> list[tuple[int, int, float, float]]:
@@ -328,7 +423,12 @@ def summarize(pairs: list[dict]) -> dict:
         "mean_delta_rs_all_pairs": round(statistics.fmean(p["delta_rs"] for p in pairs), 1) if pairs else None,
         "real_total_net_rs": round(sum(p["real_net"] for p in pairs), 1),
         "twin_total_net_rs": round(sum(p["twin_net"] for p in pairs), 1),
+        "by_source": {},
     }
+    for p in pairs:
+        src = out["by_source"].setdefault(p.get("path_source", SRC_60S), {"pairs": 0, "diverged": 0})
+        src["pairs"] += 1
+        src["diverged"] += 1 if p["diverged"] else 0
     if len(div) < MIN_DIVERGED or out["mean_delta_rs"] is None:
         out["verdict"] = f"pending — {len(div)}/{MIN_DIVERGED} diverged pairs"
     else:
@@ -350,6 +450,9 @@ def main(argv: list[str] | None = None) -> int:
         log("exit_twins: recorder DB missing — nothing to replay")
         return 0
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    cdb = open_condor_store()
+    if cdb is None:
+        log(f"exit_twins: condor store {CONDOR_DB.name} unavailable — 5-minute fallback off")
     days = session_days(db)
     cards = ds.load_jsonl_final(BACKEND / ".signals_archive.jsonl")
     paper = ds.load_trades(BACKEND / ".paper_trades.json")
@@ -358,7 +461,8 @@ def main(argv: list[str] | None = None) -> int:
     clean = [t for t in paper if not str(t.get("notes") or "").startswith("hollow")]
     not_gradeable: dict[str, dict[str, int]] = {}      # reason -> mode -> n
     ng_details: list[dict] = []
-    paths: list[tuple[dict, list]] = []
+    paths: list[tuple[dict, list, str]] = []           # (fill, samples, path source)
+    fallback_tried = 0
 
     def mark(t: dict, reason: str, detail: str = "") -> None:
         not_gradeable.setdefault(reason, {}).setdefault(t.get("mode", "?"), 0)
@@ -379,15 +483,27 @@ def main(argv: list[str] | None = None) -> int:
             mark(t, "quarantined (off-session exit or journal override)")
             continue
         path = build_path(db, t, days)
+        # Second source (pre-registered 11-Oct-2026): ONLY when the 60-second
+        # chain has no row for the contract's token, and only for fills in the
+        # time-stop's modes — the one policy a 5-minute path can serve.
+        if not path["ok"] and path.get("token_absent") and str(t.get("mode")) in TIME_STOP_MODES:
+            if cdb is None:
+                mark(t, path["reason"] + "; 5-min store unavailable", path.get("detail", ""))
+                continue
+            fallback_tried += 1
+            path = build_path_condor(cdb, t, days)
         if not path["ok"]:
             mark(t, path["reason"], path.get("detail", ""))
             continue
-        paths.append((t, path["samples"]))
+        paths.append((t, path["samples"], path["source"]))
+    n_by_source = {src: sum(1 for _, _, s in paths if s == src) for src in (SRC_60S, SRC_5M)}
 
     # --- the pre-registration distribution: |one-minute moves| over all gradeable paths
     seen: set[tuple] = set()
     moves: list[float] = []
-    for t, samples in paths:
+    for t, samples, src in paths:
+        if src != SRC_60S:
+            continue                                   # one-minute steps exist only on the 60-second source
         for t0, t1, p0, p1 in one_minute_steps(samples):
             key = (t.get("token"), t0, t1)
             if key in seen:
@@ -399,7 +515,8 @@ def main(argv: list[str] | None = None) -> int:
     dist["unique_one_minute_steps"] = len(moves)
 
     n_ng = sum(sum(m.values()) for m in not_gradeable.values())
-    log(f"exit twins: clean fills {len(clean)} | gradeable paths {len(paths)} | "
+    log(f"exit twins: clean fills {len(clean)} | gradeable paths {len(paths)} "
+        f"(60s {n_by_source[SRC_60S]} · 5-min {n_by_source[SRC_5M]} of {fallback_tried} fallbacks tried) | "
         f"not gradeable {n_ng} "
         + "(" + ", ".join(f"{r}: {sum(m.values())}" for r, m in
                           sorted(not_gradeable.items(), key=lambda kv: -sum(kv[1].values()))) + ")")
@@ -419,7 +536,8 @@ def main(argv: list[str] | None = None) -> int:
     # --- the twins
     results: dict[str, dict] = {k: {"desc": v, "modes": {}, "diverged_pairs": []} for k, v in POLICIES.items()}
     buckets: dict[str, dict[str, list[dict]]] = {k: {m: [] for m in MODES} for k in POLICIES}
-    for t, samples in paths:
+    blast_5m_ng: dict[str, int] = {}                   # mode -> fills Policy A cannot grade (5-minute path)
+    for t, samples, src in paths:
         mode = str(t.get("mode"))
         if mode not in MODES:
             continue
@@ -430,8 +548,12 @@ def main(argv: list[str] | None = None) -> int:
         stop = ds.initial_stop(t, cards.get(str(t.get("signal_id"))))
         r_denom = (entry - stop) * qty if isinstance(stop, (int, float)) and entry > stop and qty > 0 else None
 
-        hits = {"blast": blast_exit(samples, entry, ent, ex, BLAST_PCT)}
-        if mode in TIME_STOP_MODES:
+        hits: dict[str, tuple[int, float] | None] = {}
+        if src == SRC_60S:
+            hits["blast"] = blast_exit(samples, entry, ent, ex, BLAST_PCT)
+        else:
+            blast_5m_ng[mode] = blast_5m_ng.get(mode, 0) + 1   # the one-minute rule has no 5-minute form
+        if mode in TIME_STOP_MODES and (src == SRC_60S or "time_stop" in FALLBACK_POLICIES):
             hits["time_stop"] = time_stop_exit(samples, entry, ent, ex, days, TIME_STOP_MIN)
         for pol, hit in hits.items():
             if hit is None:
@@ -451,6 +573,7 @@ def main(argv: list[str] | None = None) -> int:
                 "delta_R": round((twin_net - real_net) / r_denom, 4) if r_denom else None,
                 "hold_min_real": round((ex - ent) / 60, 1),
                 "hold_min_twin": round((twin_ts - ent) / 60, 1),
+                "path_source": src,
             }
             buckets[pol][mode].append(pair)
             if pair["diverged"]:
@@ -469,6 +592,9 @@ def main(argv: list[str] | None = None) -> int:
                 if pol != "time_stop" or m in TIME_STOP_MODES}
             for r, by_mode in not_gradeable.items()}
         results[pol]["not_gradeable"] = {r: v for r, v in results[pol]["not_gradeable"].items() if v}
+        if pol not in FALLBACK_POLICIES and blast_5m_ng:
+            results[pol]["not_gradeable"][BLAST_5M_REASON] = dict(blast_5m_ng)
+        results[pol]["path_sources"] = [SRC_60S] + ([SRC_5M] if pol in FALLBACK_POLICIES else [])
         results[pol]["diverged_pairs"].sort(key=lambda p: p["entered_at"])
         if pol == "time_stop":
             results[pol]["modes_out_of_scope"] = [m for m in MODES if m not in TIME_STOP_MODES]
@@ -484,6 +610,20 @@ def main(argv: list[str] | None = None) -> int:
             "time_stop_clock": "in-session minutes since the last new premium high (high-water mark seeded at the entry fill)",
             "time_stop_modes": list(TIME_STOP_MODES),
             "gap_rule_minutes": GAP_S // 60,
+            "path_sources": {
+                SRC_60S: {"store": "recorder/data/tradewell_history.db (endpoint 'chain', front-week chain)",
+                          "cadence_s": 60, "gap_rule_minutes": GAP_S // 60, "policies": list(POLICIES),
+                          "match": "instrument token"},
+                SRC_5M: {"store": "backend/.condor_chain.db (table chain_snap, opened read-only)",
+                         "cadence_s": 300, "gap_rule_minutes": GAP_S_5M // 60,
+                         "policies": list(FALLBACK_POLICIES), "match": "instrument token",
+                         "added_on": FALLBACK_ADDED, "store_starts": CONDOR_STORE_STARTS,
+                         "trigger": ("tried only when the 60-second chain holds no row for the contract's "
+                                     "token in the holding window; fills in the time-stop's modes only"),
+                         "blast": ("not evaluated — the one-minute rule cannot be evaluated at 5-minute "
+                                   f"cadence; counted under Policy A as not gradeable: '{BLAST_5M_REASON}'"),
+                         "sample_time": "snapshot wall time ts; LTP <= 0 missing; bid/ask ignored"},
+            },
             "slippage_pct": SLIPPAGE_PCT,
             "charges": ("both arms: (fill - entry) x qty - Zerodha round-trip charges on the slippage-adjusted fill; "
                         f"schedule source: {charges_source}"),
@@ -495,6 +635,9 @@ def main(argv: list[str] | None = None) -> int:
         "paths": {
             "clean_fills": len(clean),
             "gradeable": len(paths),
+            "gradeable_by_source": n_by_source,
+            "fallback_5m": {"tried": fallback_tried, "gradeable": n_by_source[SRC_5M],
+                            "policies": list(FALLBACK_POLICIES)},
             "not_gradeable_total": n_ng,
             "not_gradeable": not_gradeable,
             "not_gradeable_detail": ng_details,
@@ -515,8 +658,10 @@ def main(argv: list[str] | None = None) -> int:
             med = f"₹{s['median_delta_rs']:+,.0f}" if s["median_delta_rs"] is not None else "—"
             r = f"{s['mean_delta_R']:+.2f}R" if s["mean_delta_R"] is not None else "—"
             better = (f"{s['twin_better']}/{s['diverged']}" if s["diverged"] else "—")
+            five = s.get("by_source", {}).get(SRC_5M)
+            tail = f" [5-min paths: {five['pairs']} pairs / {five['diverged']} diverged]" if five else ""
             log(f"  {pol:9s} {mode:10s} pairs {s['pairs']:3d} diverged {s['diverged']:3d} "
-                f"twin better {better:>5s} mean Δ {mean:>8s} median Δ {med:>8s} ({r}) — {s['verdict']}")
+                f"twin better {better:>5s} mean Δ {mean:>8s} median Δ {med:>8s} ({r}) — {s['verdict']}{tail}")
     log(f"wrote {OUT.relative_to(ROOT)}")
     return 0
 

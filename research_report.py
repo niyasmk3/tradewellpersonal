@@ -129,7 +129,7 @@ GLOSSARY: list[tuple[str, str]] = [
     ("Shadow ledger", "A what-if ledger that grades a rule's counterfactual (blocked trades, alternate stops) without touching real behavior. Evidence first, changes later."),
     ("Exit A/B", "Two exit policies graded side by side on every fill (trail vs bank-at-quick-target). The ledger decides at 30+ diverged fills, not opinion."),
     ("Stop calibrator (shadow twin)", "Each fill gets an invisible twin with only the stop repositioned (fitted from winners' MAE). Twin vs actual are paired; the live stop changes only after 30+ diverged pairs prove the twin wins."),
-    ("Exit twins (interview)", "Two exit rules from the pro-trader interview, each run as an invisible twin of every real paper fill: same entry, same contract, same size and charges — only the exit differs. The twin's exit is replayed from the recorder's 60-second premium snapshots and compared with the book's real exit on the same trade; verdict only at 30 diverged pairs per policy and mode."),
+    ("Exit twins (interview)", "Two exit rules from the pro-trader interview, each run as an invisible twin of every real paper fill: same entry, same contract, same size and charges — only the exit differs. The twin's exit is replayed from the recorder's 60-second premium snapshots (monthly-expiry positionals, which that chain never holds, from the condor module's 5-minute store since 11-Oct — time-stop only) and compared with the book's real exit on the same trade; verdict only at 30 diverged pairs per policy and mode."),
     ("Blast exit", "The trader's 'the spike IS the exit': sell the moment the premium jumps X% or more in one minute in your favour — stops get hit, latecomers pile in, the reversal follows. X (5%) was frozen from the tape's own move distribution before any result was looked at."),
     ("Time-stop", "A trade that has not made a new premium high for 90 session-minutes is consolidating, not working — and theta is the rent. Exit on time, not price. Intraday and positional only; a scalp lives four minutes."),
     ("Participant OI (NSE)", "Daily official file of FII / DII / Pro / Client long-short positions — 'what the smart money holds', now collected nightly."),
@@ -480,23 +480,48 @@ def build() -> str:
             [dict(pr, policy=labels[k]) for k, pol in et["policies"].items()
              for pr in pol.get("diverged_pairs") or []],
             key=lambda pr: pr.get("entered_at") or 0, reverse=True)[:10]
+        src_label = {"chain_60s": "60 s", "condor_5m": "5 min"}
         recent_rows = [[
             esc(pr["policy"]), fmt_ts(pr.get("entered_at")), esc(pr.get("contract", "")),
             esc(pr.get("mode", "")),
+            esc(src_label.get(pr.get("path_source"), pr.get("path_source") or "60 s")),
             f'{esc(pr.get("real_exit_reason") or "exit")} @ {pr.get("real_fill", 0):.2f} '
             f'after {pr.get("hold_min_real", 0):.0f} min',
             f'{pr.get("twin_fill", 0):.2f} after {pr.get("hold_min_twin", 0):.0f} min',
             money(pr.get("delta_rs", 0))] for pr in recent]
         recent_html = ("<h3>Most recent diverged pairs (both policies)</h3>"
-                       + table(["Policy", "Entered", "Contract", "Mode", "Book exit",
+                       + table(["Policy", "Entered", "Contract", "Mode", "Path", "Book exit",
                                 "Twin exit", "Δ net"], recent_rows)) if recent_rows else ""
+        # The 5-minute share of each time-stop column, so the positional row is
+        # read knowing it mixes the two cadences (PROGRAM.md "Second path source").
+        five_bits = []
+        for key, label in labels.items():
+            for mode, m in ((et["policies"].get(key) or {}).get("modes") or {}).items():
+                five = (m.get("by_source") or {}).get("condor_5m")
+                if five:
+                    five_bits.append(f"{esc(label)} {esc(mode)}: {five['pairs']} pairs / "
+                                     f"{five['diverged']} diverged on the 5-minute path")
+        by_src = paths.get("gradeable_by_source") or {}
+        src_txt = (f' — {by_src.get("chain_60s", 0)} from the 60-second chain, '
+                   f'{by_src.get("condor_5m", 0)} from the 5-minute condor store (time-stop only)'
+                   if by_src else "")
+        blast_ng = ((et["policies"].get("blast") or {}).get("not_gradeable") or {}).get(
+            "5-minute cadence (time-stop only)") or {}
+        blast_txt = (" Blast exit cannot be graded on the 5-minute paths: "
+                     + ", ".join(f"{esc(mo)} {n}" for mo, n in blast_ng.items()) + "."
+                     if blast_ng else "")
+        five_txt = (" " + "; ".join(five_bits) + ".") if five_bits else ""
         dist = paths.get("abs_one_minute_move_pct") or {}
         exit_twins_html = (
             "<p><b>Two of the pro-trader's exit rules, each run as an invisible twin of "
             "every clean paper fill</b> — same entry, same contract, same size, same "
             "charges; only the exit differs. The twin's exit is replayed from the "
             "recorder's 60-second premium snapshots and judged against the book's real "
-            "exit on the SAME trade, so every pair is apples to apples.</p>"
+            "exit on the SAME trade, so every pair is apples to apples. Since 11-Oct a "
+            "monthly-expiry positional — a contract the recorder's front-week chain never "
+            "holds — is replayed from the condor module's 5-minute chain store instead, for "
+            "the time-stop only: the one-minute blast rule cannot be measured at 5-minute "
+            "cadence, so those fills count as not gradeable for it.</p>"
             "<ul style='margin-left:18px'>"
             f"<li><b>A · Blast exit</b> — \"the spike IS the exit\": sell the moment the "
             f"premium jumps <b>{esc(x_pct)}%</b> or more in one minute in your favour "
@@ -517,8 +542,10 @@ def build() -> str:
               "\"pending\" until 30 diverged pairs exist for that policy and mode — the same "
               "bar as the upstream R&D policy twins.</p>"
             + f'<p class="note">Gradeable paths {paths.get("gradeable", 0)} of '
-              f'{paths.get("clean_fills", 0)} clean fills. Not gradeable — {ng_txt}. '
-              "Frozen specs: recorder/experiment/PROGRAM.md (\"FROZEN SPECS — exit twins\").</p>"
+              f'{paths.get("clean_fills", 0)} clean fills{src_txt}. Not gradeable — {ng_txt}.'
+              f"{blast_txt}{five_txt} "
+              "Frozen specs: recorder/experiment/PROGRAM.md (\"FROZEN SPECS — exit twins\" and "
+              "its \"Second path source\" sub-block).</p>"
             + recent_html)
 
     n_train = last.get("train_rows", 0)
@@ -548,7 +575,7 @@ def build() -> str:
         ["Nightly learning ledger (ours)", "Runs every close — feature separation + score calibration, logged forever"],
         ["Karpathy harness (ours)", "Armed, auto-ignites at 40 rows / 2 months — see countdown"],
         ["Devil's advocate (ours, 11-Aug)", "One Claude call argues AGAINST each new card; its counter-score is stamped into the birth snapshot as a dataset feature — decides nothing, on probation like everything else"],
-        ["Exit twins (ours, 10-Oct)", "Blast exit (5% one-minute jump) and 90-min time-stop replayed on every clean fill from the 60-second chain snapshots, paired with the book's real exit — specs frozen in PROGRAM.md, verdict at 30 diverged pairs per mode"],
+        ["Exit twins (ours, 10-Oct)", "Blast exit (5% one-minute jump) and 90-min time-stop replayed on every clean fill from the 60-second chain snapshots, paired with the book's real exit — specs frozen in PROGRAM.md, verdict at 30 diverged pairs per mode. Since 11-Oct monthly-expiry positionals are replayed from the condor module's 5-minute store for the time-stop only"],
     ])
 
     nse = cap = '<p class="empty">db missing</p>'

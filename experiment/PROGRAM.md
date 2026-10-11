@@ -216,6 +216,10 @@ the trader's event rule stays unmeasured until one does.
       fills. Queue until levels are in the dataset.
       -> RUNNING AS TWINS since 10-Oct-2026 in its premium-path form (90 min
       without a new premium high, intraday + positional; spec block below).
+      -> 11-Oct-2026: monthly-expiry positional contracts (invisible to the
+      recorder's front-week chain) now graded from the condor module's
+      5-minute chain store — time-stop ONLY, pre-registered in the spec
+      block "Second path source" before its first run.
       The S/R-conditioned variant stays queued until Patterns levels are
       joined to fills.
 - [ ] scale-out at HTF resistance / add-back on sustained breakout: a
@@ -274,9 +278,9 @@ nothing is applied. Changing any parameter below resets the verdict clock.
   gradeable, reason counted: contract not in the recorded chain (the
   recorder stores the FRONT-WEEK chain, so monthly-expiry positional
   contracts have no path — 31 of 135 fills on 10-Oct; the condor module's
-  chain store has the monthlies but only at 5-minute cadence, a possible
-  pre-registered variant, not this study), quarantined fills (off-session
-  exit / journal override), gaps.
+  chain store has the monthlies at 5-minute cadence — pre-registered on
+  11-Oct as the SECOND PATH SOURCE for Policy B only, sub-block below),
+  quarantined fills (off-session exit / journal override), gaps.
 - Charges: BOTH arms netted identically — (fill - entry) x qty minus the
   paper book's Zerodha round-trip schedule (backend/app/paper/charges.py,
   imported read-only; the function the upstream R&D policy twins use in
@@ -289,6 +293,62 @@ nothing is applied. Changing any parameter below resets the verdict clock.
   re-net both arms, so their delta is charge-consistent.
 - Divergence = the twin exited on its own trigger before the book's exit.
   The JSON also carries the upstream economic count (|delta| > Rs1).
+
+#### Second path source — the condor module's 5-minute chain store (pre-registered 11-Oct-2026, written before its first run)
+
+Why: 31 of the 135 clean fills on 10-Oct were positional contracts on a
+MONTHLY expiry, invisible to the recorder's front-week 60-second chain —
+exactly the fills the time-stop is meant for (its positional column had
+zero diverged pairs). The condor module keeps its own chain snapshots in
+backend/.condor_chain.db (table chain_snap: ts, token, tick_ts, symbol,
+expiry, strike, right, ltp, bid, ask) and that store carries the monthly
+expiries at a 5-MINUTE cadence from 20-Aug-2026 (measured 11-Oct before
+any outcome: 2,240 of 2,303 same-day snapshot steps are 300 s; the rest
+are a few 60 s steps and restart gaps). It is opened with sqlite
+`mode=ro`; nothing under backend/ is ever written.
+
+Rules, frozen before the first outcome was computed:
+- Trigger: the fallback is tried ONLY when the 60-second chain holds no
+  row for the contract's instrument token anywhere in the holding window
+  (entry - 10 min -> the book's exit) — whether because the recorder stores
+  a different expiry or because it recorded nothing in the window. A
+  contract that IS in the 60-second chain but fails the 3-minute gap rule
+  stays "not gradeable": the source is decided by the contract's presence,
+  never by the outcome. Tried only for fills in the time-stop's modes
+  (intraday, positional); a scalp without a 60-second path stays not
+  gradeable, since no policy could use its 5-minute path.
+- Matching by instrument token, like the primary source. Sample time =
+  the snapshot wall time `ts` (the same convention as the 60-second path);
+  LTP as stored, rows with LTP <= 0 are missing; bid/ask are ignored — the
+  twin fill stays LTP x (1 - 0.4%), the book's own rule.
+- Gap rule: the SAME in-session gap logic (entry -> first sample,
+  consecutive samples, last sample -> exit; session 09:15-15:30 IST on the
+  recorder's trading-day calendar, which contains every day the condor
+  store saw) with a 10-MINUTE threshold instead of 3. Fills entered before
+  20-Aug-2026 have no 5-minute snapshots and stay not gradeable; so does a
+  hold that straddles a condor outage.
+- Policy B (time-stop) is the ONLY policy that uses a 5-minute path. Its
+  rule is unchanged (90 in-session minutes after the last new premium
+  high, mark seeded at the entry fill); at 5-minute resolution a new high
+  is only seen at a 5-minute sample and the trigger lands at the first
+  sample past the deadline, so the twin's exit can come up to ~5 minutes
+  later than it would on a 60-second path. Read the positional column
+  knowing it mixes the two cadences; the split is printed beside it.
+- Policy A (blast) is NOT evaluated on a 5-minute path: the one-minute
+  jump rule cannot be evaluated at 5-minute cadence — a 5-minute move is a
+  different quantity whose distribution was never calibrated. Those fills
+  are counted under Policy A as not gradeable with the reason "5-minute
+  cadence (time-stop only)". The --calibrate distribution (|one-minute
+  move|, the frozen X = 5%) is computed over 60-second paths only.
+- Reporting: every pair carries "path_source": "chain_60s" | "condor_5m";
+  the per-mode summaries show the split by source. The verdict bar is
+  unchanged — literally "pending — N/30 diverged pairs" per policy AND
+  mode, pooled across the two sources.
+- Clocks: Policy A and every 60-second path keep their 10-Oct spec and
+  clock untouched. Policy B's clock is not reset either — no parameter of
+  the rule changed and no existing pair is re-graded; the second source
+  only adds pairs that had no path before (0 positional diverged pairs
+  existed on 10-Oct).
 
 ## Promotion-to-LIVE bar (added 21-Aug after an external Codex review)
 
