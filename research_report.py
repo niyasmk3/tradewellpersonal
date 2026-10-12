@@ -16,6 +16,7 @@ import html
 import json
 import shutil
 import sqlite3
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,6 +28,15 @@ OUT_PUB = PUB / "research.html"
 OUT_COPY = DATA / "reports" / "research.html"
 PUB_REPORTS = PUB / "reports"
 IST = timezone(timedelta(hours=5, minutes=30))
+
+# The quarantine gates have ONE definition — dataset.py's. The page imports it
+# for the restart catch-up flag (exit_after_feed_gap, DATA INTEGRITY 13-Oct)
+# and still renders if the import ever fails (overrides + off-session only).
+sys.path.insert(0, str(REC))
+try:
+    import dataset as _ds
+except Exception:
+    _ds = None
 
 IGNITION_ROWS, IGNITION_MONTHS = 40, 2
 
@@ -174,8 +184,12 @@ def build() -> str:
     # Data-quality quarantine (21-Aug, external review confirmed): overridden
     # rows plus any exit stamped outside Mon-Fri 09:15-15:45 IST — the paper
     # monitor can 'exit' pre-open on frozen quotes; those P&Ls are fiction.
-    quarantined_ids = {e.get("id") for e in
-                       load_json(DATA / "journal_overrides.json", {}).get("exclude", [])}
+    # Since 13-Oct also the restart catch-up exits: the book closes a position
+    # on the FIRST quote after a feed gap (dataset.exit_after_feed_gap).
+    overrides = load_json(DATA / "journal_overrides.json", {}).get("exclude", [])
+    quarantined_ids = {e.get("id") for e in overrides}
+    restart_ids = {e.get("id") for e in overrides if str(e.get("reason") or "")
+                   .lower().startswith("exit stamped at backend restart")}
 
     def off_session(t: dict) -> bool:
         ts = t.get("exited_at")
@@ -184,11 +198,17 @@ def build() -> str:
         dt = datetime.fromtimestamp(ts, IST)
         return dt.weekday() >= 5 or not (555 <= dt.hour * 60 + dt.minute <= 945)
 
-    n_quarantined = sum(1 for t in real if t.get("exited_at")
-                        and (t.get("id") in quarantined_ids or off_session(t)))
+    def restart_exit(t: dict) -> bool:
+        return t.get("id") in restart_ids or bool(_ds and _ds.exit_after_feed_gap(t))
+
+    def quarantined(t: dict) -> bool:
+        return t.get("id") in quarantined_ids or off_session(t) or restart_exit(t)
+
+    n_quarantined = sum(1 for t in real if t.get("exited_at") and quarantined(t))
+    n_restart = sum(1 for t in real if t.get("exited_at") and restart_exit(t))
     closed = [t for t in real if t.get("exited_at")
               and isinstance(t.get("realized_pnl"), (int, float))
-              and t.get("id") not in quarantined_ids and not off_session(t)]
+              and not quarantined(t)]
     wins = [t for t in closed if t["realized_pnl"] > 0]
     gross = sum(t["realized_pnl"] for t in closed)
     sh_closed = [t for t in shadow if t.get("exited_at")
@@ -221,8 +241,14 @@ def build() -> str:
         touch_html += (
             f'<p class="note">Data-quality quarantine: {n_quarantined} fill(s) '
             f'excluded from every number on this page — off-session exits '
-            f'priced on frozen quotes and human-ruled-out rows '
-            f'(recorder/data/journal_overrides.json has each reason).</p>')
+            f'priced on frozen quotes, exits stamped at a backend restart and '
+            f'human-ruled-out rows (recorder/data/journal_overrides.json has each '
+            f'reason). Of these, <b>{n_restart} restart catch-up exit(s)</b>: the '
+            f'paper book closed them on the first quote after a feed gap longer '
+            f'than 10 minutes, at whatever that quote was — mechanical flag '
+            f'exit_after_feed_gap, pre-registered 13-Oct-2026 (PROGRAM.md, DATA '
+            f'INTEGRITY), re-checked nightly so a new case is caught without a '
+            f'human.</p>')
     score_rows = []
     if closed:
         score_rows.append(["REAL book", str(len(closed)),

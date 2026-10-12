@@ -479,8 +479,9 @@ def main(argv: list[str] | None = None) -> int:
                    ("entered_at", "exited_at", "entry_premium", "exit_premium", "realized_pnl")):
             mark(t, "missing entry/exit stamp or premium")
             continue
-        if t.get("id") in ds._EXCLUDED_IDS or ds._off_session_exit(t):
-            mark(t, "quarantined (off-session exit or journal override)")
+        if (t.get("id") in ds._EXCLUDED_IDS or ds._off_session_exit(t)
+                or ds.exit_after_feed_gap(t)):      # restart catch-up exits, since 13-Oct
+            mark(t, "quarantined (off-session exit, restart catch-up exit or journal override)")
             continue
         path = build_path(db, t, days)
         # Second source (pre-registered 11-Oct-2026): ONLY when the 60-second

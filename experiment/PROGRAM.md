@@ -350,6 +350,143 @@ Rules, frozen before the first outcome was computed:
   only adds pairs that had no path before (0 positional diverged pairs
   existed on 10-Oct).
 
+## DATA INTEGRITY (13-Oct-2026) — three pre-registered corrections to the ground truth
+
+Written on the evening of 12-Oct-2026 BEFORE the rebuild; every count in
+[square brackets] was filled in from the rebuild that followed and nothing
+else in the text was changed. First nightly run with the corrections:
+13-Oct. The holdout stays locked — the before/after counts are a mechanical
+cell diff of the regenerated CSVs (both files, keyed by card_id); no model
+was fitted and no feature-to-label relationship was read. Nothing here
+changes a feature's definition except premium_mom_pct's contract match, and
+no experiment has completed on either CSV yet (every nightly baseline since
+01-Oct aborted at the 2-fold gate; results.tsv does not exist; ignition is
+early November), so no verdict is affected. All three defects were first
+seen while building the exit twins (10/11-Oct notes) and were verified again
+today against the raw stores before any code changed.
+
+1. LABELS WERE GROSS OF CHARGES. The book's stored realized_pnl equals
+   (exit - entry) x quantity on 483 of 484 closed paper rows (the exception
+   is a half-exit R&D twin) and on all 9 closed live-book rows: slippage-
+   adjusted but gross of Zerodha charges — while dataset.py's docstring
+   claimed "charges-net realized P&L -> label". Correction: label_fields()
+   nets the stored P&L with the book's own schedule, charges(entry, exit,
+   quantity, legs=2) from backend/app/paper/charges.py imported READ-ONLY by
+   file path (the exit twins' convention; a frozen mirror of the schedule is
+   the fallback if the file ever moves, cross-checked on a worked example at
+   import). label_win and net_R (via initial_stop) now derive from the
+   netted value; net_pnl in the CSV IS the netted value; a new `charges`
+   column makes the netting auditable per row (an outcome column, never a
+   feature). A fill without entry/exit/quantity has no charges-net label and
+   is skipped rather than labelled gross (none today). Expected effect:
+   small — charges average ~Rs 70 per round trip, so only fills that won by
+   less than their own charges flip from win to loss; net_R shrinks by the
+   charges over the initial risk on every row.
+   RESULT (rebuild, evening of 12-Oct): label_win flipped on 4 of the 129
+   rows present on both sides — three intraday fills and one scalp that had
+   won Rs 19.50-39.00 gross and lose Rs 12-42 net (NIFTY-intraday-
+   1785823741-PE, -1789457580-PE, -1790661784-CE, NIFTY-scalp-1788928321-PE);
+   win rate 27.9% -> 24.8% (32/129). Charges total Rs 8,838.45 over the 129
+   dataset rows (mean Rs 68.52, range 49.36-108.28) and Rs 9,766.67 over all
+   139 clean closed fills. net_pnl over the same 129 rows: -Rs 32,769.15
+   gross -> -Rs 41,607.60 net; the identity net = gross - charges holds on
+   every row to the paisa. net_R mean -0.144 -> -0.226; per-row change mean
+   -0.082 R (median -0.079, range -0.297 to -0.013). The old 135-row file's
+   sum of -Rs 17,430.70 had been flattered by the five restart exits
+   (+Rs 15,592.85 between them, item 3).
+
+2. PREMIUM MOMENTUM READ THE WRONG CONTRACT ON MONTHLY POSITIONALS.
+   premium_momentum() matched chain rows by STRIKE only. The recorder stores
+   the FRONT-WEEK chain, so for a positional card on a monthly expiry it read
+   the weekly contract at that strike: 31 of the 135 graded cards were born
+   with a card expiry different from the front-week chain's (all
+   positional; 8 positionals sat on the front week). Correction: rows are
+   matched by the card's instrument token against the row's ce_token /
+   pe_token (every card and every chain snapshot since 03-Aug carries
+   tokens). The fallback is strike + IDENTICAL chain expiry, used only when
+   the card has no token or a snapshot's rows carry none; strike-only
+   matching is gone. A monthly contract absent from the front-week chain now
+   has NO premium_mom_pct (the harness imputes the median) instead of a
+   wrong one — a one-to-two-minute momentum cannot be read from the condor
+   store's 5-minute cadence, and mixing cadences inside one column is the
+   mistake the twins' 11-Oct spec refused. Expected effect: weekly rows
+   unchanged to the last digit; the monthly positional rows lose their
+   value; no row gains one.
+   RESULT: 23 of the 129 common rows changed — every one a monthly
+   positional and every one from a number to missing (value -> missing 23,
+   missing -> value 0, number -> number 0, so a median |change| between two
+   numbers does not exist); the other 3 monthly positional rows were already
+   missing; all 103 weekly rows are unchanged to the last digit. Coverage
+   125/129 -> 102/129 (102 matched by token, 0 by the strike+expiry
+   fallback). The 23 discarded wrong-contract values had median +0.31%
+   (median magnitude 2.52 points, range -8.76% to +25.97%) — a weekly
+   contract's one-minute move stamped on a monthly card.
+
+3. EXITS STAMPED AT A BACKEND RESTART. The paper monitor closes positions
+   on the first quote after an outage without marking them: during the
+   outage nothing runs, and on the first cycle back the stop / target /
+   invalidation that was crossed meanwhile fires and is priced at that
+   first tick — nothing like the level in the written rules. Five clean
+   positional exits sit at the exact minute the backend came back, verified
+   per contract in both stores: T-7bd24304c2 (NIFTY 24100 CE, 31-Aug
+   11:58:44 — the condor store's first snapshot of the day is 11:58:44, the
+   recorder's first chain snapshot 11:59:26); T-0a2fff2989 and T-50f8df1e98
+   (NIFTY 22650 PE / 22700 PE, both 01-Oct 13:49:22 — first snapshots
+   13:49:22 / 13:50:26, a 4.5-hour gap from the open); T-7062c51313 and
+   T-c5d9be1e26 (NIFTY 22500 PE / 22400 PE, both 09-Oct 10:39:10 — first
+   snapshots 10:39:10 / 10:39:23). The two 01-Oct "target1" exits are the
+   book's two largest wins (+Rs 13,795 and +Rs 12,856), i.e. the whole
+   outage move booked as if the target had filled. Correction, mechanical:
+   exit_after_feed_gap(trade) is True when the exit stamp lies within 2
+   minutes of the first same-day quote of the contract that ends a gap
+   longer than 10 minutes in that contract's own snapshots. Source order:
+   the recorder's 60-second chain first (the token's row with LTP > 0), the
+   condor 5-minute store (backend/.condor_chain.db, sqlite mode=ro, never
+   written) only when the 60-second chain holds no row for the token that
+   day. The gap runs from the previous same-day sample (clamped to the 09:15
+   open — pre-open frozen snapshots are not quotes) or from 09:15 when there
+   is none; a gap that ends inside the session's first quote window
+   09:15-09:20 is the legitimate overnight open and never counts. "Within 2
+   minutes" is symmetric because the recorder polls the backend once a
+   minute, so its first post-gap snapshot trails the backend's own first
+   quote (13-66 s in the five cases; the condor store, written by the
+   backend itself, lands on the exit second). Quarantine, the same way the
+   off-session exits are quarantined: the five ids go into
+   data/journal_overrides.json with reason "exit stamped at backend
+   restart", and the flag joins the off-session gate in outcome_by_signal(),
+   the research page's quarantine count (shown beside the existing note) and
+   the exit twins' quarantine line, so new cases are caught nightly without
+   a human. The nightly log names every flagged fill and warns when a
+   contract-level gap is NOT a symbol-wide gap (a strike that left the
+   recorded window — the rule's one known false-positive mode; 0 such cases
+   today, token-level and symbol-level agree on all 139 clean closed fills).
+   Fills whose contract has no same-day snapshot in either store cannot be
+   checked and stay as they are: 9 today, all positionals on the 25-Aug
+   monthly exited 05-18 Aug, before the condor store began on 20-Aug (one of
+   them is the already-quarantined 17-Aug off-session exit). Owner note:
+   notes/owner-note-2026-10-13-restart-catchup-exits.md.
+   RESULT: flagged 5 of 139 clean closed fills — exactly the five, all via
+   the condor store (the 60-second chain has no row for a monthly token),
+   gaps 163 / 274 / 274 / 84 / 84 min from the 09:15 open, exit on the first
+   quote to the second; the symbol-wide check agrees on all five; 9
+   unverifiable, as predicted. Research page: 10 quarantined fills, of which
+   5 restart catch-up exits. Dataset 135 rows (train 77 / holdout 58) -> 129
+   (76 / 53): the five plus the hollow-labelled row below. Exit twins
+   unchanged pair for pair (103 blast / 70 time-stop pairs, same diverged
+   counts); only their not-gradeable reasons moved (quarantined 5 -> 10,
+   "gap > 10 min in 5-min path" 6 -> 1).
+
+   Plumbing found on the way and fixed in the same step because the
+   quarantine is unsound without it: outcome_by_signal() took the FIRST
+   closed trade per signal_id and never excluded hollow rows, so an R&D
+   policy twin (notes "hollow: rnd-...", twins since 09-Oct share the real
+   fill's signal_id) becomes the card's label whenever the real fill is
+   still open or quarantined. Today that is 1 row — the FINNIFTY 24850 PE
+   positional of 12-Oct, whose real fill has not closed while its +5%-window
+   twin has. Hollow rows never label a card now; the card re-enters the
+   dataset when its real fill closes.
+   RESULT: 1 row removed (that FINNIFTY card).
+
 ## Promotion-to-LIVE bar (added 21-Aug after an external Codex review)
 
 The harness KEEP rule promotes ideas between RESEARCH branches only. For any

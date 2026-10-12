@@ -3,8 +3,12 @@
 
 Joins the three evidence layers into a flat table:
   1. the card itself (signal archive) — score components, regime read, refs;
-  2. the outcome (paper book / hollow store, matched on trade.signal_id) —
-     charges-net realized P&L → label;
+  2. the outcome (paper book, matched on trade.signal_id; live-book rows fill
+     gaps; hollow shadow rows and quarantined fills never label a card) — the
+     book's realized_pnl is GROSS of charges (it equals (exit - entry) x
+     quantity on every clean fill, verified 13-Oct-2026), so label_fields()
+     nets it with the book's own Zerodha schedule (backend/app/paper/
+     charges.py, imported read-only) before deriving label_win and net_R;
   3. the at-birth market state (recorder `card_birth` snapshot, fallback to
      nearest periodic snapshot ≤ created_at) — chain/PCR/OI, indicators, VIX.
 
@@ -22,6 +26,8 @@ Safe any time — with no graded fills yet it just reports what's missing.
 """
 from __future__ import annotations
 
+import bisect
+import importlib.util
 import json
 import re
 import sqlite3
@@ -110,12 +116,237 @@ def _off_session_exit(t: dict) -> bool:
     return dt.weekday() >= 5 or not (9 * 60 + 15 <= m <= 15 * 60 + 45)
 
 
+def _is_hollow(t: dict) -> bool:
+    """Shadow rows — vetoed-card shadows and the R&D policy twins (notes start
+    with "hollow:") — never label a card. Found 13-Oct: an R&D twin shares its
+    real fill's signal_id and closes on its own rule, so without this guard it
+    became the card's label whenever the real fill was still open or
+    quarantined (PROGRAM.md, DATA INTEGRITY 13-Oct)."""
+    return str(t.get("notes") or "").startswith("hollow")
+
+
+# ---------------------------------------------------------------------------
+# Charges: the paper book's own Zerodha schedule, imported READ-ONLY by file
+# path (no app package import, no side effects). The book's realized_pnl is
+# gross of charges; every label below is net (DATA INTEGRITY 13-Oct).
+# ---------------------------------------------------------------------------
+
+def _charges_mirror(entry: float, exit_premium: float, qty: int, legs: int = 2) -> float:
+    """Frozen mirror of backend/app/paper/charges.py (rates as of 13-Oct-2026)
+    — the fallback if the file ever moves; cross-checked at import."""
+    if qty <= 0 or entry <= 0:
+        return 0.0
+    buy, sell = entry * qty, (exit_premium * qty if legs == 2 else 0.0)
+    turnover = buy + sell
+    brokerage = 20.0 * legs
+    stt = sell * 0.0015
+    exch, ipft, sebi = turnover * 0.0003503, turnover * 0.000005, turnover * 0.000001
+    gst = (brokerage + exch + ipft + sebi) * 0.18
+    stamp = buy * 0.00003
+    return round(brokerage + stt + exch + ipft + sebi + gst + stamp, 2)
+
+
+def _load_charges():
+    p = BACKEND / "app" / "paper" / "charges.py"
+    try:
+        spec = importlib.util.spec_from_file_location("tw_paper_charges", p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        fn = mod.charges
+        if abs(fn(100.0, 110.0, 65) - _charges_mirror(100.0, 110.0, 65)) > 0.02:
+            log("WARN dataset: the backend's charge schedule differs from the "
+                "frozen mirror — using the backend's (update the mirror)")
+        return fn, "backend/app/paper/charges.py (read-only import)"
+    except Exception as exc:
+        log(f"WARN dataset: could not import backend charges ({exc!r}); "
+            "using the frozen mirror")
+        return _charges_mirror, "mirror of backend/app/paper/charges.py frozen 13-Oct-2026"
+
+
+_charges, CHARGES_SOURCE = _load_charges()
+
+
+def trade_charges(trade: dict) -> float | None:
+    """Round-trip charges of a closed fill under the book's own schedule, or
+    None when the fill lacks entry / exit / quantity (then it has no
+    charges-net label at all). `quantity` is the traded size — it equals
+    initial_quantity on every clean fill and is the size for which the
+    stored identity realized_pnl == (exit - entry) x quantity holds."""
+    entry, exit_p, qty = (trade.get("entry_premium"), trade.get("exit_premium"),
+                          trade.get("quantity"))
+    if not all(isinstance(v, (int, float)) for v in (entry, exit_p, qty)):
+        return None
+    if qty <= 0 or entry <= 0:
+        return None
+    return float(_charges(float(entry), float(exit_p), int(qty), 2))
+
+
+# ---------------------------------------------------------------------------
+# Restart catch-up exits (DATA INTEGRITY 13-Oct). The paper monitor closes a
+# position on the FIRST quote after an outage without marking it: the stop /
+# target / invalidation crossed during the gap fires on that first tick and
+# is priced there. Five positional exits sat on the exact minute the backend
+# came back (31-Aug 11:58, 01-Oct 13:49 x2, 09-Oct 10:39 x2). Mechanical
+# flag: the exit stamp lies within FEED_GAP_EXIT_WINDOW_S of the first
+# same-day quote of the contract that ends a gap > FEED_GAP_S in that
+# contract's own snapshots — recorder 60-second chain first, the condor
+# module's 5-minute store (read-only) when the 60-second chain has no row for
+# the token that day. A gap ending in the session's first quote window
+# (09:15-09:20) is the legitimate overnight open and never counts.
+# ---------------------------------------------------------------------------
+FEED_GAP_S = 600                  # > 10 min without a quote for the contract
+FEED_GAP_EXIT_WINDOW_S = 120      # exit within 2 min of the first post-gap quote
+FIRST_QUOTE_WINDOW_MIN = (9 * 60 + 15, 9 * 60 + 20)   # IST minutes, [open, open + 5)
+_CONDOR_DB = BACKEND / ".condor_chain.db"
+_rec_store: sqlite3.Connection | bool | None = None
+_condor_store: sqlite3.Connection | bool | None = None
+_day_samples_cache: dict[tuple[str, int], tuple[dict[int, list[int]], list[int]]] = {}
+_feed_gap_cache: dict[str, dict] = {}
+
+
+def _open_ro(path: Path, table: str) -> sqlite3.Connection | bool:
+    """sqlite mode=ro — nothing under backend/ is ever written from here."""
+    if not path.exists():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        if not _table_exists(con, table):
+            con.close()
+            return False
+        return con
+    except sqlite3.Error:
+        return False
+
+
+def _chain_day_samples(symbol: str, day_lo: int) -> tuple[dict[int, list[int]], list[int]]:
+    """One pass over the recorder's 60-second chain snapshots of (symbol, IST
+    day): token -> sorted snapshot times at which the contract had LTP > 0,
+    plus every snapshot time (the symbol-wide stream, for the diagnostic)."""
+    global _rec_store
+    key = (symbol, day_lo)
+    hit = _day_samples_cache.get(key)
+    if hit is not None:
+        return hit
+    by_token: dict[int, list[int]] = {}
+    every: list[int] = []
+    if _rec_store is None:
+        _rec_store = _open_ro(DB, "snapshots")
+    if _rec_store:
+        lo = datetime.fromtimestamp(day_lo, timezone.utc).isoformat(timespec="seconds")
+        hi = datetime.fromtimestamp(day_lo + 86400, timezone.utc).isoformat(timespec="seconds")
+        for ts_utc, blob in _rec_store.execute(
+            "SELECT ts_utc, payload FROM snapshots WHERE endpoint='chain' AND symbol=? "
+            "AND ts_utc>=? AND ts_utc<? ORDER BY ts_utc", (symbol, lo, hi)
+        ):
+            try:
+                ts = int(datetime.fromisoformat(ts_utc).timestamp())
+            except ValueError:
+                continue
+            chain = decompress(blob)
+            if not isinstance(chain, dict):
+                continue
+            every.append(ts)
+            for r in chain.get("rows") or []:
+                if not isinstance(r, dict):
+                    continue
+                for tok_key, ltp_key in (("ce_token", "ce_ltp"), ("pe_token", "pe_ltp")):
+                    tok, v = r.get(tok_key), r.get(ltp_key)
+                    if tok is not None and isinstance(v, (int, float)) and v > 0:
+                        by_token.setdefault(int(tok), []).append(ts)
+    _day_samples_cache[key] = (by_token, every)
+    return by_token, every
+
+
+def _condor_day_samples(symbol: str, token: int, day_lo: int) -> tuple[list[int], list[int]]:
+    """The contract's 5-minute samples (LTP > 0) and the symbol-wide snapshot
+    times in backend/.condor_chain.db for one IST day — read-only."""
+    global _condor_store
+    if _condor_store is None:
+        _condor_store = _open_ro(_CONDOR_DB, "chain_snap")
+    if not _condor_store:
+        return [], []
+    hi = day_lo + 86400
+    tok = [r[0] for r in _condor_store.execute(
+        "SELECT ts FROM chain_snap WHERE token=? AND ts>=? AND ts<? AND ltp>0 ORDER BY ts",
+        (token, day_lo, hi))]
+    every = [r[0] for r in _condor_store.execute(
+        "SELECT DISTINCT ts FROM chain_snap WHERE symbol=? AND ts>=? AND ts<? ORDER BY ts",
+        (symbol, day_lo, hi))]
+    return tok, every
+
+
+def _gap_rule(samples: list[int], exit_ts: int, open_ts: int) -> dict:
+    """The rule on one sorted same-day sample list. b = the first sample at or
+    after exit - 2 min; the exit must lie within 2 min of b; the gap is b
+    minus the previous same-day sample (clamped to the 09:15 open — pre-open
+    frozen snapshots are not quotes) or minus the open when b is the day's
+    first sample."""
+    if not samples:
+        return {"verifiable": False, "flagged": False}
+    i = bisect.bisect_left(samples, exit_ts - FEED_GAP_EXIT_WINDOW_S)
+    if i >= len(samples) or samples[i] > exit_ts + FEED_GAP_EXIT_WINDOW_S:
+        return {"verifiable": True, "flagged": False}
+    b = samples[i]
+    a = max(samples[i - 1], open_ts) if i > 0 else open_ts
+    bm = datetime.fromtimestamp(b, IST)
+    first_quote = FIRST_QUOTE_WINDOW_MIN[0] <= bm.hour * 60 + bm.minute < FIRST_QUOTE_WINDOW_MIN[1]
+    return {"verifiable": True, "flagged": (b - a) > FEED_GAP_S and not first_quote,
+            "gap_s": b - a, "gap_from": a, "first_quote_at": b,
+            "exit_minus_quote_s": exit_ts - b, "first_quote_window": first_quote}
+
+
+def feed_gap_check(trade: dict) -> dict:
+    """Full verdict for one closed fill (cached per trade id): flagged,
+    verifiable, source ("chain_60s" | "condor_5m"), the gap and — when
+    flagged — whether the SYMBOL-wide snapshot stream shows the same gap. A
+    contract-only gap means the strike left the recorded window rather than
+    a restart: the one known false-positive mode, logged as a warning."""
+    tid = str(trade.get("id"))
+    hit = _feed_gap_cache.get(tid)
+    if hit is not None:
+        return hit
+    res: dict = {"flagged": False, "verifiable": False, "source": None}
+    exit_ts, token, symbol = trade.get("exited_at"), trade.get("token"), trade.get("symbol")
+    try:
+        token = int(token)
+    except (TypeError, ValueError):
+        token = None
+    if isinstance(exit_ts, (int, float)) and token is not None and symbol:
+        exit_ts = int(exit_ts)
+        day_lo = _day_start(exit_ts)
+        open_ts = day_lo + 9 * 3600 + 15 * 60
+        by_token, wide = _chain_day_samples(str(symbol), day_lo)
+        samples, source = by_token.get(token, []), "chain_60s"
+        if not samples:
+            samples, wide = _condor_day_samples(str(symbol), token, day_lo)
+            source = "condor_5m"
+        if samples:
+            res.update(_gap_rule(samples, exit_ts, open_ts))
+            res["source"] = source
+            if res["flagged"]:
+                res["symbol_wide"] = bool(_gap_rule(wide, exit_ts, open_ts)["flagged"])
+    _feed_gap_cache[tid] = res
+    return res
+
+
+def exit_after_feed_gap(trade: dict) -> bool:
+    """True when the fill's exit was stamped at the first quote after a > 10
+    minute feed gap — a restart catch-up exit. Quarantined like off-session
+    exits: never a training label, never a book number."""
+    return bool(feed_gap_check(trade)["flagged"])
+
+
 def outcome_by_signal(trades: list[dict]) -> dict[str, dict]:
-    """signal_id → closed trade row (first terminal match wins)."""
+    """signal_id → closed trade row (first terminal match wins). Hollow shadow
+    rows, journal-overridden rows, off-session exits and restart catch-up
+    exits never qualify — the quarantine gates live here so every consumer
+    of the dataset inherits them."""
     out: dict[str, dict] = {}
     for t in trades:
         sid = t.get("signal_id")
         if not sid or str(sid) in out:
+            continue
+        if _is_hollow(t):
             continue
         # Human-ruled-out rows never become training labels — see
         # data/journal_overrides.json.
@@ -129,6 +360,8 @@ def outcome_by_signal(trades: list[dict]) -> dict[str, dict]:
             or t.get("exit_premium") is not None
         )
         if closed:
+            if exit_after_feed_gap(t):
+                continue
             out[str(sid)] = t
     return out
 
@@ -157,10 +390,21 @@ def initial_stop(trade: dict, card: dict | None) -> float | None:
 
 
 def label_fields(trade: dict, card: dict | None = None) -> dict:
-    pnl = trade.get("realized_pnl")
-    if not isinstance(pnl, (int, float)):
+    """Outcome columns, every one derived from the CHARGES-NET P&L. The book's
+    realized_pnl equals (exit - entry) x quantity on every clean fill
+    (verified 13-Oct-2026: 483/484 closed paper rows, all closed live rows) —
+    slippage-adjusted but gross of charges — so net_pnl = realized_pnl minus
+    the book's own Zerodha round-trip charges (trade_charges). A fill whose
+    charges cannot be computed gets no label rather than a gross one. The
+    `charges` column is an outcome column: never a feature."""
+    gross = trade.get("realized_pnl")
+    if not isinstance(gross, (int, float)):
         return {}
-    out = {"label_win": int(pnl > 0), "net_pnl": pnl}
+    fees = trade_charges(trade)
+    if fees is None:
+        return {}
+    pnl = round(float(gross) - fees, 2)
+    out = {"label_win": int(pnl > 0), "net_pnl": pnl, "charges": fees}
     # Second label: success under the bank-at-+5% exit policy (the counter-
     # factual currently leading the exit A/B). If that policy is adopted, the
     # model must be trained against the world it will actually operate in —
@@ -405,34 +649,65 @@ def vix_at_birth(created: int) -> float | None:
     return float(row[0]) if row else None
 
 
+def _contract_row(chain: dict | None, strike, direction: str, token,
+                  expiry) -> tuple[dict | None, str | None]:
+    """The card's contract row in a chain snapshot, matched by INSTRUMENT
+    TOKEN (the row's ce_token / pe_token). The recorder stores the front-week
+    chain, so a strike-only match read the WEEKLY contract for a monthly
+    positional — 31 of 135 graded cards (found 10-Oct, fixed 13-Oct). The
+    fallback is strike + identical chain expiry, used only when the card has
+    no token or the snapshot's rows carry none; strike alone never matches.
+    Returns (row, how) with how in {"token", "strike_expiry"}."""
+    if not isinstance(chain, dict):
+        return None, None
+    rows = [r for r in chain.get("rows") or [] if isinstance(r, dict)]
+    tok_key = "ce_token" if direction == "CE" else "pe_token"
+    if token is not None and any(r.get(tok_key) is not None for r in rows):
+        return next((r for r in rows if r.get(tok_key) == token), None), "token"
+    if expiry and chain.get("expiry") == expiry and isinstance(strike, (int, float)):
+        return next((r for r in rows if r.get("strike") == strike), None), "strike_expiry"
+    return None, None
+
+
+_MOM_STATS = {"token": 0, "strike_expiry": 0, "missing": 0}
+
+
 def premium_momentum(db: sqlite3.Connection, symbol: str, strike,
-                     direction, created: int, now_chain: dict | None) -> dict:
+                     direction, created: int, now_chain: dict | None,
+                     token=None, expiry=None) -> dict:
     """AI-trader's 'option premium confirmation' idea, as a FEATURE (never a
     gate here): the card contract's premium change over the ~1-2 minutes
     before birth, from the recorder's 60s chain snapshots. Negative =
     entering while the premium is already falling — the falling knife.
     Three of our first 32 fills never traded one tick positive; this is the
-    column aimed at exactly them.
+    column aimed at exactly them. The contract is matched by instrument
+    token (_contract_row); a monthly contract absent from the front-week
+    chain gets NO value — a 1-2 minute momentum cannot be read from the
+    condor store's 5-minute cadence, and one column never mixes cadences.
     """
-    if not isinstance(strike, (int, float)) or direction not in ("CE", "PE"):
+    if direction not in ("CE", "PE"):
         return {}
     key = "ce_ltp" if direction == "CE" else "pe_ltp"
+    try:
+        token = int(token) if token is not None else None
+    except (TypeError, ValueError):
+        token = None
 
-    def ltp(chain: dict | None):
-        for r in (chain or {}).get("rows") or []:
-            if r.get("strike") == strike:
-                v = r.get(key)
-                return float(v) if isinstance(v, (int, float)) and v > 0 else None
-        return None
+    def ltp(chain: dict | None) -> tuple[float | None, str | None]:
+        r, how = _contract_row(chain, strike, direction, token, expiry)
+        v = r.get(key) if r else None
+        return (float(v) if isinstance(v, (int, float)) and v > 0 else None), how
 
-    now_p = ltp(now_chain)
+    now_p, how = ltp(now_chain)
     # One polling cycle earlier: nearest snapshot at least ~105s before birth
     # (the now-chain is at most 90s old via birth capture / nearest_periodic,
     # so the two reads can never be the same snapshot).
-    prev_p = ltp(nearest_periodic(db, "chain", symbol, created - 105,
-                                  tolerance_s=120))
+    prev_p, _ = ltp(nearest_periodic(db, "chain", symbol, created - 105,
+                                     tolerance_s=120))
     if now_p is None or prev_p is None:
+        _MOM_STATS["missing"] += 1
         return {}
+    _MOM_STATS[how or "strike_expiry"] += 1
     return {"premium_mom_pct": round((now_p - prev_p) / prev_p * 100, 3)}
 
 
@@ -491,7 +766,25 @@ def main() -> int:
         outcomes.setdefault(sid, t)
 
     log(f"cards in archive: {len(cards)} | closed outcomes matched by signal_id: "
-        f"{len(set(cards) & set(outcomes))}")
+        f"{len(set(cards) & set(outcomes))} | labels net of charges via {CHARGES_SOURCE}")
+    # The restart catch-up gate, named fill by fill so the nightly report shows
+    # every quarantine and flags a NEW case before anyone writes it into
+    # journal_overrides.json by hand.
+    clean_closed = [t for t in paper if t.get("exited_at") and not _is_hollow(t)]
+    flagged = [t for t in clean_closed if exit_after_feed_gap(t)]
+    unverifiable = sum(1 for t in clean_closed if not feed_gap_check(t)["verifiable"])
+    log(f"exit_after_feed_gap: {len(flagged)} of {len(clean_closed)} clean closed fills "
+        f"quarantined (exit within 2 min of the first quote after a > 10 min feed gap); "
+        f"{unverifiable} unverifiable (no snapshot of the contract on the exit day)")
+    for t in flagged:
+        r = feed_gap_check(t)
+        when = datetime.fromtimestamp(int(t["exited_at"]), IST).strftime("%d-%b %H:%M:%S")
+        log(f"  {str(t.get('id'))[:12]} {t.get('contract')} {t.get('mode')} exit {when} "
+            f"{r['source']} gap {r['gap_s'] // 60} min"
+            + ("" if t.get("id") in _EXCLUDED_IDS else
+               " — NEW: not yet in journal_overrides.json")
+            + ("" if r.get("symbol_wide", True) else
+               " !! contract-level gap only (strike left the recorded window?)"))
 
     if not DB.exists():
         log("recorder DB missing — market-state features will be empty")
@@ -526,7 +819,8 @@ def main() -> int:
         if isinstance(adv.get("counter_strength"), (int, float)):
             f["advocate_counter"] = adv["counter_strength"]
         f.update(premium_momentum(db, sym, card.get("strike"),
-                                  f.get("direction"), created, chain))
+                                  f.get("direction"), created, chain,
+                                  card.get("token"), card.get("expiry")))
         # Tape: prefer the engine-recorded value; back-compute only the gap.
         # Where both exist we count agreement — the proof the back-fill is a
         # faithful port and pre-11-Aug rows can be trusted.
@@ -551,6 +845,10 @@ def main() -> int:
         f["had_birth_snapshot"] = int(birth is not None)
         f.update(labels)
         rows.append(f)
+
+    log(f"premium_mom_pct: {_MOM_STATS['token']} rows matched by token, "
+        f"{_MOM_STATS['strike_expiry']} by strike+expiry fallback, "
+        f"{_MOM_STATS['missing']} missing (contract not in the front-week chain)")
 
     if not rows:
         log("no graded rows yet — dataset not written "
