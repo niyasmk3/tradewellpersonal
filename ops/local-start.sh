@@ -25,6 +25,13 @@ F_PORT=3777
 
 [ -f "$SRC" ] || { echo "start.sh missing" >&2; exit 1; }
 
+# Local UI patch (recorder/ops/README.md, "Local UI patch (local-ui branch)"):
+# the frontend serves whatever branch is checked out, and the multi-underlying
+# signal panel exists on local-ui only — warn loudly if the checkout drifted.
+BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+[ "$BRANCH" = "local-ui" ] || \
+  echo "local-start: checkout is on '$BRANCH', not local-ui — the local UI patch is NOT live." >&2
+
 sed \
   -e "s/^BACKEND_PORT=8000$/BACKEND_PORT=$B_PORT/" \
   -e "s/^FRONTEND_PORT=3000$/FRONTEND_PORT=$F_PORT/" \

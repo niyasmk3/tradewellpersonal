@@ -23,6 +23,9 @@ filter the signal engine's cards to a higher-expectancy subset? You edit
 
 1. Work in the `recorder/` git repo (it is its own repo, separate from the
    upstream app). Create a branch: `git checkout -b research/<date-tag>`.
+   Ops note (14-Oct-2026): the app checkout sits on local branch `local-ui`
+   (21-line dashboard patch: BANKNIFTY/FINNIFTY cards, which the owner's
+   NIFTY-only panel hides); `main` stays pristine — routine in ops/README.md.
 2. Rebuild the dataset fresh: `../../backend/.venv/bin/python ../dataset.py`
    (paths from this directory; adjust from wherever you run).
 3. Baseline first, always: run the harness on the UNMODIFIED experiment.py

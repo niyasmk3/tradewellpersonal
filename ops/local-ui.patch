@@ -1,0 +1,92 @@
+From 7c822dc8f18935ab6c480a4fc3f1b5c945bd2563 Mon Sep 17 00:00:00 2001
+From: Niyas MK <contact@mkniyas.com>
+Date: Wed, 14 Oct 2026 20:42:02 +0400
+Subject: [PATCH] feat(dashboard): show the viewed symbol's signal card for
+ every configured underlying
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Local patch, maintained on the `local-ui` branch only — never pushed to
+origin. Rebased onto the owner's `main` after every pull; dropped once the
+owner ships the real fix (field note:
+recorder/notes/owner-note-2026-10-09-multi-underlying-ui.md).
+
+With SIGNAL_UNDERLYINGS=NIFTY,BANKNIFTY,FINNIFTY the backend serves
+GET /signals/{symbol} for all three, but the dashboard polled NIFTY only
+and rendered "Signals run on NIFTY only in Phase 2" for any other symbol.
+
+- Dashboard.tsx: one extra poll, api.signal(symbol, mode), for the viewed
+  symbol when it is not NIFTY; the panel and the command-strip
+  regime/score meters read from it. The three always-on NIFTY polls are
+  untouched, so alerts and the chime behave exactly as before.
+- SignalPanel.tsx: the Phase-2 gate becomes "the backend 404'd this
+  symbol" (not in SIGNAL_UNDERLYINGS), shown as a one-line note.
+- Right-rail Signals history already follows the viewed symbol
+  (api.signalHistory(symbol) -> /signals/{symbol}/archive) — no change.
+
+Verified on :3777 against the live backend: BANKNIFTY and FINNIFTY show
+regime, bull/bear meters and the no-trade card; NIFTY unchanged; tsc
+clean; no console errors.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ frontend/components/Dashboard.tsx   | 15 +++++++++++----
+ frontend/components/SignalPanel.tsx |  6 ++++--
+ 2 files changed, 15 insertions(+), 6 deletions(-)
+
+diff --git a/frontend/components/Dashboard.tsx b/frontend/components/Dashboard.tsx
+index fb31402..c544431 100644
+--- a/frontend/components/Dashboard.tsx
++++ b/frontend/components/Dashboard.tsx
+@@ -67,8 +67,15 @@ export function Dashboard() {
+   const scalpSig = usePolling(
+     () => api.signal("NIFTY", "scalp"), 3000, [sigTick], modesOn.includes("scalp"),
+   );
+-  const signalRes =
+-    mode === "positional" ? positionalSig : mode === "scalp" ? scalpSig : intradaySig;
++  // Local patch (local-ui branch): the panel shows the VIEWED symbol's card.
++  // The NIFTY polls above stay always-on for alerts/chime; this one runs only
++  // for the other configured underlyings (a 404 here = not in SIGNAL_UNDERLYINGS).
++  const viewedSig = usePolling(
++    () => api.signal(symbol, mode), 3000, [symbol, mode, sigTick],
++    symbol !== "NIFTY" && modesOn.includes(mode),
++  );
++  const signalRes = symbol !== "NIFTY" ? viewedSig
++    : mode === "positional" ? positionalSig : mode === "scalp" ? scalpSig : intradaySig;
+   const news = usePolling(() => api.news(), 15000, []);
+   const mood = usePolling(() => api.marketMood(), 60000, []);
+   // Simulated book — polled slowly; it only changes when a signal fires.
+@@ -223,8 +230,8 @@ export function Dashboard() {
+       />
+ 
+       <CommandStrip
+-        status={symbol === "NIFTY" ? (signalRes.data?.status ?? null) : null}
+-        showRegime={symbol === "NIFTY"}
++        status={signalRes.data?.status ?? null}
++        showRegime={symbol === "NIFTY" || signalRes.data != null}
+         mode={mode}
+         available={available}
+         onMode={setMode}
+diff --git a/frontend/components/SignalPanel.tsx b/frontend/components/SignalPanel.tsx
+index b93a3cd..7481060 100644
+--- a/frontend/components/SignalPanel.tsx
++++ b/frontend/components/SignalPanel.tsx
+@@ -299,10 +299,12 @@ export function SignalPanel({
+     }
+   };
+ 
+-  if (symbol !== "NIFTY") {
++  // Local patch (local-ui branch): the backend serves every symbol in
++  // SIGNAL_UNDERLYINGS and 404s the rest — so "not configured" is the 404.
++  if (!data && error?.startsWith("404 ")) {
+     return (
+       <div className={`card p-4 text-sm text-muted ${className}`}>
+-        Signals run on <span className="text-white">NIFTY</span> only in Phase 2. Switch to NIFTY to see setups.
++        Signals are not enabled for <span className="text-white">{symbol}</span> on this backend (SIGNAL_UNDERLYINGS).
+       </div>
+     );
+   }
+-- 
+2.53.0
+
