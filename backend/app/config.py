@@ -96,6 +96,13 @@ class Settings(BaseSettings):
     # until the overnight-hold ledger renders its verdict. 1.0 disables.
     evening_positional_size_factor: float = Field(
         default=0.5, ge=0.1, le=1.0, alias="EVENING_POSITIONAL_SIZE_FACTOR")
+    # CLOSING STRETCHED-BODY HALF SIZE (pre-registered 14-Oct, see
+    # docs/prereg-closing-stretch-half-size.md): a CLEAN closing card issued
+    # after a 300+ pt day body carries a halved size suggestion. The body
+    # threshold is tiers.STRETCH_PTS (frozen, shared with the crash-day
+    # label); only the factor is a knob. 1.0 disables.
+    closing_stretch_size_factor: float = Field(
+        default=0.5, ge=0.1, le=1.0, alias="CLOSING_STRETCH_SIZE_FACTOR")
     # Refuse a scalp card when estimated round-trip charges exceed this share
     # of the gross move to Target 1 (at the suggested size). 0 disables.
     scalp_max_friction_pct: float = Field(default=0.20, ge=0, le=1, alias="SCALP_MAX_FRICTION_PCT")

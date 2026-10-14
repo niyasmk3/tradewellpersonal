@@ -91,6 +91,35 @@ SILVER_STRETCH_NOTE = (
     "Never a gate.")
 STRETCH_NOTES = {"GOLD": STRETCH_NOTE, "SILVER": SILVER_STRETCH_NOTE}
 
+# --- STRETCHED-BODY HALF SIZE (pre-registered 2026-10-14) --------------------
+# The sizing counterpart of the crash-day label, keyed on the SAME frozen body
+# (|15:00 - open| >= STRETCH_PTS) so label and size can never drift apart.
+# Scope is wider than the label: ANY CLEAN card, tier or not. The 1y replay
+# (72 clean nights): half size on the 7 stretched nights gave the full
+# drawdown relief available from any cut (max DD -348% -> -316%, worst
+# losing streak -291% -> -259%) at ZERO return cost (+2129% vs +2106%),
+# whereas a 250-pt cut paid -3% for four extra nights that won 75%. It is a
+# SIZE rule, never a skip: a right-tail strategy that skips nights misses the
+# nights that pay. Graded forward on clean stretched nights after the
+# registration date; the factor is a knob (1.0 disables), the body is not.
+SIZE_REGISTERED_ON = "2026-10-14"
+SIZE_NOTE = (
+    "HALF SIZE — stretched day body (300+ pts). The overnight continuation "
+    "bet's catastrophic nights cluster here; halving them removed ~a tenth of "
+    "the year's drawdown at no return cost. Size rule, not a skip "
+    "(registered 2026-10-14, graded by live stretched nights)."
+)
+
+
+def size_factor(verdict: Optional[str], gap_pts: Optional[float],
+                factor: float) -> float:
+    """Multiplier for the card's suggested size. `factor` (<1) applies only to a
+    CLEAN card on a stretched body; everything else — FLAGGED, INCOMPLETE,
+    unknown body, factor 1.0 — is full size. Unknown never cuts."""
+    if verdict != "CLEAN" or gap_pts is None or factor >= 1.0:
+        return 1.0
+    return factor if abs(gap_pts) >= STRETCH_PTS else 1.0
+
 
 def stretched(tier_label: Optional[str], gap_pts: Optional[float]) -> Optional[bool]:
     """True for a GOLD or SILVER card on a 300+ pt day body. None when the

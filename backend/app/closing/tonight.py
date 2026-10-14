@@ -344,6 +344,15 @@ def evaluate(days: dict, vix_days: dict, today: date, now: datetime,
         # deliberately neutral (its backtest shows no consistent effect).
         "tier": card_tier,
         "tier_stretched": card_stretched,
+        # Stretched-body half size (tiers.size_factor, registered 14-Oct):
+        # a multiplier for the suggested size, 1.0 unless CLEAN on a 300+ pt
+        # body. Advisory like everything on this card; the Algo adapter may
+        # consume it later, the human reads the note now.
+        "size_factor": tiers.size_factor(
+            verdict, round(body, 2), get_settings().closing_stretch_size_factor),
+        "size_note": (tiers.SIZE_NOTE if tiers.size_factor(
+            verdict, round(body, 2), get_settings().closing_stretch_size_factor) < 1.0
+            else None),
         "tier_note": (tiers.STRETCH_NOTES[card_tier] if card_stretched
                       else tiers.NOTES.get(card_tier)),
         "note": (

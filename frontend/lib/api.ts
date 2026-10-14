@@ -1335,6 +1335,9 @@ export interface ClosingTonight {
   // Crash-day Gold sub-label (registered 2026-10-09): Gold on a 300+ pt day body.
   tier_stretched?: boolean | null;
   tier_note?: string | null;
+  /** Stretched-body half size (registered 2026-10-14): 0.5 on a CLEAN card after a 300+ pt day body, else 1. */
+  size_factor?: number;
+  size_note?: string | null;
   values?: {
     day_open: number;
     p1400: number | null;

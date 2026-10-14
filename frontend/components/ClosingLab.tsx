@@ -449,6 +449,12 @@ function TonightPanel() {
                   {TIER_STYLE[t.tier].label}{t.tier_stretched ? " · crash-day" : ""}
                 </span>
               )}
+              {t.size_factor !== undefined && t.size_factor < 1 && (
+                <span className="mr-2 rounded border border-amber-400/60 bg-amber-400/15 px-1.5 py-0.5 font-mono text-[10px] text-amber-300"
+                      title={t.size_note ?? "Stretched day body — half size (registered 2026-10-14)"}>
+                  ½ SIZE
+                </span>
+              )}
               {banner.text}
               {t.verdict === "FLAGGED" && t.checks && (
                 <span> Red: {t.checks.filter((c) => c.status === "red").map((c) => c.label).join(", ")}.</span>
